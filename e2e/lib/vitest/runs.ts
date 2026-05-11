@@ -46,6 +46,14 @@ export async function readRunEvents(baseUrl: string, runId: string): Promise<str
   return await requestText(baseUrl, `/api/runs/${encodeURIComponent(runId)}/events`);
 }
 
+export async function cancelRun(baseUrl: string, runId: string): Promise<{ ok: true }> {
+  return await requestJson<{ ok: true }>(
+    baseUrl,
+    `/api/runs/${encodeURIComponent(runId)}/cancel`,
+    { body: {}, method: 'POST' },
+  );
+}
+
 export async function waitForRunStatus(
   baseUrl: string,
   runId: string,

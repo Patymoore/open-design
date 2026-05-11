@@ -33,6 +33,27 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     const body = { runId: run.id };
     res.status(202).json(body);
     design.runs.start(run, () => startChatRun(req.body || {}, run));
+    // Reconcile the assistant message row when the run reaches a terminal
+    // state. Without this, a Stop-then-refresh sequence leaves the row stuck
+    // at run_status='running' / ended_at=NULL — the web reattach effect then
+    // never freezes the elapsed timer and it keeps accumulating from the
+    // original startedAt (issue #135). The COALESCE preserves any endedAt the
+    // web client already persisted, and the run_status guard skips rows the
+    // web has already finalized.
+    if (run.assistantMessageId) {
+      void design.runs
+        .wait(run)
+        .then((finalStatus) => {
+          db.prepare(
+            `UPDATE messages
+                SET run_status = ?, ended_at = COALESCE(ended_at, ?)
+              WHERE id = ? AND run_status IN ('queued', 'running')`,
+          ).run(finalStatus.status, Date.now(), run.assistantMessageId);
+        })
+        .catch((err) => {
+          console.warn('[runs] message reconciliation failed', err);
+        });
+    }
   });
 
   app.get('/api/runs', (req, res) => {
