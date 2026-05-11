@@ -16,6 +16,7 @@ import {
   checkWindowsCmdShimCommandLineBudget,
   checkWindowsDirectExeCommandLineBudget,
   detectAgents,
+  inspectAgentExecutableResolution,
   resolveAgentExecutable,
   spawnEnvForAgent,
 } from '../../../src/agents.js';
@@ -30,6 +31,7 @@ export {
   checkWindowsDirectExeCommandLineBudget,
   chmodSync,
   detectAgents,
+  inspectAgentExecutableResolution,
   join,
   mkdirSync,
   mkdtempSync,

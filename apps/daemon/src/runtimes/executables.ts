@@ -131,16 +131,40 @@ export function resolveAgentExecutable(
   def: RuntimeAgentDef,
   configuredEnv: Record<string, string> = {},
 ): string | null {
-  if (!def?.bin) return null;
-  const configured = configuredExecutableOverride(def, configuredEnv);
-  if (configured) return configured;
+  return inspectAgentExecutableResolution(def, configuredEnv).selectedPath;
+}
+
+export function inspectAgentExecutableResolution(
+  def: RuntimeAgentDef,
+  configuredEnv: Record<string, string> = {},
+): {
+  configuredOverridePath: string | null;
+  pathResolvedPath: string | null;
+  selectedPath: string | null;
+} {
+  if (!def?.bin) {
+    return {
+      configuredOverridePath: null,
+      pathResolvedPath: null,
+      selectedPath: null,
+    };
+  }
+  const configuredOverridePath = configuredExecutableOverride(def, configuredEnv);
   const candidates = [
     def.bin,
     ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : []),
   ];
+  let pathResolvedPath: string | null = null;
   for (const bin of candidates) {
     const resolved = resolveOnPath(bin);
-    if (resolved) return resolved;
+    if (resolved) {
+      pathResolvedPath = resolved;
+      break;
+    }
   }
-  return null;
+  return {
+    configuredOverridePath,
+    pathResolvedPath,
+    selectedPath: configuredOverridePath || pathResolvedPath,
+  };
 }
