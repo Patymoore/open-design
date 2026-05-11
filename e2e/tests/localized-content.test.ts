@@ -298,6 +298,10 @@ async function readPromptTemplateResources(): Promise<PromptTemplateResource[]> 
       );
 
       const summary = typeof template.summary === 'string' ? normalizeText(template.summary) : '';
+      invariant(
+        summary,
+        `Prompt template ${id} is missing required English fallback field: summary`,
+      );
       const category =
         typeof template.category === 'string' ? normalizeText(template.category) || 'General' : 'General';
       const tags = Array.isArray(template.tags)
