@@ -291,29 +291,91 @@ function titleizeSlug(slug: string): string {
     .join(' ');
 }
 
-export function shapeCraft(entry: CraftEntry): CraftRecord {
-  const slug = entry.id;
-  const body = entry.body ?? '';
-  const h1 = extractH1(body);
-  // First non-heading paragraph after the H1.
+// ---------------------------------------------------------------------------
+// Markdown → display-text helpers
+//
+// Live-artifact READMEs and craft `*.md` files mix prose with editorial
+// metadata blocks (`> Category: …`, `> Family: …`) and decorative
+// inline syntax (backticks around slugs in the H1, asterisks for
+// emphasis). When we surface them as page titles, card descriptions,
+// or `<meta name="description">`, we want clean text — never raw
+// Markdown noise like `\`otd-operations-brief\` · live-artifact template`
+// or a literal `>` as the entire summary.
+// ---------------------------------------------------------------------------
+
+/** Strip backticks, leading/trailing emphasis, link wrappers, soft breaks. */
+function stripMarkdownInline(text: string): string {
+  return text
+    .replace(/`([^`]+)`/g, '$1')           // `code` → code
+    .replace(/\*\*([^*]+)\*\*/g, '$1')      // **bold** → bold
+    .replace(/\*([^*]+)\*/g, '$1')          // *italic* → italic
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [text](url) → text
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * First plain-prose paragraph after the H1, with all leading
+ * blockquote / list / fenced-code / horizontal-rule lines skipped.
+ *
+ * The "first paragraph" definition: a contiguous run of non-empty
+ * lines that aren't headings, blockquotes, list markers, table rows,
+ * code fences, or HR rules. Returns the empty string if no such
+ * paragraph exists, leaving the caller to apply its own fallback.
+ */
+function extractFirstProseParagraph(body: string): string {
   const lines = body.split('\n');
-  const buf: string[] = [];
   let pastH1 = false;
+  let inFence = false;
+  const buf: string[] = [];
+
   for (const raw of lines) {
     const line = raw.trim();
+
     if (!pastH1) {
       if (line.startsWith('# ')) pastH1 = true;
       continue;
     }
+    if (line.startsWith('```') || line.startsWith('~~~')) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    // Section break.
     if (line.startsWith('#')) break;
-    if (line.length === 0 && buf.length > 0) break;
-    if (line.length === 0) continue;
+
+    if (line.length === 0) {
+      if (buf.length > 0) break;
+      continue;
+    }
+
+    // Skip editorial metadata blocks until we find real prose. Authors
+    // commonly stack `> Category:`, `> Family:`, `> Style:` lines under
+    // the H1 — they're meaningful in the README but useless as a card
+    // summary or SEO snippet.
+    if (line.startsWith('>')) continue;
+    // Skip lists / table rows / horizontal rules with the same logic.
+    if (/^([-*+]\s|\d+\.\s|\||---+$|\*\*\*+$|___+$)/.test(line)) {
+      if (buf.length > 0) break;
+      continue;
+    }
+
     buf.push(line);
   }
+
+  return stripMarkdownInline(buf.join(' '));
+}
+
+export function shapeCraft(entry: CraftEntry): CraftRecord {
+  const slug = entry.id;
+  const body = entry.body ?? '';
+  const h1 = extractH1(body);
+  const cleanH1 = h1 ? stripMarkdownInline(h1).replace(/\s+craft rules?$/i, '').trim() : '';
   return {
     slug,
-    name: h1 ? h1.replace(/\s+craft rules?$/i, '').trim() : titleizeSlug(slug),
-    summary: buf.join(' ').trim(),
+    name: cleanH1 || titleizeSlug(slug),
+    summary: extractFirstProseParagraph(body),
     source: `${REPO_BLOB}/craft/${slug}.md`,
     body,
   };
@@ -358,25 +420,23 @@ export function shapeLiveArtifactTemplate(
   const slug = entry.id.split('/')[0] ?? entry.id;
   const body = entry.body ?? '';
   const h1 = extractH1(body);
-  const lines = body.split('\n');
-  const buf: string[] = [];
-  let pastH1 = false;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!pastH1) {
-      if (line.startsWith('# ')) pastH1 = true;
-      continue;
-    }
-    if (line.startsWith('#')) break;
-    if (line.length === 0 && buf.length > 0) break;
-    if (line.length === 0) continue;
-    buf.push(line);
-  }
+
+  // Some authors write `# \`otd-operations-brief\` · live-artifact template`
+  // — strip the inline backticks/asterisks and drop the trailing
+  // `· live-artifact template` boilerplate so card titles read like
+  // human prose ("otd-operations-brief") instead of raw Markdown.
+  let cleanH1 = h1 ? stripMarkdownInline(h1) : '';
+  cleanH1 = cleanH1
+    .replace(/\s*[·•]\s*live[\s-]artifact\s+template$/i, '')
+    .trim();
+
+  const summary = extractFirstProseParagraph(body) || 'Open Design Live Artifact template.';
+
   const liveSlug = `live-${slug}`;
   return {
     slug: liveSlug,
-    name: h1 ?? titleizeSlug(slug),
-    summary: buf.join(' ').trim() || 'Open Design Live Artifact template.',
+    name: cleanH1 || titleizeSlug(slug),
+    summary,
     origin: 'live-artifact',
     source: `${REPO_TREE}/templates/live-artifacts/${slug}`,
     detailHref: `/templates/${liveSlug}/`,
