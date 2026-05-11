@@ -562,6 +562,67 @@ test('visiting an uploaded design file route restores its tab and preview surfac
   await expect(page.getByTestId('design-files-tab')).toHaveAttribute('aria-selected', 'false');
 });
 
+test('returning from an uploaded design file route to the project root keeps the design file preview surface active', async ({ page }) => {
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      json: {
+        agents: [
+          {
+            id: 'mock',
+            name: 'Mock Agent',
+            bin: 'mock-agent',
+            available: true,
+            version: 'test',
+            models: [{ id: 'default', label: 'Default' }],
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('new-project-name').fill('Uploaded file root route restore');
+  await page.getByTestId('create-project').click();
+  await expectWorkspaceReady(page);
+
+  await page.getByTestId('design-files-upload-input').setInputFiles({
+    name: 'root-design-reference.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W6McAAAAASUVORK5CYII=',
+      'base64',
+    ),
+  });
+  const fileTab = page.getByRole('tab', { name: /root-design-reference\.png/i });
+  await expect(fileTab).toBeVisible();
+
+  await page.getByTestId('design-files-tab').click();
+  const fileRow = page.locator('[data-testid^="design-file-row-"]', {
+    hasText: 'root-design-reference.png',
+  });
+  await expect(fileRow).toBeVisible();
+  await fileRow.getByRole('button').first().click();
+  await expect(page.getByTestId('design-file-preview')).toBeVisible();
+
+  const current = new URL(page.url());
+  const [, projects, projectId] = current.pathname.split('/');
+  if (projects !== 'projects' || !projectId) {
+    throw new Error(`unexpected project route: ${current.pathname}`);
+  }
+
+  await page.goto(`/projects/${projectId}/files/root-design-reference.png`);
+  await expect(fileTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('design-file-preview')).toBeVisible();
+
+  await page.goto(`/projects/${projectId}`);
+
+  await expect(page.getByTestId('file-workspace')).toBeVisible();
+  await expect(fileTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('design-file-preview')).toBeVisible();
+  await expect(page.getByTestId('design-file-preview').getByText(/root-design-reference\.png/i)).toBeVisible();
+  await expect(page.getByTestId('design-files-tab')).toHaveAttribute('aria-selected', 'false');
+});
+
 test('returning from an artifact file route to the project root keeps the artifact tab and preview active', async ({ page }) => {
   await page.route('**/api/agents', async (route) => {
     await route.fulfill({
@@ -1679,6 +1740,226 @@ test('opening an artifact file route keeps the history selection on the chosen o
   await expect(
     page.frameLocator('[data-testid="artifact-preview-frame"]').getByRole('heading', {
       name: 'Conversation Surface Artifact',
+    }),
+  ).toBeVisible();
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: secondPrompt })).toHaveCount(0);
+
+  await page.getByTestId('conversation-history-trigger').click();
+  await expect(historyList).toBeVisible();
+  await expect(historyList.locator('.chat-conv-item.active').first()).toContainText(firstPrompt);
+});
+
+test('returning from a file deep-link to the project root keeps the chosen older conversation and design file surface active', async ({ page }) => {
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      json: {
+        agents: [
+          {
+            id: 'mock',
+            name: 'Mock Agent',
+            bin: 'mock-agent',
+            available: true,
+            version: 'test',
+            models: [{ id: 'default', label: 'Default' }],
+          },
+        ],
+      },
+    });
+  });
+
+  await page.route('**/api/runs', async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: '{"runId":"conversation-file-root-run"}',
+    });
+  });
+
+  await page.route('**/api/runs/*/events', async (route) => {
+    const body = [
+      'event: start',
+      'data: {"bin":"mock-agent"}',
+      '',
+      'event: end',
+      'data: {"code":0,"status":"succeeded"}',
+      '',
+      '',
+    ].join('\n');
+
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+      body,
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('new-project-name').fill('Conversation file surface root restore');
+  await page.getByTestId('create-project').click();
+  await expectWorkspaceReady(page);
+
+  const firstPrompt = 'First conversation should survive file root restore';
+  const secondPrompt = 'Second conversation should stay inactive during file root restore';
+
+  await sendPrompt(page, firstPrompt);
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
+  const { projectId } = await getCurrentProjectContext(page);
+
+  await page.getByTestId('new-conversation').click();
+  await expect(page.getByText('Start a conversation')).toBeVisible();
+  await sendPrompt(page, secondPrompt);
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: secondPrompt }).first()).toBeVisible();
+
+  await page.getByTestId('design-files-upload-input').setInputFiles({
+    name: 'conversation-root-file.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5W6McAAAAASUVORK5CYII=',
+      'base64',
+    ),
+  });
+
+  await page.getByTestId('conversation-history-trigger').click();
+  const historyList = page.getByTestId('conversation-list');
+  await expect(historyList).toBeVisible();
+  await historyList
+    .locator('.chat-conv-item')
+    .filter({ hasText: firstPrompt })
+    .first()
+    .locator('[data-testid^="conversation-select-"]')
+    .click();
+
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: secondPrompt })).toHaveCount(0);
+
+  await page.goto(`/projects/${projectId}/files/conversation-root-file.png`);
+
+  const fileTab = page.getByRole('tab', { name: /conversation-root-file\.png/i });
+  await expect(fileTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('design-file-preview')).toBeVisible();
+
+  await page.goto(`/projects/${projectId}`);
+
+  await expect(page.getByTestId('file-workspace')).toBeVisible();
+  await expect(fileTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('design-file-preview')).toBeVisible();
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: secondPrompt })).toHaveCount(0);
+
+  await page.getByTestId('conversation-history-trigger').click();
+  await expect(historyList).toBeVisible();
+  await expect(historyList.locator('.chat-conv-item.active').first()).toContainText(firstPrompt);
+});
+
+test('returning from an artifact deep-link to the project root keeps the chosen older conversation and artifact surface active', async ({ page }) => {
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      json: {
+        agents: [
+          {
+            id: 'mock',
+            name: 'Mock Agent',
+            bin: 'mock-agent',
+            available: true,
+            version: 'test',
+            models: [{ id: 'default', label: 'Default' }],
+          },
+        ],
+      },
+    });
+  });
+
+  await page.route('**/api/runs', async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: '{"runId":"conversation-artifact-root-run"}',
+    });
+  });
+
+  await page.route('**/api/runs/*/events', async (route) => {
+    const artifact =
+      '<artifact identifier="conversation-root-artifact" type="text/html" title="Conversation Root Artifact">' +
+      '<!doctype html><html><body><main><h1>Conversation Root Artifact</h1></main></body></html>' +
+      '</artifact>';
+    const body = [
+      'event: start',
+      'data: {"bin":"mock-agent"}',
+      '',
+      'event: stdout',
+      `data: ${JSON.stringify({ chunk: artifact })}`,
+      '',
+      'event: end',
+      'data: {"code":0,"status":"succeeded"}',
+      '',
+      '',
+    ].join('\n');
+
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+      body,
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('new-project-name').fill('Conversation artifact surface root restore');
+  await page.getByTestId('create-project').click();
+  await expectWorkspaceReady(page);
+
+  const firstPrompt = 'First conversation should survive artifact root restore';
+  const secondPrompt = 'Second conversation should stay inactive during artifact root restore';
+
+  await sendPrompt(page, firstPrompt);
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
+  const { projectId } = await getCurrentProjectContext(page);
+
+  await page.getByTestId('new-conversation').click();
+  await expect(page.getByText('Start a conversation')).toBeVisible();
+  await sendPrompt(page, secondPrompt);
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: secondPrompt }).first()).toBeVisible();
+
+  const artifactTab = page.getByRole('tab', { name: /conversation-root-artifact\.html/i });
+  await expect(artifactTab).toBeVisible();
+
+  await page.getByTestId('conversation-history-trigger').click();
+  const historyList = page.getByTestId('conversation-list');
+  await expect(historyList).toBeVisible();
+  await historyList
+    .locator('.chat-conv-item')
+    .filter({ hasText: firstPrompt })
+    .first()
+    .locator('[data-testid^="conversation-select-"]')
+    .click();
+
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
+  await expect(page.locator('.msg.user .user-text').filter({ hasText: secondPrompt })).toHaveCount(0);
+
+  await page.goto(`/projects/${projectId}/files/conversation-root-artifact.html`);
+
+  await expect(artifactTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('artifact-preview-frame')).toBeVisible();
+  await expect(
+    page.frameLocator('[data-testid="artifact-preview-frame"]').getByRole('heading', {
+      name: 'Conversation Root Artifact',
+    }),
+  ).toBeVisible();
+
+  await page.goto(`/projects/${projectId}`);
+
+  await expect(page.getByTestId('file-workspace')).toBeVisible();
+  await expect(artifactTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('artifact-preview-frame')).toBeVisible();
+  await expect(
+    page.frameLocator('[data-testid="artifact-preview-frame"]').getByRole('heading', {
+      name: 'Conversation Root Artifact',
     }),
   ).toBeVisible();
   await expect(page.locator('.msg.user .user-text').filter({ hasText: firstPrompt }).first()).toBeVisible();
