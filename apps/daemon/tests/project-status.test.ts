@@ -124,6 +124,64 @@ test('conversation latest run follows assistant message position', () => {
   assert.equal(getConversation(db, conversationId)?.latestRun?.status, 'running');
 });
 
+test('conversation listing batches latest run summaries for large projects', () => {
+  const db = createDb();
+  insertProject(db, {
+    id: 'project-large',
+    name: 'project-large',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  for (let i = 0; i < 125; i += 1) {
+    const conversationId = `project-large-conversation-${i}`;
+    insertConversation(db, {
+      id: conversationId,
+      projectId: 'project-large',
+      title: `Conversation ${i}`,
+      createdAt: i,
+      updatedAt: i,
+    });
+    upsertMessage(db, conversationId, {
+      id: `${conversationId}-older`,
+      role: 'assistant',
+      content: 'done',
+      runId: `${conversationId}-older-run`,
+      runStatus: 'succeeded',
+      startedAt: 10,
+      endedAt: 20,
+    });
+    upsertMessage(db, conversationId, {
+      id: `${conversationId}-latest`,
+      role: 'assistant',
+      content: 'failed',
+      runId: `${conversationId}-latest-run`,
+      runStatus: 'failed',
+      startedAt: 100,
+      endedAt: 175,
+    });
+  }
+
+  const preparedSql: string[] = [];
+  const instrumentedDb = new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop === 'prepare') {
+        return (sql: string) => {
+          preparedSql.push(sql);
+          return target.prepare(sql);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as Database.Database;
+
+  const conversations = listConversations(instrumentedDb, 'project-large');
+
+  assert.equal(conversations.length, 125);
+  assert.equal(preparedSql.length, 1);
+  assert.equal(conversations[0]?.latestRun?.status, 'failed');
+  assert.equal(conversations[0]?.latestRun?.durationMs, 75);
+});
+
 test('only succeeded statuses are overridden by awaiting input', () => {
   const db = createDb();
   const failedConversationId = seedProject(db, 'project-failed', 'failed');

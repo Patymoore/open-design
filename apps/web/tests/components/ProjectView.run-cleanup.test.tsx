@@ -2,7 +2,12 @@
 
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ProjectView, finalizeActiveAssistantMessagesOnStop, resolveSucceededRunStatus } from '../../src/components/ProjectView';
+import {
+  ProjectView,
+  clearStreamingConversationMarker,
+  finalizeActiveAssistantMessagesOnStop,
+  resolveSucceededRunStatus,
+} from '../../src/components/ProjectView';
 import type { ChatMessage } from '../../src/types';
 
 const listConversations = vi.fn();
@@ -228,6 +233,12 @@ describe('ProjectView daemon cleanup', () => {
     });
     expect(result.messages[3]).toBe(historicalWithoutStatus);
     expect(result.finalized).toEqual([result.messages[1], result.messages[2]]);
+  });
+
+  it('keeps the newer conversation streaming when a stale conversation completes', () => {
+    expect(clearStreamingConversationMarker('conv-b', 'conv-a')).toBe('conv-b');
+    expect(clearStreamingConversationMarker('conv-b', 'conv-b')).toBeNull();
+    expect(clearStreamingConversationMarker('conv-b')).toBeNull();
   });
 
   it('marks a recoverable daemon run as failed when the run status can no longer be fetched', async () => {

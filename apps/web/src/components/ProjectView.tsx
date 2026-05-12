@@ -335,6 +335,7 @@ export function ProjectView({
   const [openRequest, setOpenRequest] = useState<{ name: string; nonce: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const cancelRef = useRef<AbortController | null>(null);
+  const streamingConversationIdRef = useRef<string | null>(null);
   const sendTextBufferRef = useRef<BufferedTextUpdates | null>(null);
   const reattachTextBuffersRef = useRef<Set<BufferedTextUpdates>>(new Set());
   const reattachControllersRef = useRef<Map<string, AbortController>>(new Map());
@@ -395,6 +396,8 @@ export function ProjectView({
     setPreviewComments([]);
     setAttachedComments([]);
     setStreaming(false);
+    streamingConversationIdRef.current = null;
+    setStreamingConversationId(null);
     setError(null);
     setArtifact(null);
     savedArtifactRef.current = null;
@@ -446,6 +449,8 @@ export function ProjectView({
       setFailedMessagesConversationId(null);
       messagesConversationIdRef.current = null;
       setStreaming(false);
+      streamingConversationIdRef.current = null;
+      setStreamingConversationId(null);
       return;
     }
     let cancelled = false;
@@ -456,6 +461,8 @@ export function ProjectView({
     setMessagesConversationId(null);
     setFailedMessagesConversationId(null);
     setStreaming(false);
+    streamingConversationIdRef.current = null;
+    setStreamingConversationId(null);
     savedArtifactRef.current = null;
     pendingWritesRef.current.clear();
     if (messagesConversationIdRef.current !== activeConversationId) {
@@ -868,8 +875,21 @@ export function ProjectView({
     [project.id, activeConversationId],
   );
 
-  const clearStreamingMarker = useCallback(() => {
-    setStreamingConversationId(null);
+  const markStreamingConversation = useCallback((conversationId: string) => {
+    streamingConversationIdRef.current = conversationId;
+    setStreaming(true);
+    setStreamingConversationId(conversationId);
+  }, []);
+
+  const clearStreamingMarker = useCallback((conversationId?: string | null) => {
+    const next = clearStreamingConversationMarker(
+      streamingConversationIdRef.current,
+      conversationId,
+    );
+    if (next === streamingConversationIdRef.current) return;
+    streamingConversationIdRef.current = next;
+    setStreamingConversationId(next);
+    setStreaming(next !== null);
   }, []);
 
   const appendAssistantErrorEvent = useCallback(
@@ -1014,8 +1034,7 @@ export function ProjectView({
         if (!isTerminalRunStatus(status.status)) {
           abortRef.current = controller;
           cancelRef.current = cancelController;
-          setStreaming(true);
-          setStreamingConversationId(activeConversationId);
+          markStreamingConversation(activeConversationId);
         }
 
         let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1069,8 +1088,7 @@ export function ProjectView({
               reattachCancelControllersRef.current.delete(runId);
               if (abortRef.current === controller) abortRef.current = null;
               if (cancelRef.current === cancelController) cancelRef.current = null;
-              setStreaming(false);
-              clearStreamingMarker();
+              clearStreamingMarker(activeConversationId);
               persistNow({ telemetryFinalized: true });
               void refreshProjectFiles();
               onProjectsRefresh();
@@ -1091,8 +1109,7 @@ export function ProjectView({
               reattachCancelControllersRef.current.delete(runId);
               if (abortRef.current === controller) abortRef.current = null;
               if (cancelRef.current === cancelController) cancelRef.current = null;
-              setStreaming(false);
-              clearStreamingMarker();
+              clearStreamingMarker(activeConversationId);
               persistNow({ telemetryFinalized: true });
             },
           },
@@ -1115,8 +1132,7 @@ export function ProjectView({
               reattachCancelControllersRef.current.delete(runId);
               if (abortRef.current === controller) abortRef.current = null;
               if (cancelRef.current === cancelController) cancelRef.current = null;
-              setStreaming(false);
-              clearStreamingMarker();
+              clearStreamingMarker(activeConversationId);
               persistNow({ telemetryFinalized: true });
             }
           },
@@ -1164,6 +1180,7 @@ export function ProjectView({
     project.id,
     updateMessageById,
     persistMessageById,
+    markStreamingConversation,
     clearStreamingMarker,
     refreshProjectFiles,
     onProjectsRefresh,
@@ -1250,8 +1267,7 @@ export function ProjectView({
       activeCompletionNotificationRunsRef.current.add(assistantId);
       const nextHistory = [...messages, userMsg];
       setMessages([...nextHistory, assistantMsg]);
-      setStreaming(true);
-      setStreamingConversationId(activeConversationId);
+      markStreamingConversation(activeConversationId);
       updateConversationLatestRun(config.mode === 'daemon' ? 'running' : 'queued');
       setArtifact(null);
       savedArtifactRef.current = null;
@@ -1437,8 +1453,7 @@ export function ProjectView({
             if (commentAttachments.length > 0) {
               void patchAttachedStatuses(commentAttachments, 'failed');
             }
-            setStreaming(false);
-            clearStreamingMarker();
+            clearStreamingMarker(activeConversationId);
             updateConversationLatestRun('failed', endedAt);
             abortRef.current = null;
             cancelRef.current = null;
@@ -1459,8 +1474,7 @@ export function ProjectView({
           if (commentAttachments.length > 0) {
             void patchAttachedStatuses(commentAttachments, 'needs_review');
           }
-          setStreaming(false);
-          clearStreamingMarker();
+          clearStreamingMarker(activeConversationId);
           updateConversationLatestRun(finalRunStatus ?? 'succeeded', endedAt);
           abortRef.current = null;
           cancelRef.current = null;
@@ -1507,8 +1521,7 @@ export function ProjectView({
           if (commentAttachments.length > 0) {
             void patchAttachedStatuses(commentAttachments, 'failed');
           }
-          setStreaming(false);
-          clearStreamingMarker();
+          clearStreamingMarker(activeConversationId);
           updateConversationLatestRun('failed', endedAt);
           abortRef.current = null;
           cancelRef.current = null;
@@ -1669,6 +1682,7 @@ export function ProjectView({
       persistMessageById,
       patchAttachedStatuses,
       updateMessageById,
+      markStreamingConversation,
       clearStreamingMarker,
       onProjectsRefresh,
     ],
@@ -1857,6 +1871,7 @@ export function ProjectView({
     }
     reattachControllersRef.current.clear();
     setStreaming(false);
+    streamingConversationIdRef.current = null;
     setStreamingConversationId(null);
     setMessages((curr) => {
       const { messages: next, finalized } = finalizeActiveAssistantMessagesOnStop(curr, stoppedAt);
@@ -1885,6 +1900,8 @@ export function ProjectView({
       // duplicate empty conversations before the effect resolves.
       setMessages([]);
       setStreaming(false);
+      streamingConversationIdRef.current = null;
+      setStreamingConversationId(null);
       setMessagesConversationId(null);
       messagesConversationIdRef.current = fresh.id;
       setConversations((curr) => [fresh, ...curr]);
@@ -1907,6 +1924,8 @@ export function ProjectView({
     setAttachedComments([]);
     setArtifact(null);
     setStreaming(false);
+    streamingConversationIdRef.current = null;
+    setStreamingConversationId(null);
     setMessagesConversationId(null);
     setFailedMessagesConversationId(null);
     setConversationLoadError(null);
@@ -2485,6 +2504,20 @@ function isStoppableAssistantMessage(message: ChatMessage): boolean {
 
 export function resolveSucceededRunStatus(status: ChatMessage['runStatus']): ChatMessage['runStatus'] {
   return status === 'failed' || status === 'canceled' ? status : 'succeeded';
+}
+
+export function clearStreamingConversationMarker(
+  currentConversationId: string | null,
+  completedConversationId?: string | null,
+): string | null {
+  if (
+    completedConversationId !== undefined
+    && completedConversationId !== null
+    && currentConversationId !== completedConversationId
+  ) {
+    return currentConversationId;
+  }
+  return null;
 }
 
 export function finalizeActiveAssistantMessagesOnStop(
