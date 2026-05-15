@@ -34,7 +34,7 @@
 >
 > 开源、agent-native 的 Figma 替代品 —— 上线两周，40k stars 在身，且仍在加速。**剩下的路，需要你和我们一起推完。**
 >
-> → [**读公告 · 拿安装包 · 加入这场运动**](https://github.com/nexu-io/open-design/discussions/1727) · 可与你现有的 0.7 并行安装。
+> → [**读公告 · 下载安装包 · 加入这场运动**](https://github.com/nexu-io/open-design/discussions/1727) · 可与你现有的 0.7 并行安装。
 
 ---
 
