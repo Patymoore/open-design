@@ -71,7 +71,7 @@ async function gotoEntryHome(page: Page) {
   await waitForLoadingToClear(page);
   const privacyDialog = page.getByRole('dialog').filter({ hasText: 'Help us improve Open Design' });
   if (await privacyDialog.isVisible().catch(() => false)) {
-    await privacyDialog.getByRole('button', { name: /not now/i }).click();
+    await privacyDialog.getByRole('button', { name: /not now|don't share/i }).click();
   }
   await expect(page.getByTestId('home-hero')).toBeVisible();
 }
@@ -314,7 +314,9 @@ test.describe('Settings connectors auth recovery', () => {
 
     await expect.poll(getCancelRequestCount).toBe(1);
     await expect(githubCard.getByRole('button', { name: 'Cancel' })).toBeVisible();
-    await expect(githubCard).toContainText("Couldn't cancel authorization. Try again.");
+    await expect(
+      dialog.getByRole('status').filter({ hasText: "Couldn't cancel authorization. Try again." }),
+    ).toBeVisible();
     await expect
       .poll(async () =>
         page.evaluate(() => {
