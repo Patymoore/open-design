@@ -48,27 +48,36 @@ export function MicButton({
     return null;
   }
 
-  const listening = voice.status === 'listening' || voice.status === 'starting';
-  const label = listening ? 'Stop voice input' : 'Start voice input';
+  const recording = voice.status === 'recording';
+  const transcribing = voice.status === 'transcribing';
+  const errored = voice.status === 'error';
+  const label = recording
+    ? '停止录音'
+    : transcribing
+      ? '正在识别…'
+      : '开始语音输入';
 
   return (
     <button
       type="button"
-      className={`mic-btn${listening ? ' mic-btn-active' : ''}${
-        voice.status === 'error' ? ' mic-btn-error' : ''
-      }${className ? ` ${className}` : ''}`}
+      className={`mic-btn${recording ? ' mic-btn-active' : ''}${
+        transcribing ? ' mic-btn-busy' : ''
+      }${errored ? ' mic-btn-error' : ''}${
+        className ? ` ${className}` : ''
+      }`}
       data-testid="mic-button"
       aria-label={label}
-      aria-pressed={listening}
+      aria-pressed={recording}
       title={
-        title ?? (voice.errorMessage && voice.status === 'error'
-          ? `Voice input error: ${voice.errorMessage}`
+        title ?? (errored && voice.errorMessage
+          ? voice.errorMessage
           : label)
       }
       onClick={voice.toggle}
+      disabled={transcribing}
     >
-      <Icon name="mic" size={14} />
-      {listening ? <span className="mic-btn-pulse" aria-hidden /> : null}
+      <Icon name={transcribing ? 'spinner' : 'mic'} size={14} />
+      {recording ? <span className="mic-btn-pulse" aria-hidden /> : null}
     </button>
   );
 }

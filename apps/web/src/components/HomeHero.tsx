@@ -89,6 +89,12 @@ interface Props {
   onPickMcp?: (server: McpServerConfig, nextPrompt: string) => void;
   onPickConnector?: (connector: ConnectorDetail, nextPrompt: string) => void;
   onPickChip: (chip: HomeHeroChip) => void;
+  // Manus-style example-prompt suggestions. Each entry is a plugin
+  // whose `od.useCase.query` we surface as a one-click prompt seed.
+  // HomeView decides the slice (matching the active chip, or featured
+  // when no chip is picked) and how many; this row just renders.
+  examplePlugins?: InstalledPluginRecord[];
+  onPickExample?: (record: InstalledPluginRecord) => void;
   contextItemCount: number;
   error: string | null;
   // Stage 1 of the home settings strip (image 1 of the brief): the
@@ -164,6 +170,8 @@ export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero
     onPickMcp = () => undefined,
     onPickConnector = () => undefined,
     onPickChip,
+    examplePlugins = [],
+    onPickExample = () => undefined,
     contextItemCount,
     error,
     workingDir = null,
@@ -490,6 +498,14 @@ export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero
         pluginsLoading={pluginsLoading}
         onPickChip={onPickChip}
       />
+
+      {examplePlugins.length > 0 ? (
+        <ExamplePromptRow
+          plugins={examplePlugins}
+          onPick={onPickExample}
+          disabled={pluginsLoading || pendingPluginId !== null}
+        />
+      ) : null}
 
       <div
         className={`home-hero__input-card${dragActive ? ' is-drag-active' : ''}`}
@@ -885,43 +901,43 @@ export const HomeHero = forwardRef<HTMLTextAreaElement, Props>(function HomeHero
             >
               <Icon name="attach" size={18} />
             </button>
-            <span className="home-hero__hint">
-              <kbd>↵</kbd> {t('homeHero.toRun')} · <kbd>Shift</kbd>+<kbd>↵</kbd> {t('homeHero.forNewLine')}
-            </span>
+            {onChangeWorkingDir && onChangeDesignSystemId ? (
+              <HomeHeroSettingsChips
+                workingDir={workingDir}
+                onChangeWorkingDir={onChangeWorkingDir}
+                designSystems={designSystems}
+                designSystemsLoading={designSystemsLoading}
+                selectedDesignSystemId={selectedDesignSystemId}
+                onChangeDesignSystemId={onChangeDesignSystemId}
+                variant="inline"
+              />
+            ) : null}
           </div>
-          <MicButton
-            className="home-hero__mic"
-            onCommit={(text) => {
-              const trimmed = text.trim();
-              if (trimmed.length === 0) return;
-              const sep =
-                prompt.length === 0 || /\s$/.test(prompt) ? '' : ' ';
-              onPromptChange(`${prompt}${sep}${trimmed}`);
-            }}
-          />
-          <button
-            type="button"
-            className="home-hero__submit"
-            data-testid="home-hero-submit"
-            onClick={onSubmit}
-            disabled={!canSubmit}
-            title={canSubmit ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
-            aria-label={t('homeHero.run')}
-          >
-            <Icon name="arrow-up" size={22} />
-          </button>
+          <div className="home-hero__foot-right">
+            <MicButton
+              className="home-hero__mic"
+              onCommit={(text) => {
+                const trimmed = text.trim();
+                if (trimmed.length === 0) return;
+                const sep =
+                  prompt.length === 0 || /\s$/.test(prompt) ? '' : ' ';
+                onPromptChange(`${prompt}${sep}${trimmed}`);
+              }}
+            />
+            <button
+              type="button"
+              className="home-hero__submit"
+              data-testid="home-hero-submit"
+              onClick={onSubmit}
+              disabled={!canSubmit}
+              title={canSubmit ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
+              aria-label={t('homeHero.run')}
+            >
+              <Icon name="arrow-up" size={22} />
+            </button>
+          </div>
         </div>
       </div>
-      {onChangeWorkingDir && onChangeDesignSystemId ? (
-        <HomeHeroSettingsChips
-          workingDir={workingDir}
-          onChangeWorkingDir={onChangeWorkingDir}
-          designSystems={designSystems}
-          designSystemsLoading={designSystemsLoading}
-          selectedDesignSystemId={selectedDesignSystemId}
-          onChangeDesignSystemId={onChangeDesignSystemId}
-        />
-      ) : null}
 
       <div
         className="home-hero__rail"
@@ -1579,6 +1595,52 @@ function TypeTabBar({
             title={chip.hint ?? chip.label}
           >
             <span>{chip.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ExamplePromptRowProps {
+  plugins: InstalledPluginRecord[];
+  onPick: (record: InstalledPluginRecord) => void;
+  disabled: boolean;
+}
+
+// Manus-style example-prompt row that sits between the artifact-type
+// chips and the prompt textarea. Each chip carries a single plugin's
+// rendered `useCase.query` as its tooltip and, on click, hands the
+// record to the parent which dispatches the existing
+// `requestPluginContextUse(record, 'use-with-query')` path — the same
+// route the "Use with query" item under each plugin card uses. The
+// label is the plugin title trimmed to fit a single row; the tooltip
+// shows the resolved query so the user can preview before clicking.
+function ExamplePromptRow({ plugins, onPick, disabled }: ExamplePromptRowProps) {
+  if (plugins.length === 0) return null;
+  return (
+    <div
+      className="home-hero__examples"
+      role="list"
+      aria-label="Example prompts"
+      data-testid="home-hero-example-prompts"
+    >
+      {plugins.map((plugin) => {
+        const title = plugin.title || plugin.manifest?.name || plugin.id;
+        const tooltip = getPluginQueryPreview(plugin) || title;
+        return (
+          <button
+            key={plugin.id}
+            type="button"
+            role="listitem"
+            className="home-hero__example-chip"
+            data-testid={`home-hero-example-${plugin.id}`}
+            onClick={() => onPick(plugin)}
+            disabled={disabled}
+            title={tooltip}
+          >
+            <Icon name="sparkles" size={12} className="home-hero__example-icon" />
+            <span className="home-hero__example-label">{title}</span>
           </button>
         );
       })}

@@ -50,8 +50,16 @@ import {
 import { PluginDetailsModal } from './PluginDetailsModal';
 import { PluginsHomeSection } from './PluginsHomeSection';
 import type { PluginLoopSubmit } from './PluginLoopHome';
+import {
+  applyFacetSelection,
+  isFeaturedPlugin,
+  type FacetSelection,
+} from './plugins-home/facets';
 import type { PluginUseAction } from './plugins-home/useActions';
+import { sortByVisualAppeal } from './plugins-home/visualScore';
 import { RecentProjectsStrip } from './RecentProjectsStrip';
+
+const EXAMPLE_PROMPT_LIMIT = 4;
 
 interface ActivePlugin {
   record: InstalledPluginRecord;
@@ -357,6 +365,52 @@ export function HomeView({
       stagedFiles.length,
     [active, selectedConnectorContexts.length, selectedMcpContexts.length, selectedPluginContexts, stagedFiles.length],
   );
+
+  // The Home chip rail and the Official starters grid share a mental
+  // model — "Prototype" up top is the same artifact intent as the
+  // `create / prototype` slice down below. When the user picks a chip,
+  // we drive the starters' FacetSelection from it so they get a
+  // pre-filtered shelf of templates for the same intent without having
+  // to scroll and re-pick. `pendingChipId` (set on click, before apply
+  // resolves) is preferred over `active?.chipId` so the filter snaps on
+  // the same frame as the click.
+  const presetStartersSelection = useMemo<FacetSelection | null>(() => {
+    const chipId = pendingChipId ?? active?.chipId ?? null;
+    if (!chipId) return null;
+    return facetSelectionForChip(chipId);
+  }, [pendingChipId, active?.chipId]);
+
+  // Manus-style example-prompt suggestions for the row under the top
+  // chips. When a chip is active, we surface the top-N visually-strong
+  // plugins from the matching facet slice (e.g. picking "Slide deck"
+  // shows four polished deck templates). Without a chip, we fall back
+  // to featured picks so the row still seeds a few high-signal
+  // starters. The slice is sorted by visual-appeal so the front of the
+  // row leads with cinematic templates — same ranking the Official
+  // starters grid uses, just truncated and lifted up next to the
+  // composer for one-click access.
+  const examplePromptCandidates = useMemo<InstalledPluginRecord[]>(() => {
+    if (plugins.length === 0) return [];
+    const visible = plugins.filter(
+      (plugin) =>
+        plugin.manifest?.od?.kind !== 'atom' && Boolean(plugin.manifest?.od?.useCase?.query),
+    );
+    const ranked = sortByVisualAppeal(visible);
+    const sliceFor = (selection: FacetSelection | null) => {
+      if (!selection) return ranked;
+      return applyFacetSelection(ranked, selection);
+    };
+    const primary = sliceFor(presetStartersSelection);
+    if (primary.length >= EXAMPLE_PROMPT_LIMIT) {
+      return primary.slice(0, EXAMPLE_PROMPT_LIMIT);
+    }
+    // Top up sparse slices with featured picks so the row never
+    // collapses to a single dim example.
+    const featuredBackfill = ranked.filter(
+      (plugin) => isFeaturedPlugin(plugin) && !primary.some((p) => p.id === plugin.id),
+    );
+    return [...primary, ...featuredBackfill].slice(0, EXAMPLE_PROMPT_LIMIT);
+  }, [plugins, presetStartersSelection]);
 
   // When the active plugin was bound through a chip, the badge shows
   // the chip label (e.g. "Prototype") instead of the underlying plugin
@@ -1010,6 +1064,8 @@ export function HomeView({
         onPickMcp={useMcpServer}
         onPickConnector={useConnector}
         onPickChip={pickChip}
+        examplePlugins={examplePromptCandidates}
+        onPickExample={(record) => requestPluginContextUse(record, 'use-with-query')}
         contextItemCount={contextItemCount}
         error={error}
         workingDir={workingDir}
@@ -1036,6 +1092,7 @@ export function HomeView({
         onOpenDetails={setDetailsRecord}
         onCreatePlugin={(goal) => queuePluginAuthoring(null, goal)}
         onBrowseRegistry={onBrowseRegistry}
+        presetSelection={presetStartersSelection}
       />
 
       {detailsRecord ? (
@@ -1094,6 +1151,29 @@ function projectKindForSkill(skill: SkillSummary | null): ProjectKind | null {
   if (skill.mode === 'video' || skill.surface === 'video') return 'video';
   if (skill.mode === 'audio' || skill.surface === 'audio') return 'audio';
   return 'other';
+}
+
+// Maps a Home hero chip id to the Official starters facet slice the
+// user most likely wants to browse next. The chip rail is intent
+// ("I want to design a slide deck"); the starters grid is the catalog
+// for that intent, so pinning the same `create / deck` slice lets the
+// user keep scanning examples without re-picking the same artifact
+// kind in a different control. The list mirrors the `apply-scenario`
+// and `apply-figma-migration` chip ids in `home-hero/chips.ts`; any
+// new chip there should add a row here too.
+function facetSelectionForChip(chipId: string): FacetSelection | null {
+  switch (chipId) {
+    case 'prototype': return { category: 'create', subcategory: 'prototype' };
+    case 'deck': return { category: 'create', subcategory: 'deck' };
+    case 'image': return { category: 'create', subcategory: 'image' };
+    case 'video': return { category: 'create', subcategory: 'video' };
+    case 'hyperframes': return { category: 'create', subcategory: 'hyperframes' };
+    case 'audio': return { category: 'create', subcategory: 'audio' };
+    case 'figma': return { category: 'import', subcategory: 'from-figma' };
+    case 'folder': return { category: 'import', subcategory: 'from-code' };
+    case 'create-plugin': return { category: 'extend', subcategory: 'plugin-authoring' };
+    default: return null;
+  }
 }
 
 function homeHeroChipLabelForId(chipId: string, t: ReturnType<typeof useI18n>['t']): string {

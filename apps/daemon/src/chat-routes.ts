@@ -1,5 +1,15 @@
 import type { Express } from 'express';
+import multer from 'multer';
 import type { RouteDeps } from './server-context.js';
+
+// Memory-storage multer for the voice-transcription proxy — the audio
+// blob is small (~tens of seconds of opus) and never needs to land on
+// disk, so we accept the buffer directly and forward it upstream.
+// 25 MB cap matches OpenAI's `/audio/transcriptions` per-file limit.
+const chatTranscribeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
 import { newInsertId } from './analytics.js';
 import { seedProviderIfMissing } from './media-config.js';
 import {
@@ -892,6 +902,94 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sse.end();
     }
   });
+
+  // Voice transcription proxy — mic button uses MediaRecorder in the
+  // renderer (the only ASR pipeline that actually works in OSS Electron,
+  // since webkitSpeechRecognition.start() silently fails there). The
+  // browser POSTs the captured audio blob plus the user's BYOK chat
+  // creds; we forward to an OpenAI-compatible `/audio/transcriptions`
+  // endpoint and return the transcript verbatim.
+  //
+  // We deliberately do not store the audio on disk — the file lives in
+  // multer's memory storage just long enough to be streamed upstream,
+  // then is dropped when the request resolves.
+  app.post(
+    '/api/proxy/openai/transcribe',
+    chatTranscribeUpload.single('audio'),
+    async (req, res) => {
+      try {
+        const baseUrl = String((req.body?.baseUrl ?? '') as string);
+        const apiKey = String((req.body?.apiKey ?? '') as string);
+        const model = String((req.body?.model ?? 'whisper-1') as string);
+        const language =
+          typeof req.body?.language === 'string' && req.body.language
+            ? String(req.body.language)
+            : undefined;
+        if (!baseUrl || !apiKey) {
+          return sendApiError(
+            res,
+            400,
+            'BAD_REQUEST',
+            'baseUrl and apiKey are required',
+          );
+        }
+        if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+          return sendApiError(res, 400, 'BAD_REQUEST', 'audio file required');
+        }
+        const validated = await validateExternalApiBaseUrl(baseUrl);
+        if (validated.error) {
+          return sendApiError(
+            res,
+            validated.forbidden ? 403 : 400,
+            validated.forbidden ? 'FORBIDDEN' : 'BAD_REQUEST',
+            validated.error,
+          );
+        }
+        const url = appendVersionedApiPath(baseUrl, '/audio/transcriptions');
+        console.log(
+          `[proxy:openai-transcribe] ${validated.parsed!.hostname} model=${model} bytes=${req.file.buffer.length}`,
+        );
+        const form = new FormData();
+        const filename = req.file.originalname || 'audio.webm';
+        const mime =
+          req.file.mimetype && req.file.mimetype.length > 0
+            ? req.file.mimetype
+            : 'audio/webm';
+        form.set('file', new Blob([new Uint8Array(req.file.buffer)], { type: mime }), filename);
+        form.set('model', model);
+        if (language) form.set('language', language);
+        form.set('response_format', 'json');
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: form,
+          redirect: 'error',
+        });
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
+          console.error(
+            `[proxy:openai-transcribe] upstream error: ${response.status} ${redactAuthTokens(errorText)}`,
+          );
+          return sendApiError(
+            res,
+            response.status >= 400 && response.status < 500 ? response.status : 502,
+            proxyErrorCode(response.status),
+            `Upstream error: ${response.status}`,
+            { details: { upstream: errorText } },
+          );
+        }
+        const payload = (await response.json().catch(() => null)) as
+          | { text?: string }
+          | null;
+        const text = typeof payload?.text === 'string' ? payload.text : '';
+        res.json({ text });
+      } catch (err: any) {
+        console.error(`[proxy:openai-transcribe] internal error: ${err?.message}`);
+        sendApiError(res, 500, 'INTERNAL_ERROR', String(err?.message ?? err));
+      }
+    },
+  );
 
   app.post('/api/proxy/azure/stream', async (req, res) => {
     /** @type {Partial<ProxyStreamRequest>} */

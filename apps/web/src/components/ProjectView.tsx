@@ -114,6 +114,7 @@ import {
 import { AppChromeHeader } from './AppChromeHeader';
 import { AvatarMenu } from './AvatarMenu';
 import { HandoffButton } from './HandoffButton';
+import { ProjectDesignSystemPicker } from './ProjectDesignSystemPicker';
 import { ChatPane } from './ChatPane';
 import type { ChatSendMeta } from './ChatComposer';
 import {
@@ -2721,6 +2722,20 @@ export function ProjectView({
     [project, onProjectChange],
   );
 
+  const handleChangeDesignSystemId = useCallback(
+    (nextId: string | null) => {
+      if ((project.designSystemId ?? null) === nextId) return;
+      const updated: Project = {
+        ...project,
+        designSystemId: nextId,
+        updatedAt: Date.now(),
+      };
+      onProjectChange(updated);
+      void patchProject(project.id, { designSystemId: nextId });
+    },
+    [project, onProjectChange],
+  );
+
   const handleSaveInstructions = useCallback(async () => {
     const value = instructionsDraft.trim() || undefined;
     // After a save, land on the review panel so the saved value is read
@@ -2739,13 +2754,15 @@ export function ProjectView({
   }, [project, onProjectChange, instructionsDraft]);
 
   const projectMeta = useMemo(() => {
+    // Design system is rendered by the adjacent picker chip — keep the
+    // bare meta string focused on skill / mode so the two surfaces
+    // don't show the same label twice.
     const summary =
       skills.find((s) => s.id === project.skillId) ??
       designTemplates.find((s) => s.id === project.skillId);
     const skill = summary?.name;
-    const ds = designSystems.find((d) => d.id === project.designSystemId)?.title;
-    return [skill, ds].filter(Boolean).join(' · ') || t('project.metaFreeform');
-  }, [skills, designTemplates, designSystems, project.skillId, project.designSystemId, t]);
+    return skill ?? t('project.metaFreeform');
+  }, [skills, designTemplates, project.skillId, t]);
 
   const designSystemProject = useMemo(() => {
     if (project.metadata?.importedFrom !== 'design-system') return null;
@@ -3242,6 +3259,11 @@ export function ProjectView({
               {project.name}
             </span>
             <span className="meta" data-testid="project-meta">{projectMeta}</span>
+            <ProjectDesignSystemPicker
+              designSystems={designSystems}
+              selectedId={project.designSystemId ?? null}
+              onChange={handleChangeDesignSystemId}
+            />
             {(project.customInstructions ?? '').trim() ? (
               <button
                 type="button"

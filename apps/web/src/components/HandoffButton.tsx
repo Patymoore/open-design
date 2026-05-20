@@ -11,7 +11,8 @@ import type {
   HostEditorsResponse,
 } from '@open-design/contracts';
 import { fetchHostEditors, openProjectInEditor } from '../providers/registry';
-import { Icon, type IconName } from './Icon';
+import { Icon } from './Icon';
+import { EditorIcon } from './EditorIcon';
 
 const PREFERRED_EDITOR_KEY = 'open-design:preferred-editor';
 
@@ -128,14 +129,16 @@ export function HandoffButton({ projectId, onRequestRevealInFinder }: Props) {
   // single-button fallback so the surface is never blank.
   if (available.length === 0) {
     const fallbackLabel = platform === 'win32' ? 'Explorer' : platform === 'linux' ? 'File Manager' : 'Finder';
+    const fallbackId: HostEditorId =
+      platform === 'win32' ? 'explorer' : platform === 'linux' ? 'file-manager' : 'finder';
     return (
       <button
         type="button"
-        className="handoff-trigger"
+        className="handoff-trigger handoff-trigger--solo"
         title={`No editors found on $PATH — opens in ${fallbackLabel}`}
         onClick={() => onRequestRevealInFinder?.()}
       >
-        <Icon name="folder" size={13} />
+        <EditorIcon editorId={fallbackId} size={20} />
         <span className="handoff-trigger-label">{fallbackLabel}</span>
       </button>
     );
@@ -147,46 +150,50 @@ export function HandoffButton({ projectId, onRequestRevealInFinder }: Props) {
       ref={wrapRef}
       data-testid="handoff-wrap"
     >
-      <button
-        type="button"
-        className="handoff-trigger"
-        data-testid="handoff-trigger"
-        title={primary ? `交付给 ${primary.label}` : '交付'}
-        onClick={() => {
-          if (primary && busy !== primary.id) {
-            void launch(primary);
-          } else {
-            setOpen((v) => !v);
-          }
-        }}
-        disabled={busy !== null}
-      >
-        {primary ? (
-          <>
-            <Icon name={(primary.icon ?? 'folder') as IconName} size={13} />
-            <span className="handoff-trigger-label">
-              交付给 {primary.label}
-            </span>
-          </>
-        ) : (
-          <>
-            <Icon name="folder" size={13} />
-            <span className="handoff-trigger-label">交付</span>
-          </>
-        )}
+      {/* Split control: the labeled left side launches the preferred
+          editor, the right caret opens the picker. Sibling buttons
+          (instead of a nested caret) so the caret has its own real
+          tap target and so we don't render an invalid button-in-button. */}
+      <div className="handoff-split">
+        <button
+          type="button"
+          className="handoff-trigger"
+          data-testid="handoff-trigger"
+          title={primary ? `交付给 ${primary.label}` : '交付'}
+          onClick={() => {
+            if (primary && busy !== primary.id) {
+              void launch(primary);
+            } else {
+              setOpen((v) => !v);
+            }
+          }}
+          disabled={busy !== null}
+        >
+          {primary ? (
+            <>
+              <EditorIcon editorId={primary.id} size={20} />
+              <span className="handoff-trigger-label">
+                交付给 {primary.label}
+              </span>
+            </>
+          ) : (
+            <>
+              <EditorIcon editorId="finder" size={20} />
+              <span className="handoff-trigger-label">交付</span>
+            </>
+          )}
+        </button>
         <button
           type="button"
           className="handoff-caret"
           aria-label="Choose hand-off target"
-          onClick={(e) => {
-            e.stopPropagation();
-            setOpen((v) => !v);
-          }}
-          tabIndex={-1}
+          data-testid="handoff-caret"
+          onClick={() => setOpen((v) => !v)}
+          disabled={busy !== null}
         >
-          <Icon name="chevron-down" size={12} />
+          <Icon name="chevron-down" size={14} />
         </button>
-      </button>
+      </div>
       {open ? (
         <div className="handoff-menu" role="menu" data-testid="handoff-menu">
           {available.map((editor) => (
@@ -199,7 +206,7 @@ export function HandoffButton({ projectId, onRequestRevealInFinder }: Props) {
               onClick={() => void launch(editor)}
               disabled={busy === editor.id}
             >
-              <Icon name={(editor.icon ?? 'folder') as IconName} size={13} />
+              <EditorIcon editorId={editor.id} size={20} />
               <span>{editor.label}</span>
               {editor.id === preferred ? (
                 <Icon name="check" size={12} />
@@ -221,7 +228,7 @@ export function HandoffButton({ projectId, onRequestRevealInFinder }: Props) {
                   disabled={busy === editor.id}
                   title={`${editor.label} — not detected on $PATH`}
                 >
-                  <Icon name={(editor.icon ?? 'folder') as IconName} size={13} />
+                  <EditorIcon editorId={editor.id} size={20} />
                   <span>{editor.label}</span>
                 </button>
               ))}

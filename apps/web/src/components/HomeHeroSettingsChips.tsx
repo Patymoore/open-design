@@ -34,6 +34,12 @@ interface Props {
   designSystemsLoading: boolean;
   selectedDesignSystemId: string | null;
   onChangeDesignSystemId: (id: string | null) => void;
+  // 'block' = standalone strip below the composer (original placement).
+  // 'inline' = compact chips that live inside the composer's footer-left
+  // slot. Inline drops the strip-level width cap and outer margins so
+  // the chips line up with the attach button instead of forming a row
+  // of their own.
+  variant?: 'block' | 'inline';
 }
 
 export function HomeHeroSettingsChips({
@@ -43,6 +49,7 @@ export function HomeHeroSettingsChips({
   designSystemsLoading,
   selectedDesignSystemId,
   onChangeDesignSystemId,
+  variant = 'block',
 }: Props) {
   const selectedDs = useMemo(
     () => designSystems.find((d) => d.id === selectedDesignSystemId) ?? null,
@@ -148,7 +155,10 @@ export function HomeHeroSettingsChips({
     : null;
 
   return (
-    <div className="home-hero__settings" data-testid="home-hero-settings">
+    <div
+      className={`home-hero__settings${variant === 'inline' ? ' home-hero__settings--inline' : ''}`}
+      data-testid="home-hero-settings"
+    >
       <button
         type="button"
         className={`home-hero__setting-chip${workingDir ? ' picked' : ''}`}

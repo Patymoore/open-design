@@ -491,7 +491,7 @@ code {
   height: 100vh;
   min-height: 0;
   display: grid;
-  grid-template-rows: 40px minmax(0, 1fr);
+  grid-template-rows: 36px minmax(0, 1fr);
   background: var(--bg-app);
 }
 .workspace-shell__body {
@@ -540,12 +540,6 @@ code {
   background: color-mix(in srgb, var(--bg-panel) 72%, var(--bg-subtle));
   color: var(--text);
 }
-.workspace-tabs-drag {
-  flex: 1 1 auto;
-  min-width: 12px;
-  align-self: stretch;
-  -webkit-app-region: drag;
-}
 .workspace-tabs-icon-btn {
   width: 28px;
   height: 28px;
@@ -569,27 +563,42 @@ code {
 .workspace-tabs-strip {
   align-self: stretch;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   display: flex;
   align-items: center;
   gap: 0;
   padding-left: 0;
-  overflow: visible;
+  /* Horizontal scroll inside the strip — tabs keep their natural width
+     and the strip itself scrolls when it overflows the chrome. This
+     replaces the previous "slice to N visible + overflow chip" model
+     which let lots of tabs squish-shrink and could push the rest of
+     the chrome out of view. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   contain: layout style;
   -webkit-app-region: drag;
+  /* Allow the user's trackpad / shift-wheel to scroll horizontally
+     without the OS turning it into a back-gesture. */
+  overscroll-behavior-x: contain;
+}
+.workspace-tabs-strip::-webkit-scrollbar {
+  height: 0;
+  display: none;
 }
 .workspace-tab {
   position: relative;
-  height: 26px;
-  min-width: 76px;
-  max-width: 136px;
-  flex: 1 1 124px;
+  height: 24px;
+  /* Fixed width — never shrink. The strip scrolls when the tabs
+     don't fit anymore. */
+  width: 156px;
+  flex: 0 0 156px;
   padding: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
+  grid-template-columns: minmax(0, 1fr) 22px;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   overflow: hidden;
@@ -626,7 +635,7 @@ code {
 .workspace-tab__main {
   min-width: 0;
   height: 100%;
-  padding: 0 2px 0 6px;
+  padding: 0 6px 0 9px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -634,7 +643,7 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 5px;
+  gap: 6px;
   text-align: left;
 }
 .workspace-tab__main:hover:not(:disabled) {
@@ -668,12 +677,12 @@ code {
   letter-spacing: 0;
 }
 .workspace-tab__close {
-  width: 16px;
-  height: 16px;
-  margin-right: 3px;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-faint);
   display: inline-flex;
@@ -690,26 +699,15 @@ code {
   color: var(--text);
   background: var(--bg-subtle);
 }
-.workspace-tab--overflow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  height: 26px;
-  min-width: auto;
-  max-width: none;
-  padding: 0 9px;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 540;
-}
 .workspace-tabs-actions {
   position: relative;
+  align-self: stretch;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex: 0 0 auto;
-  margin-left: 3px;
+  margin-left: 8px;
+  padding-left: 4px;
   z-index: 35;
   -webkit-app-region: no-drag;
 }
@@ -874,6 +872,69 @@ code {
   color: var(--text-muted);
   font-size: 12.5px;
 }
+.workspace-tab-preview {
+  position: fixed;
+  z-index: 140;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  animation: workspace-tab-preview-in 130ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.workspace-tab-preview__icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.workspace-tab-preview__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.workspace-tab-preview__title {
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+.workspace-tab-preview__meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.workspace-tab-preview__detail {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+@keyframes workspace-tab-preview-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @media (max-width: 720px) {
   .workspace-tabs-chrome.app-chrome-header {
     padding-right: 6px;
@@ -890,8 +951,7 @@ code {
     padding: 0;
   }
   .workspace-tab__label,
-  .workspace-tab__close,
-  .workspace-tab--overflow {
+  .workspace-tab__close {
     display: none;
   }
 }
@@ -1107,7 +1167,12 @@ code {
 }
 .app-project-title-line {
   display: flex;
-  align-items: baseline;
+  /* Center on the cross-axis so the contentEditable title text, the
+     muted meta string, the design-system picker chip, and the edit
+     icon button all sit on a shared vertical mid-line. Baseline
+     alignment makes the icon-only edit button appear to "float" above
+     the text (the button has no text baseline of its own). */
+  align-items: center;
   gap: 8px;
   min-width: 0;
   max-width: 100%;
@@ -25288,45 +25353,54 @@ body.desktop-pet-shell .pet-task-item {
 /* Project page audit pass: one final rule set for the active project shell.
    Keep the outer panes flat; only controls and repeated items get radius. */
 .workspace-shell .workspace-tabs-chrome.app-chrome-header {
-  height: 40px;
-  min-height: 40px;
-  padding: 0 14px;
+  --workspace-tabs-chrome-height: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   box-shadow: none;
 }
 .workspace-shell .workspace-tabs-strip {
-  gap: 6px;
+  gap: 4px;
 }
 .workspace-shell .workspace-tab {
-  height: 30px;
-  min-height: 30px;
-  border-radius: 9px;
+  height: 24px;
+  min-height: 24px;
+  min-width: 96px;
+  max-width: 168px;
+  flex: 1 1 148px;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
   box-shadow: none;
+}
+.workspace-shell .workspace-tab + .workspace-tab::before {
+  height: 12px;
 }
 .workspace-shell .workspace-tab.is-active {
   background: var(--bg-subtle);
   border-color: var(--border);
 }
 .workspace-shell .workspace-tab__main {
-  gap: 7px;
-  padding-inline: 10px 4px;
+  gap: 6px;
+  padding-inline: 9px 4px;
 }
 .workspace-shell .workspace-tab__label {
-  font-size: 12.5px;
+  font-size: 12px;
+  font-weight: 540;
 }
 .workspace-shell .workspace-tab__close {
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
 }
 .workspace-shell .workspace-tabs-new-btn,
 .workspace-shell .workspace-tabs-icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
 }
 
 .app {
@@ -25986,47 +26060,99 @@ body.desktop-pet-shell .pet-task-item {
   position: relative;
   display: inline-flex;
 }
-.app .handoff-trigger {
+/* Split container — the labeled left button + caret button share a
+   single rounded pill border. Borders on the inner buttons are
+   removed; the wrapper carries the visible chrome. */
+.app .handoff-split {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 4px 10px;
+  align-items: stretch;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-panel);
+  overflow: hidden;
+  transition: border-color 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.app .handoff-split:hover {
+  border-color: var(--border-strong, var(--border));
+}
+.app .handoff-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 4px;
+  border: 0;
+  background: transparent;
   color: var(--text);
+  font: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: background 200ms cubic-bezier(0.23, 1, 0.32, 1),
-    border-color 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  transition: background 200ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .app .handoff-trigger:hover {
-  background: color-mix(in srgb, var(--text-muted) 6%, var(--bg-panel));
-  border-color: var(--border-strong, var(--border));
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
 }
 .app .handoff-trigger:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
+.app .handoff-trigger--solo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 3px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.app .handoff-trigger--solo:hover {
+  border-color: var(--border-strong, var(--border));
+  background: color-mix(in srgb, var(--text-muted) 6%, var(--bg-panel));
+}
 .app .handoff-trigger-label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 140px;
+  max-width: 160px;
 }
 .app .handoff-caret {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  /* Real tap target — at least 28px on the short axis. The previous
+     caret was a 16-18px nested span which the user flagged as too
+     small to click reliably. */
+  min-width: 32px;
+  padding: 0 8px;
   border: 0;
+  border-left: 1px solid var(--border);
   background: transparent;
-  padding: 0 2px;
-  margin-left: 2px;
   cursor: pointer;
-  color: inherit;
-  border-radius: 4px;
+  color: var(--text-muted);
+  transition: background 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    color 200ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .app .handoff-caret:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  color: var(--text);
+}
+.app .handoff-caret:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/* Editor-icon tile — small rounded square with brand-tinted bg. Used
+   both in the trigger and in the picker menu items. */
+.app .editor-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  overflow: hidden;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent) inset;
 }
 .app .handoff-menu {
   position: absolute;
@@ -26112,6 +26238,16 @@ body.desktop-pet-shell .pet-task-item {
   background: rgba(255, 59, 48, 0.08);
   color: #b81f10;
 }
+.mic-btn-busy {
+  cursor: progress;
+}
+.mic-btn-busy svg {
+  animation: mic-btn-spin 1s linear infinite;
+}
+@keyframes mic-btn-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 .mic-btn-pulse {
   position: absolute;
   inset: -2px;
@@ -26133,7 +26269,6 @@ body.desktop-pet-shell .pet-task-item {
 .home-hero__mic {
   width: 36px;
   height: 36px;
-  margin-right: 4px;
 }
 
 /* -- Working-directory pill at the bottom of the project composer -- */
@@ -26255,6 +26390,24 @@ body.desktop-pet-shell .pet-task-item {
   align-self: stretch;
   margin: -4px auto 0;
   padding: 0 2px;
+}
+/* Inline variant: chips live inside the composer's footer-left slot
+   (next to the attach button) instead of forming their own strip
+   below the card. Drop the strip-level width cap and outer margins
+   so the chips line up tightly with the attach button. */
+.home-hero__settings--inline {
+  width: auto;
+  max-width: none;
+  align-self: auto;
+  margin: 0;
+  padding: 0;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+.home-hero__settings--inline .home-hero__setting-chip {
+  font-size: 11.5px;
+  padding: 4px 9px;
 }
 .home-hero__setting-chip-wrap {
   position: relative;
@@ -26466,4 +26619,153 @@ body.desktop-pet-shell .pet-task-item {
   font-size: 12px;
   color: var(--text-muted);
   padding: 8px;
+}
+
+/* -- Project-page design-system picker (project chrome header) -- */
+.project-ds-picker {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.project-ds-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    border-color 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  max-width: 220px;
+}
+.project-ds-picker-trigger:hover {
+  background: var(--bg-panel-strong, var(--bg-panel));
+  border-color: var(--border-strong, var(--border));
+}
+.project-ds-picker-trigger.picked {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
+  color: var(--text-strong, var(--text));
+}
+.project-ds-picker-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.project-ds-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.project-ds-picker-swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.project-ds-picker-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+}
+.project-ds-picker-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(360px, 86vw);
+  max-height: 60vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md, 0 24px 64px rgba(0, 0, 0, 0.14));
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+  overflow: hidden;
+}
+.project-ds-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.project-ds-picker-search input {
+  flex: 1 1 auto;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  color: var(--text);
+}
+.project-ds-picker-list {
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.project-ds-picker-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.project-ds-picker-option:hover {
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
+.project-ds-picker-option.active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.project-ds-picker-option-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.project-ds-picker-option-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong, var(--text));
+}
+.project-ds-picker-option-cat {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  color: var(--text-muted);
+}
+.project-ds-picker-option-summary {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.project-ds-picker-option-swatches {
+  display: flex;
+  gap: 3px;
+}
+.project-ds-picker-option-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.project-ds-picker-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 12px;
+  text-align: center;
 }
