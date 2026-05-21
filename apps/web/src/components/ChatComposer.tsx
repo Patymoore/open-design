@@ -1925,7 +1925,7 @@ function ToolsPluginsPanel({
                 title={`Plugin details: ${p.title}`}
                 aria-label={`Plugin details for ${p.title}`}
               >
-                <Icon name="info" size={13} />
+                <Icon name="arrow-up-right" size={13} />
               </button>
             </div>
           ))}

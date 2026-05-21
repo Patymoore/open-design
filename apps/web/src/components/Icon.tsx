@@ -3,6 +3,7 @@ import type { SVGProps } from 'react';
 export type IconName =
   | 'arrow-left'
   | 'arrow-up'
+  | 'arrow-up-right'
   | 'attach'
   | 'bell'
   | 'check'
@@ -103,6 +104,13 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
         <svg {...common}>
           <path d="M12 19V5" />
           <path d="m5 12 7-7 7 7" />
+        </svg>
+      );
+    case 'arrow-up-right':
+      return (
+        <svg {...common}>
+          <path d="M7 17 17 7" />
+          <path d="M7 7h10v10" />
         </svg>
       );
     case 'attach':
