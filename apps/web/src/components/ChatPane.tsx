@@ -756,7 +756,7 @@ export function ChatPane({
           >
             <Icon name="plus" size={16} />
           </button>
-          {onResumeConversation ? (
+          {onResumeConversation && messages.length > 0 ? (
             <button
               type="button"
               className="icon-only"
