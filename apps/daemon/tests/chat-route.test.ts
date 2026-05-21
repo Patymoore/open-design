@@ -428,7 +428,7 @@ process.stdin.on('end', () => {
     );
   });
 
-  it('propagates composed deck mode when a base skill is already active', async () => {
+  it('preserves a persisted media skill as the primary surface over a composed deck mention', async () => {
     await withFakeAgent(
       'opencode',
       `
@@ -439,9 +439,10 @@ process.stdin.on('data', (chunk) => {
 });
 process.stdin.on('end', () => {
   const checks = [
-    prompt.includes('# FAQ Page Skill') ? 'has-base-skill-body' : 'missing-base-skill-body',
+    prompt.includes('# imagegen') ? 'has-base-image-skill-body' : 'missing-base-image-skill-body',
     prompt.includes('## Composed skill — open-design-landing-deck') ? 'has-composed-deck-skill-header' : 'missing-composed-deck-skill-header',
-    prompt.includes('# Slide deck — fixed framework (this is non-negotiable for deck mode)') ? 'has-deck-framework' : 'missing-deck-framework',
+    prompt.includes('## Media generation contract (load-bearing — overrides softer wording above)') ? 'has-image-contract' : 'missing-image-contract',
+    prompt.includes('# Slide deck — fixed framework (this is non-negotiable for deck mode)') ? 'unexpected-deck-framework' : 'kept-deck-framework-out',
   ];
   console.log(JSON.stringify({ type: 'step_start' }));
   console.log(JSON.stringify({ type: 'text', part: { text: checks.join('\\n') } }));
@@ -455,20 +456,22 @@ process.stdin.on('end', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             agentId: 'opencode',
-            message: 'build an faq page deck',
-            skillId: 'faq-page',
+            message: 'generate an image while also referencing a deck template',
+            skillId: 'imagegen',
             skillIds: ['open-design-landing-deck'],
           }),
         });
         const body = await response.text();
 
         expect(response.ok).toBe(true);
-        expect(body).toContain('has-base-skill-body');
+        expect(body).toContain('has-base-image-skill-body');
         expect(body).toContain('has-composed-deck-skill-header');
-        expect(body).toContain('has-deck-framework');
-        expect(body).not.toContain('missing-base-skill-body');
+        expect(body).toContain('has-image-contract');
+        expect(body).toContain('kept-deck-framework-out');
+        expect(body).not.toContain('missing-base-image-skill-body');
         expect(body).not.toContain('missing-composed-deck-skill-header');
-        expect(body).not.toContain('missing-deck-framework');
+        expect(body).not.toContain('missing-image-contract');
+        expect(body).not.toContain('unexpected-deck-framework');
       },
     );
   });

@@ -8344,8 +8344,14 @@ export async function startServer({
       mode: NonNullable<Parameters<typeof composeSystemPrompt>[0]['skillMode']> | null | undefined,
     ) => {
       if (!mode) return;
-      skillMode = mode;
       skillModes.add(mode);
+    };
+    const registerPrimarySkillMode = (
+      mode: NonNullable<Parameters<typeof composeSystemPrompt>[0]['skillMode']> | null | undefined,
+    ) => {
+      if (!mode) return;
+      skillMode ??= mode;
+      registerSkillMode(mode);
     };
     const registerSkillDir = (dir: string | null | undefined) => {
       if (typeof dir !== 'string' || dir.length === 0) return;
@@ -8372,7 +8378,7 @@ export async function startServer({
       if (skill) {
         skillBody = skill.body;
         skillName = skill.name;
-        registerSkillMode(skill.mode);
+        registerPrimarySkillMode(skill.mode);
         registerSkillDir(skill.dir);
         skillCritiquePolicy = mergeSkillCritiquePolicy(
           skillCritiquePolicy,
@@ -8399,6 +8405,9 @@ export async function startServer({
         if (!extra) continue;
         registerSkillDir(extra.dir);
         registerSkillMode(extra.mode);
+        if (!effectiveCanonicalSkillId && adHocSkillIds.length === 1) {
+          registerPrimarySkillMode(extra.mode);
+        }
         if (!critiqueSkillId || extra.critiquePolicy !== null) critiqueSkillId = canonicalId;
         skillCritiquePolicy = mergeSkillCritiquePolicy(
           skillCritiquePolicy,
