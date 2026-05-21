@@ -242,8 +242,8 @@ body.sub-page {
   color: var(--ink);
 }
 .featured-card a > * + * {
-  margin-left: 22px;
-  margin-right: 22px;
+  margin-left: 24px;
+  margin-right: 24px;
 }
 .featured-card .featured-num { margin-top: 18px; }
 .featured-card p { margin-bottom: 12px; }
@@ -478,9 +478,10 @@ body.sub-page {
 }
 .template-card a > .meta-tag,
 .template-card a > .template-name,
-.template-card a > .template-summary {
-  margin-left: 20px;
-  margin-right: 20px;
+.template-card a > .template-summary,
+.template-card a > .template-meta-line {
+  margin-left: 24px;
+  margin-right: 24px;
 }
 .template-card a > .meta-tag {
   display: inline-block;
@@ -523,7 +524,13 @@ body.sub-page {
   color: var(--ink);
 }
 .template-summary {
-  margin: 8px 20px 20px;
+  /*
+   * Horizontal padding (24px) is set by the rule on
+   * `.template-card a > .template-summary` above so the value stays in
+   * lockstep with siblings. Only top/bottom rhythm is owned here.
+   */
+  margin-top: 8px;
+  margin-bottom: 20px;
   font-size: 14px;
   line-height: 1.5;
   color: var(--ink-soft);
@@ -534,7 +541,10 @@ body.sub-page {
 }
 .template-meta-line {
   display: block;
-  margin: -10px 20px 20px;
+  /* Same lockstep contract as .template-summary above. The negative
+   * margin-top intentionally tugs this row up against the summary. */
+  margin-top: -10px;
+  margin-bottom: 20px;
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.12em;
@@ -568,7 +578,7 @@ body.sub-page {
 }
 .system-card a {
   display: block;
-  padding: 18px 18px 22px;
+  padding: 18px 24px 22px;
   text-decoration: none;
   color: var(--ink);
 }
@@ -1017,7 +1027,7 @@ body.sub-page {
 .source-card {
   border: 1px solid var(--ink);
   background: var(--paper-warm);
-  padding: 24px 28px;
+  padding: 24px;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 14px 28px;
