@@ -8,18 +8,24 @@ describe('buildPptxExportPrompt', () => {
 
     expect(prompt).toContain('Export @Quarterly Plan.html as an editable PPTX file titled "Quarterly Plan".');
     expect(prompt).toContain('`Quarterly Plan.pptx`');
-    expect(prompt).toContain('Use any PPTX-capable toolchain that is actually available in this environment.');
+    expect(prompt).toContain('Prefer the checked-in `skills/pptx-html-fidelity-audit` flow when that repo path is accessible here and the environment can run it.');
+    expect(prompt).toContain('python skills/pptx-html-fidelity-audit/scripts/verify_layout.py "Quarterly Plan.pptx"');
     expect(prompt).toContain('Do not refuse solely because a specific library, skill, or verifier is unavailable.');
-    expect(prompt).toContain('Only report that export is impossible if no available toolchain here can write a PPTX file at all.');
+    expect(prompt).toContain('Only report that editable export is impossible if no available toolchain here can produce materially editable slides.');
     expect(prompt).toContain('Do not claim the fidelity is verified if you could not run a real validation step.');
   });
 
-  it('does not require the old python-only audit flow', () => {
+  it('falls back only when the audited repo flow is genuinely unavailable', () => {
     const prompt = buildPptxExportPrompt('deck.html');
 
-    expect(prompt).not.toContain('skills/pptx-html-fidelity-audit');
-    expect(prompt).not.toContain('verify_layout.py');
-    expect(prompt).not.toContain('mandatory gate');
-    expect(prompt).not.toContain('Use python-pptx');
+    expect(prompt).toContain('If that audited repo flow is genuinely unavailable, use any other PPTX-capable toolchain that is actually available in this environment.');
+    expect(prompt).toContain('If `python-pptx`, PptxGenJS, or a PPTX verification helper is missing, try another available approach instead.');
+  });
+
+  it('does not treat a mostly image-based deck as a successful editable export', () => {
+    const prompt = buildPptxExportPrompt('deck.html');
+
+    expect(prompt).toContain('If the only possible output would be a mostly rasterized or image-heavy deck, do not present that as a successful editable export');
+    expect(prompt).toContain('explicitly report that materially editable export was not possible in the current environment.');
   });
 });
