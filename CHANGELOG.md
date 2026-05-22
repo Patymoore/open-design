@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.0] - 2026-05-20
 
-The rebuilt-core release: **everything is a plugin**, **headless by default**, **plugins create plugins**. Open Design's research-preview architecture has been replaced with a small, boring engine plus a plugin surface — design systems, slices, prototypes, exports, and Figma itself all live in plugins now. The desktop app is a thin wrapper around the OD CLI, so the same engine runs in Claude Code, OpenClaw, Hermes Agent, and chat bots in Lark / Discord / Slack. **Critique Theater** matures through **Phase 16** (rollout ratchet, conformance API, 9 Prometheus metrics, Grafana dashboard, M0 dark-launch by default). **149 design systems** now ship with structured `tokens.css` + components manifests across 60+ new brand fixtures. **Italian (it) locale** + **CJK font fallback**. New media providers: **Leonardo.ai**, **ElevenLabs**, **SenseAudio**. **Windows packaged auto-update** lands with feature parity to macOS. Plus a **top-to-bottom visual refresh**, **Quick-brief discovery overhaul**, **PostHog v2 analytics schema**, **manual edit UX overhaul** (focus mode, uploads, remove-element patch), **Resume conversation in new chat**, **custom CLI agent profiles**, and **HTML Anything** landing page. 305 merged PRs by 75 contributors since 0.7.0.
+The rebuilt-core release: **everything is a plugin**, **headless by default**, **plugins create plugins**. Open Design's research-preview architecture has been replaced with a small, boring engine plus a plugin surface — design systems, slices, prototypes, exports, and Figma itself all live in plugins now. The desktop app is a thin wrapper around the OD CLI, so the same engine runs in Claude Code, OpenClaw, Hermes Agent, and chat bots in Lark / Discord / Slack. **Critique Theater** matures through **Phase 16** (rollout ratchet, conformance API, 9 Prometheus metrics, Grafana dashboard, M0 dark-launch by default). **149 design systems** now ship with structured `tokens.css` + components manifests across 60+ new brand fixtures. **Italian (it) locale** + **CJK font fallback**. New media providers: **Leonardo.ai**, **ElevenLabs**, **SenseAudio**. **Packaged auto-update** lands on both **macOS and Windows**, battle-hardened through the preview cycle. Plus a **top-to-bottom visual refresh**, **Quick-brief discovery overhaul**, **PostHog v2 analytics schema**, **manual edit UX overhaul** (focus mode, uploads, remove-element patch), **custom CLI agent profiles**, and **HTML Anything** landing page. 305 merged PRs by 75 contributors since 0.7.0.
 
 ### Added
 
@@ -50,7 +50,6 @@ The rebuilt-core release: **everything is a plugin**, **headless by default**, *
 - **Cursor Agent live model id parsing** + auth diagnostics. ([#1538], [#2228])
 
 #### Web UI
-- **Resume conversation in a new chat** — split long threads without losing prior context. ([#2264])
 - **Manual edit UX overhaul** — focus mode, inline uploads, remove-element patch. ([#1516])
 - **Manual edit inspector.** ([#1448])
 - **Tweaks toolbar bound to the artifact panel** (toggle visibility from the panel chrome).
@@ -69,8 +68,9 @@ The rebuilt-core release: **everything is a plugin**, **headless by default**, *
 - **Daemon surfaces discovery form answers to agents.** ([#2071])
 
 #### Desktop & packaging
-- **Windows packaged auto-update flow.** ([#2362])
-- **Desktop updater UI flow** — new in-app updater popup. ([#2270], [#2403])
+- **Packaged auto-update for both macOS and Windows.** ([#2362], [#2270], [#2403])
+- **Updater hardening** through the preview cycle — release validation, deferred installer on Windows, applied-state clearing, download / install handoff hardening, smoke-recovery. ([#2565], [#2575], [#2592], [#2595], [#2677], [#2687], [#2700])
+- **Desktop updater UI flow** — new in-app updater popup.
 - **Packaged update apply observations** captured for telemetry / debugging. ([#2429])
 - **Nightly + preview package identity** so beta installs don't collide with stable. ([#2437])
 - **macOS Dock icon stays put** when desktop-pet window opens. ([#2413])
@@ -1767,3 +1767,10 @@ First public release of Open Design — a local-first, open-source alternative t
 [#2437]: https://github.com/nexu-io/open-design/pull/2437
 [#2446]: https://github.com/nexu-io/open-design/pull/2446
 [#2452]: https://github.com/nexu-io/open-design/pull/2452
+[#2565]: https://github.com/nexu-io/open-design/pull/2565
+[#2575]: https://github.com/nexu-io/open-design/pull/2575
+[#2592]: https://github.com/nexu-io/open-design/pull/2592
+[#2595]: https://github.com/nexu-io/open-design/pull/2595
+[#2677]: https://github.com/nexu-io/open-design/pull/2677
+[#2687]: https://github.com/nexu-io/open-design/pull/2687
+[#2700]: https://github.com/nexu-io/open-design/pull/2700
