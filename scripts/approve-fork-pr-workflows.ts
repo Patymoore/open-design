@@ -42,8 +42,9 @@ type WorkflowRunsResponse = {
 };
 
 const dryRun = process.env.DRY_RUN === "true";
-const pendingRunPollAttempts = 4;
 const pendingRunPollIntervalMs = 3_000;
+const pendingRunFirstAppearanceTimeoutMs = 4 * 60_000;
+const pendingRunSettlingPollAttempts = 3;
 
 // Workflow allowlisting is the security boundary: fork PRs may touch broader
 // source paths, but this script only approves low-privilege pull_request
@@ -183,8 +184,10 @@ function delay(ms: number): Promise<void> {
 export async function waitForPendingApprovalRuns(
   loadRuns: () => Promise<WorkflowRun[]>,
   sleep: (ms: number) => Promise<void> = delay,
+  now: () => number = Date.now,
 ): Promise<WorkflowRun[]> {
   const pendingRuns = new Map<number, WorkflowRun>();
+  const firstAppearanceDeadline = now() + pendingRunFirstAppearanceTimeoutMs;
 
   const collectRuns = async (): Promise<void> => {
     for (const run of await loadRuns()) {
@@ -194,7 +197,12 @@ export async function waitForPendingApprovalRuns(
 
   await collectRuns();
 
-  for (let attempt = 1; attempt < pendingRunPollAttempts; attempt += 1) {
+  while (pendingRuns.size === 0 && now() < firstAppearanceDeadline) {
+    await sleep(pendingRunPollIntervalMs);
+    await collectRuns();
+  }
+
+  for (let attempt = 0; pendingRuns.size > 0 && attempt < pendingRunSettlingPollAttempts; attempt += 1) {
     await sleep(pendingRunPollIntervalMs);
     await collectRuns();
   }

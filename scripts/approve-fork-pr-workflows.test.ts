@@ -303,16 +303,19 @@ test("waitForPendingApprovalRuns retries until action_required runs appear and k
 
   const batches = [[], [], [run]];
   const sleeps: number[] = [];
+  let now = 0;
 
   const pendingRuns = await waitForPendingApprovalRuns(
     async () => batches.shift() ?? [run],
     async (ms) => {
       sleeps.push(ms);
+      now += ms;
     },
+    () => now,
   );
 
   assert.deepEqual(pendingRuns, [run]);
-  assert.deepEqual(sleeps, [3000, 3000, 3000]);
+  assert.deepEqual(sleeps, [3000, 3000, 3000, 3000, 3000]);
 });
 
 test("waitForPendingApprovalRuns keeps polling and unions newly discovered runs across the retry window", async () => {
@@ -339,21 +342,54 @@ test("waitForPendingApprovalRuns keeps polling and unions newly discovered runs 
 
   const batches = [[ciRun], [ciRun], [ciRun, visualRun], [ciRun, visualRun]];
   const sleeps: number[] = [];
+  let now = 0;
 
   const pendingRuns = await waitForPendingApprovalRuns(
     async () => batches.shift() ?? [ciRun, visualRun],
     async (ms) => {
       sleeps.push(ms);
+      now += ms;
     },
+    () => now,
   );
 
   assert.deepEqual(pendingRuns, [ciRun, visualRun]);
   assert.deepEqual(sleeps, [3000, 3000, 3000]);
 });
 
-test("waitForPendingApprovalRuns stops after the bounded retry budget", async () => {
+test("waitForPendingApprovalRuns keeps polling until the first run appears, even after the old short retry budget", async () => {
+  const run = {
+    id: 26273463769,
+    name: "CI",
+    event: "pull_request",
+    status: "completed",
+    conclusion: "action_required",
+    head_sha: "734076155c44e569304856590019cea54506fdab",
+    path: ".github/workflows/ci.yml@main",
+    pull_requests: [],
+  };
+
+  const batches = [[], [], [], [], [run]];
+  const sleeps: number[] = [];
+  let now = 0;
+
+  const pendingRuns = await waitForPendingApprovalRuns(
+    async () => batches.shift() ?? [run],
+    async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+    () => now,
+  );
+
+  assert.deepEqual(pendingRuns, [run]);
+  assert.deepEqual(sleeps, [3000, 3000, 3000, 3000, 3000, 3000, 3000]);
+});
+
+test("waitForPendingApprovalRuns stops after the first-appearance timeout when no runs arrive", async () => {
   let calls = 0;
   const sleeps: number[] = [];
+  let now = 0;
 
   const pendingRuns = await waitForPendingApprovalRuns(
     async () => {
@@ -362,10 +398,13 @@ test("waitForPendingApprovalRuns stops after the bounded retry budget", async ()
     },
     async (ms) => {
       sleeps.push(ms);
+      now += ms;
     },
+    () => now,
   );
 
   assert.deepEqual(pendingRuns, []);
-  assert.equal(calls, 4);
-  assert.deepEqual(sleeps, [3000, 3000, 3000]);
+  assert.equal(calls, 81);
+  assert.equal(sleeps.length, 80);
+  assert.equal(now, 240000);
 });
