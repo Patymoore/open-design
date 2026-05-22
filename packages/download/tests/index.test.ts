@@ -294,6 +294,33 @@ describe("managed download package", () => {
     }
   });
 
+  it("clears a stale lock when Windows reuses the old owner pid for this process", async () => {
+    const body = "pid reuse lock payload";
+    const fixture = await startFixture(body);
+    const root = tmpRoot("pid-reuse-lock");
+    const basePath = join(root, "downloads");
+    try {
+      await inspectManagedDownload({ basePath, bucket: "updates", fileName: "installer.bin" });
+      writeFileSync(lockPath(basePath, "updates", "installer.bin"), JSON.stringify({
+        createdAt: new Date(Date.now() - (process.uptime() + 60) * 1000).toISOString(),
+        pid: process.pid,
+      }));
+
+      const result = await managedDownload({
+        basePath,
+        bucket: "updates",
+        fileName: "installer.bin",
+        payload: { checksum: { algorithm: "sha256", value: sha256(body) }, url: fixture.url },
+      });
+
+      expect(readFileSync(result.path, "utf8")).toBe(body);
+      expect(existsSync(lockPath(basePath, "updates", "installer.bin"))).toBe(false);
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("quick-fails when the target lock pid is still alive", async () => {
     const body = "alive lock payload";
     const fixture = await startFixture(body);

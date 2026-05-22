@@ -27,6 +27,8 @@ const STORE_KIND = "open-design-managed-download-root";
 const MANIFEST_KIND = "open-design-managed-download";
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_PRUNE_OLDER_THAN_MS = 24 * 60 * 60 * 1000;
+const PID_REUSE_GRACE_MS = 1000;
+const PROCESS_STARTED_AT_MS = Date.now() - process.uptime() * 1000;
 
 export type ManagedDownloadChecksum = {
   algorithm: "sha256" | "sha512";
@@ -199,6 +201,7 @@ type AcquiredLock = {
 type DownloadLockFile = {
   createdAt: string;
   pid: number;
+  processStartedAt?: string;
 };
 
 type DownloadAttemptResult = {
@@ -413,7 +416,31 @@ function isDownloadLockFile(value: unknown): value is DownloadLockFile {
   return typeof record.createdAt === "string" &&
     typeof record.pid === "number" &&
     Number.isInteger(record.pid) &&
-    record.pid > 0;
+    record.pid > 0 &&
+    (record.processStartedAt == null || typeof record.processStartedAt === "string");
+}
+
+function parseTimeMs(value: string | undefined): number | null {
+  if (value == null) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function lockBelongsToCurrentProcess(lock: DownloadLockFile): boolean {
+  if (lock.pid !== process.pid) return false;
+  const ownerStartedAtMs = parseTimeMs(lock.processStartedAt);
+  if (ownerStartedAtMs != null) return ownerStartedAtMs >= PROCESS_STARTED_AT_MS - PID_REUSE_GRACE_MS;
+
+  // Older locks only carried a pid. If Windows reuses that pid for this
+  // process, a lock that predates this process start is definitely stale.
+  const lockCreatedAtMs = parseTimeMs(lock.createdAt);
+  return lockCreatedAtMs == null || lockCreatedAtMs >= PROCESS_STARTED_AT_MS - PID_REUSE_GRACE_MS;
+}
+
+function isLockProcessAlive(lock: DownloadLockFile): boolean {
+  if (!isProcessAlive(lock.pid)) return false;
+  if (lock.pid === process.pid) return lockBelongsToCurrentProcess(lock);
+  return true;
 }
 
 async function readManifest(path: string): Promise<DownloadManifest | "invalid" | null> {
@@ -645,7 +672,11 @@ async function acquireLock(target: NormalizedTarget): Promise<AcquiredLock> {
     try {
       await writeFile(
         target.lockPath,
-        `${JSON.stringify({ createdAt: new Date().toISOString(), pid: process.pid } satisfies DownloadLockFile)}\n`,
+        `${JSON.stringify({
+          createdAt: new Date().toISOString(),
+          pid: process.pid,
+          processStartedAt: new Date(PROCESS_STARTED_AT_MS).toISOString(),
+        } satisfies DownloadLockFile)}\n`,
         { flag: "wx" },
       );
       return { path: target.lockPath };
@@ -663,7 +694,7 @@ async function acquireLock(target: NormalizedTarget): Promise<AcquiredLock> {
 
 async function clearStaleLock(target: NormalizedTarget): Promise<boolean> {
   const lock = await readJson<unknown>(target.lockPath);
-  if (!isDownloadLockFile(lock) || isProcessAlive(lock.pid)) return false;
+  if (!isDownloadLockFile(lock) || isLockProcessAlive(lock)) return false;
   await rm(target.lockPath, { force: true }).catch(() => undefined);
   return true;
 }
