@@ -198,6 +198,8 @@ type LoadedRelease = {
   ref: UpdateReleaseRef;
 };
 
+type ResolvedChecksumSnapshot = DesktopUpdateChecksumSnapshot & { value: string };
+
 type OwnedRoot =
   | { metadataPath: string; ok: true; realRoot: string }
   | { error: DesktopUpdateErrorSnapshot; ok: false };
@@ -509,6 +511,10 @@ function isChecksumSnapshot(value: unknown): value is DesktopUpdateChecksumSnaps
   if (value.value != null && typeof value.value !== "string") return false;
   if (value.url != null && typeof value.url !== "string") return false;
   return true;
+}
+
+function isResolvedChecksumSnapshot(value: unknown): value is ResolvedChecksumSnapshot {
+  return isChecksumSnapshot(value) && typeof value.value === "string" && value.value.length > 0;
 }
 
 function isUpdateReleaseRef(value: unknown): value is UpdateReleaseRef {
@@ -1343,6 +1349,60 @@ async function loadActiveRelease(
   return { ok: true, active: { path: artifactPath, ref: active } };
 }
 
+function checksumMatchesCandidate(checksum: ResolvedChecksumSnapshot, candidate: UpdateCandidate): boolean {
+  if (checksum.algorithm !== candidate.checksum.algorithm) return false;
+  if (candidate.checksum.url != null && checksum.url !== candidate.checksum.url) return false;
+  if (candidate.checksum.value != null && checksum.value.toLowerCase() !== candidate.checksum.value.toLowerCase()) return false;
+  return true;
+}
+
+async function loadVerifiedReleaseForCandidate(
+  root: OwnedRoot & { ok: true },
+  candidate: UpdateCandidate,
+): Promise<LoadedRelease | null> {
+  const releasesRoot = resolve(root.realRoot, RELEASES_DIR);
+  const entries = await readdir(releasesRoot, { withFileTypes: true }).catch(() => []);
+  const outputName = artifactFileName(candidate);
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const releaseDir = resolve(releasesRoot, entry.name);
+    if (!containsPath(root.realRoot, releaseDir)) continue;
+
+    const checksum = await readJson<unknown>(join(releaseDir, "checksum.json"));
+    if (!isResolvedChecksumSnapshot(checksum) || !checksumMatchesCandidate(checksum, candidate)) continue;
+    if (entry.name !== releaseKey(candidate, checksum)) continue;
+
+    const metadata = await readJson<unknown>(join(releaseDir, "metadata.json"));
+    if (!isRecord(metadata)) continue;
+
+    const artifactPath = resolve(releaseDir, outputName);
+    if (!containsPath(root.realRoot, artifactPath)) continue;
+    const artifactStat = await stat(artifactPath).catch(() => null);
+    if (artifactStat == null || !artifactStat.isFile()) continue;
+    const digest = await hashFile(artifactPath, checksum.algorithm).catch(() => null);
+    if (digest?.toLowerCase() !== checksum.value.toLowerCase()) continue;
+
+    const ref: UpdateReleaseRef = {
+      arch: candidate.arch,
+      artifact: candidate.artifact,
+      artifactPath: relative(root.realRoot, artifactPath),
+      checksum,
+      checksumPath: relative(root.realRoot, join(releaseDir, "checksum.json")),
+      channel: candidate.channel,
+      downloadedAt: artifactStat.mtime.toISOString(),
+      key: entry.name,
+      metadata,
+      metadataPath: relative(root.realRoot, join(releaseDir, "metadata.json")),
+      platformKey: candidate.platformKey,
+      version: candidate.version,
+    };
+    return { path: artifactPath, ref };
+  }
+
+  return null;
+}
+
 export function createDesktopUpdater(
   configInput: DesktopUpdaterConfigInput,
   deps: DesktopUpdaterDeps = {},
@@ -1534,6 +1594,29 @@ export function createDesktopUpdater(
         candidate = selected.candidate;
         metadata = selected.candidate.metadata;
         return setState(DESKTOP_UPDATE_STATES.DOWNLOADED);
+      }
+      const openedForAdoption = await openStore();
+      if (openedForAdoption.ok) {
+        const adoptedRelease = await loadVerifiedReleaseForCandidate(openedForAdoption.root, selected.candidate);
+        if (adoptedRelease != null) {
+          candidate = selected.candidate;
+          activeRelease = adoptedRelease;
+          metadata = adoptedRelease.ref.metadata;
+          installFrozen = false;
+          installResult = undefined;
+          incomingRelease = null;
+          progress = undefined;
+          await writeStoreMetadata(openedForAdoption.root, {
+            ...openedForAdoption.metadata,
+            active: adoptedRelease.ref,
+            incoming: undefined,
+            installFrozen: false,
+            installResult: undefined,
+            lastCheckedAt,
+            version: STORE_METADATA_VERSION,
+          });
+          return setState(DESKTOP_UPDATE_STATES.DOWNLOADED);
+        }
       }
       candidate = selected.candidate;
       const available = activeRelease == null

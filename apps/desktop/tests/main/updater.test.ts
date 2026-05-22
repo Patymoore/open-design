@@ -628,6 +628,47 @@ describe("desktop updater", () => {
     }
   });
 
+  it("adopts a verified release directory when active metadata is missing", async () => {
+    const root = makeRoot();
+    const fixture = await createUpdaterFixture();
+    try {
+      const updater = createDesktopUpdater({
+        arch: "arm64",
+        downloadRoot: root,
+        env: updaterEnv(fixture.metadataUrl),
+        source: SIDECAR_SOURCES.TOOLS_PACK,
+      });
+
+      const first = await updater.checkForUpdates();
+      expect(first.state).toBe(DESKTOP_UPDATE_STATES.DOWNLOADED);
+      expect(first.downloadPath).toEqual(expect.any(String));
+      expect(fixture.artifactRequests()).toBe(1);
+
+      await writeFile(join(root, "metadata.json"), JSON.stringify({
+        lastCheckedAt: first.lastCheckedAt,
+        version: 1,
+      }), "utf8");
+
+      const restarted = createDesktopUpdater({
+        arch: "arm64",
+        downloadRoot: root,
+        env: updaterEnv(fixture.metadataUrl),
+        source: SIDECAR_SOURCES.TOOLS_PACK,
+      });
+      const restored = await restarted.checkForUpdates();
+      const metadata = JSON.parse(await readFile(join(root, "metadata.json"), "utf8")) as Record<string, unknown>;
+
+      expect(restored.state).toBe(DESKTOP_UPDATE_STATES.DOWNLOADED);
+      expect(restored.downloadPath).toBe(first.downloadPath);
+      expect(restored.active?.path).toBe(first.downloadPath);
+      expect(metadata.active).toEqual(expect.any(Object));
+      expect(fixture.artifactRequests()).toBe(1);
+    } finally {
+      await fixture.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("reports old flat updater stores as protocol errors without repairing them", async () => {
     const root = makeRoot();
     const fixture = await createUpdaterFixture();

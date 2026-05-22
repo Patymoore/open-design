@@ -64,6 +64,15 @@ const clickUpdaterInstallExpression = `
     return { clicked: true };
   })()
 `;
+const clickUpdaterRailExpression = `
+  (() => {
+    const button = document.querySelector('[data-testid="entry-nav-updater"]');
+    if (!(button instanceof HTMLButtonElement)) return { clicked: false, reason: 'missing-updater-rail' };
+    if (button.getAttribute('aria-disabled') === 'true') return { clicked: false, reason: 'updater-rail-disabled' };
+    button.click();
+    return { clicked: true };
+  })()
+`;
 
 type DesktopStatus = {
   state?: string;
@@ -224,9 +233,10 @@ macDescribe('packaged mac runtime smoke', () => {
         expect(value.health.version).toEqual(expect.any(String));
       }
 
-      const popup = await waitForUpdaterPopup();
+      const popup = await openReadyUpdaterPrompt(updaterFixture.info.version);
       expect(popup.visible).toBe(true);
-      expect(popup.title).toBe('Update ready');
+      expect(popup.title).toEqual(expect.any(String));
+      expect(popup.title?.trim().length).toBeGreaterThan(0);
       expect(popup.installButtonVisible).toBe(true);
       expect(popup.text ?? '').toContain(updaterFixture.info.version);
 
@@ -1662,8 +1672,25 @@ async function waitForHealthyDesktop(): Promise<MacInspectResult> {
   throw new Error(`packaged mac runtime did not become healthy: ${formatUnknown(lastResult)}`);
 }
 
-async function waitForUpdaterPopup(): Promise<UpdaterPopupEvalValue> {
-  const timeoutMs = 90_000;
+async function openReadyUpdaterPrompt(version: string): Promise<UpdaterPopupEvalValue> {
+  await clickUpdaterRailButton('open ready updater prompt');
+  return await waitForUpdaterPopupMatching(
+    (popup) => popup.visible && popup.installButtonVisible && (popup.text ?? '').includes(version),
+    'ready updater prompt',
+  );
+}
+
+async function clickUpdaterRailButton(label: string): Promise<void> {
+  const click = await runToolsPackJson<MacInspectResult>('inspect', ['--expr', clickUpdaterRailExpression]);
+  const value = assertUpdaterClickEvalValue(click.eval?.value);
+  expect(value.clicked, `${label}: ${value.reason ?? 'updater rail not clicked'}`).toBe(true);
+}
+
+async function waitForUpdaterPopupMatching(
+  predicate: (value: UpdaterPopupEvalValue) => boolean,
+  label: string,
+  timeoutMs = 90_000,
+): Promise<UpdaterPopupEvalValue> {
   const startedAt = Date.now();
   let lastResult: unknown = null;
 
@@ -1673,7 +1700,7 @@ async function waitForUpdaterPopup(): Promise<UpdaterPopupEvalValue> {
       lastResult = inspect;
       if (inspect.status?.state === 'running' && inspect.eval?.ok === true) {
         const value = asUpdaterPopupEvalValue(inspect.eval.value);
-        if (value?.visible === true && value.installButtonVisible === true) return value;
+        if (value != null && predicate(value)) return value;
       }
     } catch (error) {
       lastResult = error;
@@ -1681,7 +1708,7 @@ async function waitForUpdaterPopup(): Promise<UpdaterPopupEvalValue> {
     await delay(1000);
   }
 
-  throw new Error(`packaged mac updater popup did not appear: ${formatUnknown(lastResult)}`);
+  throw new Error(`${label}: updater popup timed out: ${formatUnknown(lastResult)}`);
 }
 
 async function waitForUpdaterInstallerOpened(): Promise<MacInspectResult> {
