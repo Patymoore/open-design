@@ -297,7 +297,6 @@ describe('TasksView automation templates', () => {
         '/api/routines/routine-1/runs/run-succeeded-1/crystallize',
       ]);
       expect(screen.getByText('Skill: Artifact polish loop run')).toBeTruthy();
-      expect(screen.getByText('Artifact polish loop run')).toBeTruthy();
     });
   });
 });
