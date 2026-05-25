@@ -32,13 +32,14 @@ export function FinalizeDesignButton({
       <div className="project-actions-button project-actions-button-pending" role="group">
         <span className="project-actions-spinner" aria-hidden="true" />
         <span className="project-actions-label">Finalizing…</span>
-        <Button
+        <button
+          type="button"
           className="project-actions-link"
           onClick={onCancel}
           aria-label="Cancel finalize"
         >
           Cancel
-        </Button>
+        </button>
       </div>
     );
   }
