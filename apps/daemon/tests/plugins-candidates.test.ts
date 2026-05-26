@@ -81,6 +81,26 @@ describe('skill plugin candidate detection', () => {
     });
   });
 
+  it('deduplicates SKILL.md across attachment and prompt casing', async () => {
+    await writeFile(
+      path.join(tmpRoot, 'SKILL.md'),
+      `---\nname: launch-brief\ndescription: Reusable launch brief workflow.\n---\n# Launch Brief\n\nUse this skill when preparing launch copy.\n`,
+      'utf8',
+    );
+
+    const candidates = await detectSkillPluginCandidates({
+      projectRoot: tmpRoot,
+      attachments: ['SKILL.md'],
+      message: 'Use skill.md for the plugin draft.',
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      sourceRef: 'SKILL.md',
+      provenance: 'uploaded-skill-md',
+    });
+  });
+
   it('detects clearly reusable markdown skill docs and plugin-like repo links', async () => {
     await mkdir(path.join(tmpRoot, 'docs'), { recursive: true });
     await writeFile(

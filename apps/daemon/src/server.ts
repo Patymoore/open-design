@@ -10052,29 +10052,25 @@ export async function startServer({
     if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
     const runId = run.id;
     const persistSkillPluginCandidatesForSucceededRun = async () => {
-      try {
-        if (typeof projectId !== 'string' || !projectId) return;
-        const project = getProject(db, projectId);
-        if (!project) return;
-        const projectRoot = project.metadata?.baseDir
-          ? path.normalize(project.metadata.baseDir)
-          : await ensureProject(PROJECTS_DIR, projectId);
-        const candidates = await detectSkillPluginCandidates({
-          projectRoot,
-          attachments,
-          message,
-          currentPrompt,
-          systemPrompt,
-        });
-        if (candidates.length === 0) return;
-        persistSkillPluginCandidates(db, {
-          projectId,
-          runId,
-          candidates,
-        });
-      } catch (err) {
-        console.warn('[plugins] skill plugin candidate detection failed', err);
-      }
+      if (typeof projectId !== 'string' || !projectId) return;
+      const project = getProject(db, projectId);
+      if (!project) return;
+      const projectRoot = project.metadata?.baseDir
+        ? path.normalize(project.metadata.baseDir)
+        : await ensureProject(PROJECTS_DIR, projectId);
+      const candidates = await detectSkillPluginCandidates({
+        projectRoot,
+        attachments,
+        message,
+        currentPrompt,
+        systemPrompt,
+      });
+      if (candidates.length === 0) return;
+      persistSkillPluginCandidates(db, {
+        projectId,
+        runId,
+        candidates,
+      });
     };
 
     // Auto-memory hook. Pulls explicit "remember:" / "我是 X" / "I prefer Y"
@@ -11424,7 +11420,15 @@ export async function startServer({
         }
       }
       if (status === 'succeeded') {
-        await persistSkillPluginCandidatesForSucceededRun();
+        try {
+          await persistSkillPluginCandidatesForSucceededRun();
+        } catch (err) {
+          send('error', createSseErrorPayload(
+            'AGENT_EXECUTION_FAILED',
+            err instanceof Error ? err.message : String(err),
+          ));
+          return design.runs.finish(run, 'failed', code ?? 1, signal);
+        }
       }
       design.runs.finish(run, status, code, signal);
     });

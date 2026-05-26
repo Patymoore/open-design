@@ -212,14 +212,62 @@ function projectRelativePath(root: string, candidate: string): string | null {
   }
 }
 
-async function readMarkdownUnderProject(root: string, rel: string): Promise<string | null> {
+async function resolveCaseInsensitiveChild(parent: string, segment: string): Promise<string | null> {
   try {
-    const abs = path.resolve(root, rel);
-    const safeRel = path.relative(path.resolve(root), abs);
+    const names = await fs.readdir(parent);
+    const exact = names.find((name) => name === segment);
+    if (exact) return path.join(parent, exact);
+    const lower = segment.toLowerCase();
+    const match = names.find((name) => name.toLowerCase() === lower);
+    return match ? path.join(parent, match) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveExistingProjectPath(root: string, rel: string): Promise<string | null> {
+  try {
+    const resolvedRoot = path.resolve(root);
+    const abs = path.resolve(resolvedRoot, rel);
+    const safeRel = path.relative(resolvedRoot, abs);
     if (!safeRel || safeRel.startsWith('..') || path.isAbsolute(safeRel)) return null;
+    try {
+      await fs.stat(abs);
+      return abs;
+    } catch {
+      let current = resolvedRoot;
+      for (const segment of safeRel.split(path.sep)) {
+        const next = await resolveCaseInsensitiveChild(current, segment);
+        if (!next) return null;
+        current = next;
+      }
+      return current;
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function canonicalProjectRelativePath(root: string, abs: string): Promise<string | null> {
+  try {
+    const [rootReal, absReal] = await Promise.all([fs.realpath(root), fs.realpath(abs)]);
+    const rel = path.relative(rootReal, absReal);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return rel.split(path.sep).join('/');
+  } catch {
+    return null;
+  }
+}
+
+async function readCanonicalMarkdownUnderProject(root: string, rel: string): Promise<{ body: string; sourceRef: string } | null> {
+  try {
+    const abs = await resolveExistingProjectPath(root, rel);
+    if (!abs) return null;
+    const sourceRef = await canonicalProjectRelativePath(root, abs);
+    if (!sourceRef) return null;
     const stat = await fs.stat(abs);
     if (!stat.isFile() || stat.size > MAX_MARKDOWN_READ_BYTES) return null;
-    return await fs.readFile(abs, 'utf8');
+    return { body: await fs.readFile(abs, 'utf8'), sourceRef };
   } catch {
     return null;
   }
@@ -242,9 +290,9 @@ export async function detectSkillPluginCandidates(
       if (typeof attachment !== 'string') continue;
       const rel = projectRelativePath(root, attachment);
       if (!rel || !rel.toLowerCase().endsWith('.md')) continue;
-      const body = await readMarkdownUnderProject(root, rel);
-      if (!body) continue;
-      const candidate = markdownCandidate('project-file', rel, body);
+      const markdown = await readCanonicalMarkdownUnderProject(root, rel);
+      if (!markdown) continue;
+      const candidate = markdownCandidate('project-file', markdown.sourceRef, markdown.body);
       if (candidate) addCandidate(candidate);
     }
   }
@@ -262,9 +310,9 @@ export async function detectSkillPluginCandidates(
     for (const raw of referencedMd) {
       const rel = projectRelativePath(root, raw.trim().replace(/^["'`(<]+|[)"'`>,.]+$/g, ''));
       if (!rel) continue;
-      const body = await readMarkdownUnderProject(root, rel);
-      if (!body) continue;
-      const candidate = markdownCandidate('referenced-file', rel, body);
+      const markdown = await readCanonicalMarkdownUnderProject(root, rel);
+      if (!markdown) continue;
+      const candidate = markdownCandidate('referenced-file', markdown.sourceRef, markdown.body);
       if (candidate) addCandidate(candidate);
     }
   }
