@@ -2077,7 +2077,7 @@ export function ProjectView({
               textBuffer.cancel();
               unregisterTextBuffer();
               setError(amrFailureText ?? err.message);
-              appendAssistantErrorEvent(message.id, amrFailureText ?? err.message);
+              if (!amrFailureText) appendAssistantErrorEvent(message.id, err.message);
               updateMessageById(
                 message.id,
                 (prev) => ({
@@ -2641,7 +2641,7 @@ export function ProjectView({
           textBuffer.cancel();
           cancelSendTextBuffer();
           setError(amrFailureText ?? err.message);
-          appendAssistantErrorEvent(assistantId, amrFailureText ?? err.message);
+          if (!amrFailureText) appendAssistantErrorEvent(assistantId, err.message);
           updateAssistant((prev) => ({
             ...prev,
             endedAt,
@@ -4622,6 +4622,7 @@ function amrAccountFailureText(error: Error): string | null {
       typeof details?.actionUrl === 'string' && details.actionUrl.trim()
         ? details.actionUrl.trim()
         : DEFAULT_AMR_RECHARGE_URL;
+    if (error.message.includes(walletUrl)) return error.message;
     return `${error.message}\n\n[Recharge AMR wallet](${walletUrl})`;
   }
   if (coded.code === 'AMR_AUTH_REQUIRED') {

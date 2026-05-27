@@ -846,7 +846,7 @@ describe('ProjectView conversation run isolation', () => {
       }) => {
         options.onRunCreated?.('run-amr-balance');
         const error = new Error(
-          'AMR Cloud reported insufficient balance for this model. Recharge your AMR wallet, then retry this run.',
+          'AMR Cloud reported insufficient balance for this model. Recharge your AMR wallet at https://open-design.ai/amr/wallet, then retry this run.',
         ) as Error & { code: string; details: unknown };
         error.code = 'AMR_INSUFFICIENT_BALANCE';
         error.details = {
@@ -867,9 +867,15 @@ describe('ProjectView conversation run isolation', () => {
 
     await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.getByTestId('chat-error').textContent).toContain('Recharge AMR wallet'),
+      expect(screen.getByTestId('chat-error').textContent).toContain('https://open-design.ai/amr/wallet'),
     );
     expect(screen.getByTestId('assistant-events').textContent).toContain(
+      'AMR Cloud reported insufficient balance for this model. Recharge your AMR wallet at https://open-design.ai/amr/wallet, then retry this run.',
+    );
+    expect(
+      screen.getByTestId('assistant-events').textContent?.match(/https:\/\/open-design\.ai\/amr\/wallet/g),
+    ).toHaveLength(1);
+    expect(screen.getByTestId('assistant-events').textContent).not.toContain(
       '[Recharge AMR wallet](https://open-design.ai/amr/wallet)',
     );
     expect(screen.getByTestId('streaming-state').textContent).toBe('idle');
