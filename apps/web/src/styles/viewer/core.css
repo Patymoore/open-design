@@ -1534,19 +1534,6 @@
   word-break: break-word;
   white-space: pre-wrap;
 }
-.comment-side-reply {
-  align-self: flex-start;
-  background: transparent;
-  border: none;
-  padding: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-.comment-side-reply:hover {
-  color: var(--text);
-  text-decoration: underline;
-}
 .comment-side-selectbar {
   display: flex;
   align-items: center;

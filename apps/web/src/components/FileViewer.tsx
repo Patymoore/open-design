@@ -2091,17 +2091,6 @@ export function CommentSidePanel({
                 </button>
               </div>
               <div className="comment-side-body">{comment.note}</div>
-              <button
-                type="button"
-                className="comment-side-reply"
-                data-testid="comment-side-edit"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onReply(comment);
-                }}
-              >
-                {t('chat.comments.edit')}
-              </button>
             </div>
           );
         })}
