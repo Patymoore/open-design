@@ -311,6 +311,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
+          # If a report was produced before the non-zero exit, the report step
+          # already posted it — leave it rather than clobbering useful output.
+          if [ -s "$RUNNER_TEMP/agent-pr-explore-sandbox/artifacts/agent-pr-exploration-report.md" ]; then
+            echo "A report exists despite the non-zero exit; leaving it in place."
+            exit 0
+          fi
           gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" -f content="-1" --silent || true
           marker="<!-- agent-pr-explore-sandbox:${PR_NUMBER} -->"
           body="⚠️ Exploration run failed before producing a report — see [the run]($RUN_URL).
