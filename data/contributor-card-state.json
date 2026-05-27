@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-05-27T06:35:42.002Z",
+  "generatedAt": "2026-05-27T06:42:09.430Z",
   "contributors": {
     "1115052994": {
       "lastAnnouncedTier": "spark",
@@ -1861,11 +1861,11 @@
       "lastAnnouncedAt": "2026-05-26T12:49:58.672Z"
     },
     "leno23": {
-      "lastAnnouncedTier": "signal",
-      "lastKnownScore": 145,
-      "lastCheckedAt": "2026-05-27T06:35:42.002Z",
+      "lastAnnouncedTier": "node",
+      "lastKnownScore": 157,
+      "lastCheckedAt": "2026-05-27T06:42:09.430Z",
       "scoreVersion": "weighted-v1",
-      "lastAnnouncedAt": "2026-05-26T15:05:29.543Z"
+      "lastAnnouncedAt": "2026-05-27T06:42:09.430Z"
     },
     "zo-arch": {
       "lastAnnouncedTier": "spark",
