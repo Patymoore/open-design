@@ -991,6 +991,50 @@ else
   docker pull "$image"
 fi
 
+# --- Fetch PR source on the trusted host; hand it to the container read-only ---
+# The runner's bandwidth to github.com is throttled across every transport
+# (HTTPS / SSH / codeload / API all ~30-90 KB/s), so a from-scratch fetch of this
+# ~200MB repo is impractical per run. Keep a persistent local mirror and fetch
+# only the PR's delta into it over SSH (the one transport that is not RST'd). The
+# PR head is taken from the BASE repo's refs/pull/<n>/head so fork PRs work too,
+# and the read-only deploy key stays on the trusted host -- it is never exposed to
+# the untrusted PR code, which only ever sees the checked-out files inside Docker.
+mirror="${OD_SANDBOX_REPO_MIRROR:-$HOME/.cache/agent-pr-explore/open-design.git}"
+git_ssh_key="${OD_SANDBOX_GIT_SSH_KEY:-$HOME/.ssh/od_agent_deploy}"
+pr_src="$root/pr-src"
+export GIT_SSH_COMMAND="ssh -i $git_ssh_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
+
+if [ ! -d "$mirror" ]; then
+  echo "::error::Repo mirror $mirror is missing on the runner. Seed it once with:"
+  echo "::error::  git clone --bare --depth=1 --single-branch --branch main git@github.com:${BASE_REPO}.git $mirror"
+  exit 1
+fi
+
+pr_fetched=
+for fetch_attempt in 1 2 3; do
+  if git --git-dir="$mirror" fetch --no-tags --depth=1 origin \
+      "+refs/pull/${PR_NUMBER}/head:refs/pull/${PR_NUMBER}/head"; then
+    pr_fetched=1
+    break
+  fi
+  echo "PR source fetch failed; retrying (${fetch_attempt}/3)"
+  sleep $((fetch_attempt * 5))
+done
+[ -n "$pr_fetched" ] || { echo "::error::Failed to fetch PR #${PR_NUMBER} source over SSH after 3 attempts."; exit 1; }
+
+fetched_sha="$(git --git-dir="$mirror" rev-parse "refs/pull/${PR_NUMBER}/head")"
+if [ "$fetched_sha" != "$HEAD_SHA" ]; then
+  echo "::error::Fetched PR head $fetched_sha does not match expected $HEAD_SHA"
+  exit 1
+fi
+
+rm -rf "$pr_src"
+mkdir -p "$pr_src"
+git -C "$pr_src" init -q
+git -C "$pr_src" fetch --no-tags --depth=1 "$mirror" "$HEAD_SHA"
+git -C "$pr_src" checkout -q --detach FETCH_HEAD
+unset GIT_SSH_COMMAND
+
 docker run -d \
   --name "$container_name" \
   --cpus "$cpus" \
@@ -1002,6 +1046,7 @@ docker run -d \
   --publish "127.0.0.1:${host_web_port}:${container_proxy_port}" \
   --mount "type=bind,src=$artifacts,dst=/artifacts" \
   --mount "type=bind,src=$pnpm_store,dst=/pnpm-store" \
+  --mount "type=bind,src=$pr_src,dst=/pr-src,readonly" \
   --env "PR_NUMBER=$PR_NUMBER" \
   --env "HEAD_SHA=$HEAD_SHA" \
   --env "HEAD_REPO=$HEAD_REPO" \
@@ -1015,25 +1060,12 @@ docker run -d \
   bash -lc '
     set -euo pipefail
 
-    mkdir -p /work
-    cd /work
-
-    git init repo
-    cd repo
-    git remote add base "https://github.com/${BASE_REPO}.git"
-    git remote add head "https://github.com/${HEAD_REPO}.git"
-    for fetch_attempt in 1 2 3; do
-      if git fetch --no-tags --depth=1 head "${HEAD_SHA}"; then
-        break
-      fi
-      if [ "$fetch_attempt" = 3 ]; then
-        echo "git fetch failed after ${fetch_attempt} attempt(s)"
-        exit 1
-      fi
-      echo "git fetch failed; retrying (${fetch_attempt}/3)"
-      sleep $((fetch_attempt * 5))
-    done
-    git checkout --detach FETCH_HEAD
+    # PR source was fetched on the trusted host and mounted read-only at
+    # /pr-src; copy it into a writable workdir. The sandbox needs (and has) no
+    # github network access of its own.
+    mkdir -p /work/repo
+    cp -a /pr-src/. /work/repo/
+    cd /work/repo
 
     git rev-parse HEAD | tee /artifacts/checked-out-sha.txt
     test "$(git rev-parse HEAD)" = "${HEAD_SHA}"
