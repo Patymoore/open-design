@@ -172,7 +172,7 @@ export async function assertExternalAssetUrl(
 // Override with OD_CONNECTION_TEST_PROVIDER_TIMEOUT_MS for slow networks
 // or distant providers; invalid values fall back to the default.
 const DEFAULT_PROVIDER_TIMEOUT_MS = 12_000;
-const LOOPBACK_NO_PROXY_TOKENS = ['localhost', '127.0.0.1', '::1'] as const;
+const LOOPBACK_NO_PROXY_TOKENS = ['localhost', '127.0.0.1', '[::1]'] as const;
 // CLI boot time is dominated by adapter auth/session restore; the heavy
 // adapters (Codex, Cursor Agent) regularly take 5–10 s on a cold first
 // run, so 45 s leaves headroom without making a hung child invisible.
@@ -218,14 +218,14 @@ function agentTimeoutMs(): number {
 }
 
 export function mergeNoProxyWithLoopbackDefaults(noProxy: string | undefined): string | null {
-  if (noProxy?.split(',').some((token) => token.trim() === '*')) return '*';
+  if (noProxy?.split(/[\s,]+/).some((token) => token.trim() === '*')) return '*';
   const seen = new Set<string>();
   const values: string[] = [];
   for (const rawToken of [
-    ...(noProxy ? noProxy.split(',') : []),
+    ...(noProxy ? noProxy.split(/[\s,]+/) : []),
     ...LOOPBACK_NO_PROXY_TOKENS,
   ]) {
-    const token = rawToken.trim();
+    const token = rawToken.trim() === '::1' ? '[::1]' : rawToken.trim();
     if (!token || seen.has(token)) continue;
     seen.add(token);
     values.push(token);

@@ -1540,8 +1540,10 @@ describe('POST /api/test/connection provider mode', () => {
     ['*', '*'],
     ['*,.corp.example', '*'],
     [' * , .corp.example ', '*'],
-    ['.corp.example', '.corp.example,localhost,127.0.0.1,::1'],
-    [undefined, 'localhost,127.0.0.1,::1'],
+    ['* .corp.example', '*'],
+    ['.corp.example', '.corp.example,localhost,127.0.0.1,[::1]'],
+    ['::1', '[::1],localhost,127.0.0.1'],
+    [undefined, 'localhost,127.0.0.1,[::1]'],
   ])('mergeNoProxyWithLoopbackDefaults(%p)', (input, expected) => {
     expect(mergeNoProxyWithLoopbackDefaults(input)).toBe(expected);
   });
@@ -1572,7 +1574,7 @@ describe('POST /api/test/connection provider mode', () => {
     const originalNoProxy = process.env.NO_PROXY;
     const proxySpy = vi.spyOn(platform, 'resolveSystemProxyEnv').mockReturnValue({
       HTTP_PROXY: 'http://127.0.0.1:9',
-      NO_PROXY: 'localhost,127.0.0.1,::1',
+      NO_PROXY: 'localhost,127.0.0.1,[::1]',
       NODE_USE_ENV_PROXY: '1',
     });
     process.env.NO_PROXY = '*.corp.com';
