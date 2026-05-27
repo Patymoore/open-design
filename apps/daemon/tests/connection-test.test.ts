@@ -1585,6 +1585,61 @@ describe('POST /api/test/connection provider mode', () => {
       );
     }
   });
+
+  it('keeps loopback provider probes off the proxy when inherited proxy env omits NO_PROXY', async () => {
+    const providerServer = http.createServer((req, res) => {
+      if (req.url === '/v1/models') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ id: 'llama3.2', object: 'model' }] }));
+        return;
+      }
+      if (req.url === '/v1/chat/completions') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'ok' } }],
+        }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => providerServer.listen(0, '127.0.0.1', () => resolve()));
+    const address = providerServer.address();
+    if (!address || typeof address === 'string') {
+      providerServer.close();
+      throw new Error('Expected an IPv4 provider test server address');
+    }
+
+    const originalHttpProxy = process.env.HTTP_PROXY;
+    const originalHttpsProxy = process.env.HTTPS_PROXY;
+    const originalNoProxy = process.env.NO_PROXY;
+    const proxySpy = vi.spyOn(platform, 'resolveSystemProxyEnv').mockReturnValue({});
+    process.env.HTTP_PROXY = 'http://127.0.0.1:9';
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:9';
+    delete process.env.NO_PROXY;
+
+    try {
+      await expect(testProviderConnection({
+        protocol: 'openai',
+        baseUrl: `http://localhost:${address.port}/v1`,
+        apiKey: 'ollama',
+        model: 'llama3.2',
+      })).resolves.toMatchObject({
+        ok: true,
+        kind: 'success',
+      });
+    } finally {
+      if (originalHttpProxy === undefined) delete process.env.HTTP_PROXY;
+      else process.env.HTTP_PROXY = originalHttpProxy;
+      if (originalHttpsProxy === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = originalHttpsProxy;
+      if (originalNoProxy === undefined) delete process.env.NO_PROXY;
+      else process.env.NO_PROXY = originalNoProxy;
+      proxySpy.mockRestore();
+      await new Promise<void>((resolve, reject) =>
+        providerServer.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
 });
 
 describe('POST /api/test/connection agent mode', () => {
