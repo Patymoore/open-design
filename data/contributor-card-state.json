@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-05-27T04:56:47.191Z",
+  "generatedAt": "2026-05-27T05:04:18.499Z",
   "contributors": {
     "1115052994": {
       "lastAnnouncedTier": "spark",
@@ -1862,8 +1862,8 @@
     },
     "leno23": {
       "lastAnnouncedTier": "signal",
-      "lastKnownScore": 85,
-      "lastCheckedAt": "2026-05-27T04:47:07.683Z",
+      "lastKnownScore": 97,
+      "lastCheckedAt": "2026-05-27T05:04:18.499Z",
       "scoreVersion": "weighted-v1",
       "lastAnnouncedAt": "2026-05-26T15:05:29.543Z"
     },
