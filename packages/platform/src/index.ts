@@ -227,6 +227,23 @@ function normalizeProxyUrl(raw: string, scheme: string): string | null {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `${scheme}://${trimmed}`;
 }
 
+function bracketIpv6Authority(authority: string): string {
+  if (authority.startsWith("[") || !authority.includes(":")) return authority;
+  const portSeparatorIndex = authority.lastIndexOf(":");
+  if (portSeparatorIndex <= 0) return authority;
+  const host = authority.slice(0, portSeparatorIndex);
+  const port = authority.slice(portSeparatorIndex + 1);
+  if (!host.includes(":") || !/^\d+$/.test(port)) return authority;
+  return `[${host}]:${port}`;
+}
+
+function normalizeAuthorityProxyUrl(raw: string, scheme: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  return `${scheme}://${bracketIpv6Authority(trimmed)}`;
+}
+
 function normalizeHostPortProxyUrl(
   host: string | undefined,
   port: string | undefined,
@@ -344,12 +361,12 @@ export function parseWindowsInternetSettingsProxyOutput(
       const value = rawValue?.trim();
       if (!kind || !value) continue;
       const lowerKind = kind.trim().toLowerCase();
-      if (lowerKind === "http") httpProxy = normalizeProxyUrl(value, "http");
-      else if (lowerKind === "https") httpsProxy = normalizeProxyUrl(value, "http");
-      else if (lowerKind === "socks") allProxy = normalizeProxyUrl(value, "socks5");
+      if (lowerKind === "http") httpProxy = normalizeAuthorityProxyUrl(value, "http");
+      else if (lowerKind === "https") httpsProxy = normalizeAuthorityProxyUrl(value, "http");
+      else if (lowerKind === "socks") allProxy = normalizeAuthorityProxyUrl(value, "socks5");
     }
   } else {
-    const shared = normalizeProxyUrl(proxyServer, "http");
+    const shared = normalizeAuthorityProxyUrl(proxyServer, "http");
     httpProxy = shared;
     httpsProxy = shared;
   }

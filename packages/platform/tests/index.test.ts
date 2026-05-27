@@ -237,6 +237,39 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settin
     });
   });
 
+  it("brackets Windows IPv6 proxy hosts before composing proxy URLs", () => {
+    const segmented = parseWindowsInternetSettingsProxyOutput({
+      proxyEnable: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyEnable    REG_DWORD    0x1
+`,
+      proxyServer: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyServer    REG_SZ    http=::1:8080;https=2001:db8::10:8443;socks=fe80::1:1080
+`,
+    });
+    const shared = parseWindowsInternetSettingsProxyOutput({
+      proxyEnable: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyEnable    REG_DWORD    0x1
+`,
+      proxyServer: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyServer    REG_SZ    ::1:8080
+`,
+    });
+
+    expect(segmented).toMatchObject({
+      HTTP_PROXY: "http://[::1]:8080",
+      HTTPS_PROXY: "http://[2001:db8::10]:8443",
+      ALL_PROXY: "socks5://[fe80::1]:1080",
+    });
+    expect(shared).toMatchObject({
+      HTTP_PROXY: "http://[::1]:8080",
+      HTTPS_PROXY: "http://[::1]:8080",
+    });
+  });
+
   it("normalizes bare IPv6 loopback bypass entries to bracketed form", () => {
     const env = parseWindowsInternetSettingsProxyOutput({
       proxyEnable: `
