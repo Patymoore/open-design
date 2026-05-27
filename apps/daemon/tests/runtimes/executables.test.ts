@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import {
-  assert, chmodSync, claude, deepseek, gemini, join, minimalAgentDef, mkdirSync, mkdtempSync, resolveAgentExecutable, rmSync, tmpdir, withPlatform, writeFileSync,
+  assert, chmodSync, claude, deepseek, gemini, join, minimalAgentDef, mkdirSync, mkdtempSync, resolveAgentExecutable, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
 } from './helpers/test-helpers.js';
 
 const fsTest = process.platform === 'win32' ? test.skip : test;
