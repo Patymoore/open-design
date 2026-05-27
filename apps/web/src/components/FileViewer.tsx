@@ -232,6 +232,8 @@ type InspectTarget = {
 
 const MAX_CACHED_SLIDE_STATES = 64;
 const htmlPreviewSlideState = new Map<string, SlideState>();
+const MAX_CACHED_PREVIEW_VIEWPORTS = 128;
+const htmlPreviewViewportState = new Map<string, PreviewViewportId>();
 const MARKDOWN_CODE_BLOCK_ATTR = 'data-markdown-code-block';
 const MARKDOWN_COPY_BLOCK_ATTR = 'data-copy-code-block';
 const MARKDOWN_COPY_BUTTON_CLASS = 'markdown-code-copy';
@@ -655,6 +657,18 @@ function setSlideStateCached(key: string, state: SlideState) {
   }
 }
 
+function previewViewportStateKey(projectId: string, file: Pick<ProjectFile, 'name' | 'path'>): string {
+  return `${projectId}:${file.path || file.name}`;
+}
+
+function setPreviewViewportCached(key: string, viewport: PreviewViewportId) {
+  htmlPreviewViewportState.set(key, viewport);
+  if (htmlPreviewViewportState.size > MAX_CACHED_PREVIEW_VIEWPORTS) {
+    const oldest = htmlPreviewViewportState.keys().next().value;
+    if (oldest != null) htmlPreviewViewportState.delete(oldest);
+  }
+}
+
 interface Props {
   projectId: string;
   projectKind: TrackingProjectKind;
@@ -798,7 +812,14 @@ export function LiveArtifactViewer({
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [zoom, setZoom] = useState(100);
-  const [previewViewport, setPreviewViewport] = useState<PreviewViewportId>('desktop');
+  const liveArtifactViewportKey = `${projectId}:live-artifact:${liveArtifact.artifactId}`;
+  const [previewViewport, setPreviewViewportState] = useState<PreviewViewportId>(
+    () => htmlPreviewViewportState.get(liveArtifactViewportKey) ?? 'desktop',
+  );
+  const setPreviewViewport = useCallback((viewport: PreviewViewportId) => {
+    setPreviewViewportCached(liveArtifactViewportKey, viewport);
+    setPreviewViewportState(viewport);
+  }, [liveArtifactViewportKey]);
   const [previewBodyRef, previewBodySize] = usePreviewCanvasSize<HTMLDivElement>();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -838,6 +859,10 @@ export function LiveArtifactViewer({
     setRefreshSuccess(null);
     setRefreshEvents([]);
   }, [projectId, liveArtifact.artifactId]);
+
+  useEffect(() => {
+    setPreviewViewportState(htmlPreviewViewportState.get(liveArtifactViewportKey) ?? 'desktop');
+  }, [liveArtifactViewportKey]);
 
   useEffect(() => {
     if (!refreshSuccess) return;
@@ -3905,7 +3930,14 @@ function HtmlViewer({
   const [source, setSource] = useState<string | null>(liveHtml ?? null);
   const [inlinedSource, setInlinedSource] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
-  const [previewViewport, setPreviewViewport] = useState<PreviewViewportId>('desktop');
+  const fileViewportKey = previewViewportStateKey(projectId, file);
+  const [previewViewport, setPreviewViewportState] = useState<PreviewViewportId>(
+    () => htmlPreviewViewportState.get(fileViewportKey) ?? 'desktop',
+  );
+  const setPreviewViewport = useCallback((viewport: PreviewViewportId) => {
+    setPreviewViewportCached(fileViewportKey, viewport);
+    setPreviewViewportState(viewport);
+  }, [fileViewportKey]);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const zoomMenuRef = useRef<HTMLDivElement | null>(null);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
@@ -3918,6 +3950,10 @@ function HtmlViewer({
   const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
+
+  useEffect(() => {
+    setPreviewViewportState(htmlPreviewViewportState.get(fileViewportKey) ?? 'desktop');
+  }, [fileViewportKey]);
   const [templateDescription, setTemplateDescription] = useState('');
   const [templateSaveError, setTemplateSaveError] = useState<string | null>(null);
   const [deployment, setDeployment] = useState<WebDeploymentInfo | null>(null);
