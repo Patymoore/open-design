@@ -31,7 +31,7 @@
 
 <br/>
 
-> **面向设计的桌面端 Agent 入口——Figma 和 [Claude Design][cd] 的 Agent-native 替代。**
+> **面向设计的桌面端 Agent 入口——Figma 和 [Claude Design][cd] 的 Agent-native 的开源替代。**
 >
 > 桌面客户端优先，本地文件、GitHub 仓库、Figma 资产一键接入，为 Agent 提供充足的设计 context。已支持 macOS 和 Windows，可接入 Claude Code、Codex、Cursor Agent、OpenClaw 等 **16 个 Coding Agent**。
 >
