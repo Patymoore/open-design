@@ -6,13 +6,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
-import { useT } from '../i18n';
+import { createPortal } from 'react-dom';
+import { useI18n, useT } from '../i18n';
 import type { Dict } from '../i18n/types';
+import {
+  localizeSkillDescription,
+  localizeSkillName,
+} from '../i18n/content';
 import { useAnalytics } from '../analytics/provider';
 import {
   trackChatPanelClick,
+  trackFileUploadResult,
 } from '../analytics/events';
+import { deriveUploadCohort } from '../analytics/upload-tracking';
 import { IMAGE_MODELS } from "../media/models";
 import { projectRawUrl, uploadProjectFiles, openFolderDialog, fetchConnectors } from "../providers/registry";
 import { patchProject } from "../state/projects";
@@ -28,16 +36,17 @@ import type {
   ResearchOptions,
   RunContextSelection,
 } from '@open-design/contracts';
-import { buildVisualAnnotationAttachment } from '../comments';
+import { buildVisualAnnotationAttachment, commentTargetDisplayName } from '../comments';
 import { Icon } from "./Icon";
 import { PluginDetailsModal } from "./PluginDetailsModal";
 import { PluginsSection, type PluginsSectionHandle } from "./PluginsSection";
-import { BUILT_IN_PETS, CUSTOM_PET_ID, resolveActivePet } from "./pet/pets";
+import { BUILT_IN_PETS, CUSTOM_PET_ID } from "./pet/pets";
 import {
   buildInlineMentionParts,
   inlineMentionToken,
   type InlineMentionEntity,
 } from '../utils/inlineMentions';
+import { isImeComposing } from '../utils/imeComposing';
 import { ANNOTATION_EVENT, type AnnotationEventDetail } from "./PreviewDrawOverlay";
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
@@ -89,6 +98,7 @@ interface Props {
   streaming: boolean;
   sendDisabled?: boolean;
   initialDraft?: string;
+  draftStorageKey?: string;
   // Lazy ensure — the composer calls this before its first upload, so the
   // project folder exists on disk before files land in it. Returns the
   // project id when ready.
@@ -145,12 +155,18 @@ interface Props {
   // ActivePluginChip on each user message (see UserMessage in
   // ChatPane). Pass `null` (or omit) to render the full rail.
   pinnedPluginId?: string | null;
+  footerAccessory?: ReactNode;
 }
 
 // Imperative handle so ancestors (e.g. example chips in ChatPane) can
 // push text into the composer without owning its draft state.
 export interface ChatComposerHandle {
   setDraft: (text: string) => void;
+  restoreDraft: (draft: {
+    text: string;
+    attachments?: ChatAttachment[];
+    commentAttachments?: ChatCommentAttachment[];
+  }) => void;
   focus: () => void;
 }
 
@@ -181,13 +197,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       streaming,
       sendDisabled = false,
       initialDraft,
+      draftStorageKey,
       onEnsureProject,
       commentAttachments = [],
       onRemoveCommentAttachment,
       skills = [],
       onSend,
       onStop,
-      onOpenSettings,
       onOpenMcpSettings,
       petConfig,
       onAdoptPet,
@@ -202,12 +218,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       currentSkillId = null,
       onProjectSkillChange,
       pinnedPluginId = null,
+      footerAccessory,
     },
     ref
   ) {
     const t = useT();
     const analytics = useAnalytics();
-    const [draft, setDraft] = useState(initialDraft ?? "");
+    const [draft, setDraft] = useState(() => initialDraft ?? loadComposerDraft(draftStorageKey) ?? "");
 
     // chat_panel page_view fires from ProjectView (which outlives
     // conversation switches) so the event measures real chat-panel
@@ -215,6 +232,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // 2026-05-20 04:08 for the rationale.
     const [staged, setStaged] = useState<ChatAttachment[]>([]);
     const [stagedVisualComments, setStagedVisualComments] = useState<ChatCommentAttachment[]>([]);
+    const streamingAnnotationSendPendingRef = useRef(false);
+    const [streamingAnnotationSendPending, setStreamingAnnotationSendPendingState] = useState(false);
     // Skills the user has @-mentioned for this turn. We dedupe on id and
     // strip the chip when the user removes the corresponding `@<skill>`
     // token from the draft, keeping draft and chips in sync.
@@ -260,6 +279,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     const [toolsTab, setToolsTab] = useState<ToolsTab>('plugins');
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const composingRef = useRef(false);
     const toolsMenuRef = useRef<HTMLDivElement | null>(null);
     const toolsTriggerRef = useRef<HTMLButtonElement | null>(null);
     const petEnabled = Boolean(onAdoptPet && onTogglePet);
@@ -282,6 +302,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         seededRef.current = true;
       }
     }, [initialDraft, draft]);
+
+    useEffect(() => {
+      saveComposerDraft(draftStorageKey, draft);
+    }, [draftStorageKey, draft]);
 
     useEffect(() => {
       if (!toolsOpen) return;
@@ -415,9 +439,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
     // Resolve which tabs to surface in the consolidated tools popover.
     // Plugins is always visible while a project is active so users can
-    // apply context without leaving the composer. MCP and Pet tabs only
-    // show when their respective wiring was provided by the parent (App);
-    // Import is always available (folder linking is unconditional).
+    // apply context without leaving the composer. MCP shows when wired by
+    // the parent (App); Import is always available. Pet controls stay out
+    // of the project context picker so the @ panel remains project-scoped.
     const availableTabs = useMemo<ToolsTab[]>(() => {
       const tabs: ToolsTab[] = [];
       if (projectId) {
@@ -426,9 +450,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       }
       if (onOpenMcpSettings) tabs.push('mcp');
       tabs.push('import');
-      if (petEnabled) tabs.push('pet');
       return tabs;
-    }, [projectId, onOpenMcpSettings, petEnabled]);
+    }, [projectId, onOpenMcpSettings]);
 
     // When the popover opens, snap the active tab to the first available one
     // so the user never lands on an empty / hidden tab if their config
@@ -663,6 +686,25 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
             ta.setSelectionRange(pos, pos);
           });
         },
+        restoreDraft: ({ text, attachments = [], commentAttachments = [] }) => {
+          setDraft(text);
+          setStaged(attachments);
+          setStagedVisualComments(commentAttachments);
+          setStagedSkills([]);
+          setStagedMcpServers([]);
+          setStagedConnectors([]);
+          setUploadError(null);
+          setMention(null);
+          setSlash(null);
+          seededRef.current = true;
+          requestAnimationFrame(() => {
+            const ta = textareaRef.current;
+            if (!ta) return;
+            ta.focus();
+            const pos = text.length;
+            ta.setSelectionRange(pos, pos);
+          });
+        },
         focus: () => {
           textareaRef.current?.focus();
         },
@@ -686,6 +728,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       return [...commentAttachments, ...stagedVisualComments, ...extra];
     }
 
+    function setStreamingAnnotationSendPending(value: boolean) {
+      streamingAnnotationSendPendingRef.current = value;
+      setStreamingAnnotationSendPendingState(value);
+    }
+
     function currentRunContextMeta(): ChatSendMeta | undefined {
       const skillIds = stagedSkills.map((s) => s.id);
       const mcpServerIds = stagedMcpServers.map((s) => s.id);
@@ -700,6 +747,19 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         ...(Object.keys(context).length > 0 ? { context } : {}),
       };
       return Object.keys(meta).length > 0 ? meta : undefined;
+    }
+
+    function sendComposedTurn(
+      prompt: string,
+      attachments: ChatAttachment[],
+      nextCommentAttachments: ChatCommentAttachment[],
+      meta?: ChatSendMeta,
+    ): boolean {
+      setStreamingAnnotationSendPending(false);
+      if (!prompt && attachments.length === 0 && nextCommentAttachments.length === 0) return false;
+      onSend(prompt, attachments, nextCommentAttachments, meta);
+      reset();
+      return true;
     }
 
     async function insertSkillMention(skill: SkillSummary) {
@@ -731,12 +791,18 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       if (!id) return;
       setUploading(true);
       setUploadError(null);
+      // Cohort math is identical to the Design Files Upload button; see
+      // `analytics/upload-tracking.ts`. v2 doc fires one
+      // file_upload_result per surface so this path reports
+      // `page_name='chat_panel'` / `area='chat_composer'`.
+      const cohort = deriveUploadCohort(files);
       try {
         const result = await uploadProjectFiles(id, files);
         if (result.uploaded.length > 0) {
           setStaged((s) => [...s, ...result.uploaded]);
         }
-        if (result.failed.length > 0) {
+        const partial = result.failed.length > 0;
+        if (partial) {
           const failedCount = result.failed.length;
           const uploadedCount = result.uploaded.length;
           const detail = result.error ? ` (${result.error})` : '';
@@ -747,8 +813,49 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           );
           console.warn('Some attachments failed to upload', result.failed);
         }
+        trackFileUploadResult(analytics.track, {
+          page_name: 'chat_panel',
+          area: 'chat_composer',
+          project_id: id,
+          ...cohort,
+          result: partial ? 'failed' : 'success',
+          ...(partial && result.error ? { error_code: result.error } : {}),
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        setUploadError(`Attachment upload failed (${detail}).`);
+        trackFileUploadResult(analytics.track, {
+          page_name: 'chat_panel',
+          area: 'chat_composer',
+          project_id: id,
+          ...cohort,
+          result: 'failed',
+          error_code: detail,
+        });
       } finally {
         setUploading(false);
+      }
+    }
+
+    async function uploadClipboardImagesFromAsyncClipboard() {
+      if (!navigator.clipboard?.read) return false;
+      try {
+        const items = await navigator.clipboard.read();
+        const files: File[] = [];
+        const stamp = Date.now();
+        for (const item of items) {
+          const imageType = item.types.find((type) => type.startsWith('image/'));
+          if (!imageType) continue;
+          const blob = await item.getType(imageType);
+          const extension = imageType.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+          files.push(new File([blob], `clipboard-screenshot-${stamp}.${extension}`, { type: imageType }));
+        }
+        if (files.length === 0) return false;
+        await uploadFiles(files);
+        return true;
+      } catch (err) {
+        console.warn('Could not read image from clipboard', err);
+        return false;
       }
     }
 
@@ -757,14 +864,23 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         const detail = (e as CustomEvent<AnnotationEventDetail>).detail;
         if (!detail) return;
         void (async () => {
+          let acked = false;
+          const ack = (result: { ok: boolean; message?: string }) => {
+            if (acked) return;
+            acked = true;
+            detail.ack?.(result);
+          };
           let uploaded: ChatAttachment[] = [];
           let visualAttachmentInput: Parameters<typeof buildVisualAnnotationAttachment>[0] | null = null;
           let visualAttachment: ChatCommentAttachment | null = null;
-          if (detail.file) {
-            const id = await ensureProject();
-            if (!id) return;
-            setUploading(true);
-            try {
+          try {
+            if (detail.file) {
+              const id = await ensureProject();
+              if (!id) {
+                ack({ ok: false, message: t('chat.annotationProjectCreateFailed') });
+                return;
+              }
+              setUploading(true);
               const result = await uploadProjectFiles(id, [detail.file]);
               if (result.uploaded.length > 0) {
                 uploaded = result.uploaded;
@@ -809,52 +925,94 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               if (result.failed.length > 0) {
                 const detailText = result.error ? ` (${result.error})` : '';
                 setUploadError(`Attachment upload failed for ${result.failed.length} file(s)${detailText}.`);
+                if (uploaded.length === 0) {
+                  ack({ ok: false, message: t('chat.annotationUploadFailed') });
+                  return;
+                }
               }
-            } finally {
-              setUploading(false);
             }
-          }
+            setUploading(false);
 
-          if (detail.action === 'send') {
-            if (streaming) {
-              if (uploaded.length > 0) setStaged((s) => [...s, ...uploaded]);
-              if (visualAttachmentInput) {
-                setStagedVisualComments((current) => [
-                  ...current,
-                  buildVisualAnnotationAttachment({
-                    ...visualAttachmentInput!,
-                    order: commentAttachments.length + current.length + 1,
-                  }),
-                ]);
+            if (detail.action === 'send') {
+              if (streaming) {
+                if (uploaded.length > 0) setStaged((s) => [...s, ...uploaded]);
+                if (visualAttachmentInput) {
+                  setStagedVisualComments((current) => [
+                    ...current,
+                    buildVisualAnnotationAttachment({
+                      ...visualAttachmentInput!,
+                      order: commentAttachments.length + current.length + 1,
+                    }),
+                  ]);
+                }
+                if (detail.note) setDraft((d) => (d ? `${d}\n${detail.note}` : detail.note));
+                setStreamingAnnotationSendPending(true);
+                textareaRef.current?.focus();
+                ack({ ok: true });
+                return;
               }
-              if (detail.note) setDraft((d) => (d ? `${d}\n${detail.note}` : detail.note));
-              textareaRef.current?.focus();
+              if (visualAttachmentInput) {
+                visualAttachment = buildVisualAnnotationAttachment({
+                  ...visualAttachmentInput,
+                  order: commentAttachments.length + stagedVisualComments.length + 1,
+                });
+              }
+              const prompt = [draft.trim(), detail.note].filter(Boolean).join('\n');
+              const attachments = [...staged, ...uploaded];
+              const nextCommentAttachments = currentCommentAttachments(visualAttachment ? [visualAttachment] : []);
+              sendComposedTurn(prompt, attachments, nextCommentAttachments, currentRunContextMeta());
+              ack({ ok: true });
               return;
             }
-            if (visualAttachmentInput) {
-              visualAttachment = buildVisualAnnotationAttachment({
-                ...visualAttachmentInput,
-                order: commentAttachments.length + stagedVisualComments.length + 1,
-              });
-            }
-            const prompt = [draft.trim(), detail.note].filter(Boolean).join('\n');
-            const attachments = [...staged, ...uploaded];
-            const nextCommentAttachments = currentCommentAttachments(visualAttachment ? [visualAttachment] : []);
-            if (!prompt && attachments.length === 0 && nextCommentAttachments.length === 0) return;
-            onSend(prompt, attachments, nextCommentAttachments, currentRunContextMeta());
-            reset();
-            return;
-          }
 
-          if (detail.note) {
-            setDraft((d) => (d ? `${d}\n${detail.note}` : detail.note));
-            textareaRef.current?.focus();
+            if (detail.note) {
+              setDraft((d) => (d ? `${d}\n${detail.note}` : detail.note));
+              textareaRef.current?.focus();
+            }
+            ack({ ok: true });
+          } catch (err) {
+            console.warn('Could not send annotation', err);
+            setUploadError(err instanceof Error ? err.message : t('chat.annotationFailed'));
+            ack({ ok: false, message: t('chat.annotationFailed') });
+          } finally {
+            setUploading(false);
           }
         })();
       }
       window.addEventListener(ANNOTATION_EVENT, onAnnotation);
       return () => window.removeEventListener(ANNOTATION_EVENT, onAnnotation);
-    }, [commentAttachments, draft, onSend, projectId, staged, stagedSkills, stagedVisualComments, streaming]);
+    }, [
+      commentAttachments,
+      draft,
+      onSend,
+      projectId,
+      staged,
+      stagedConnectors,
+      stagedMcpServers,
+      stagedSkills,
+      stagedVisualComments,
+      streaming,
+      t,
+    ]);
+
+    useEffect(() => {
+      if (!streamingAnnotationSendPending || !streamingAnnotationSendPendingRef.current) return;
+      if (streaming || sendDisabled) return;
+      const prompt = draft.trim();
+      sendComposedTurn(prompt, staged, currentCommentAttachments(), currentRunContextMeta());
+    }, [
+      commentAttachments,
+      draft,
+      onSend,
+      sendDisabled,
+      staged,
+      stagedConnectors,
+      stagedMcpServers,
+      stagedSkills,
+      stagedVisualComments,
+      streaming,
+      streamingAnnotationSendPending,
+    ]);
 
     function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
       const items = Array.from(e.clipboardData?.items ?? []);
@@ -868,7 +1026,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       if (files.length > 0) {
         e.preventDefault();
         void uploadFiles(files);
+        return;
       }
+      void uploadClipboardImagesFromAsyncClipboard();
     }
 
     function handleDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -917,6 +1077,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           new RegExp(`(^|\\s)@${escapeRegExp(s.id)}(\\s|$)`).test(value),
         ),
       );
+      // Skip mention and slash detection during IME composition (e.g.,
+      // Chinese, Japanese, Korean input) to prevent cursor jumping.
+      // Issue #2851.
+      if (composingRef.current) return;
       // Detect a fresh @ at start or after whitespace; capture the typed
       // query up to the cursor.
       const before = value.slice(0, cursor);
@@ -1039,6 +1203,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       const nextCommentAttachments = currentCommentAttachments();
       if (hatched) {
         if (streaming) return;
+        setStreamingAnnotationSendPending(false);
         onSend(hatched, staged, nextCommentAttachments, contextMeta);
         reset();
         return;
@@ -1046,6 +1211,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       const search = researchAvailable ? expandSearchCommand(prompt) : null;
       if (search) {
         if (streaming) return;
+        setStreamingAnnotationSendPending(false);
         onSend(search.prompt, staged, nextCommentAttachments, {
           ...contextMeta,
           research: { enabled: true, query: search.query },
@@ -1053,9 +1219,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         reset();
         return;
       }
-      if ((!prompt && staged.length === 0 && nextCommentAttachments.length === 0) || streaming) return;
-      onSend(prompt, staged, nextCommentAttachments, contextMeta);
-      reset();
+      if (!prompt && staged.length === 0 && nextCommentAttachments.length === 0) return;
+      sendComposedTurn(prompt, staged, nextCommentAttachments, contextMeta);
     }
 
     // The @-picker offers a unified search across context surfaces:
@@ -1129,6 +1294,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           .filter((s) => skillMatchesQuery(s, mentionQuery))
           .sort((a, b) => skillMentionRank(a, mentionQuery) - skillMentionRank(b, mentionQuery))
       : [];
+    const hasComposerPayload =
+      draft.trim().length > 0 || staged.length > 0 || currentCommentAttachments().length > 0;
+    const showStopButton = streaming && !hasComposerPayload;
+    const showSendButton = !streaming || hasComposerPayload;
 
     return (
       <div
@@ -1305,7 +1474,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 onScroll={(event) => {
                   setComposerScrollTop(event.currentTarget.scrollTop);
                 }}
+                onCompositionStart={() => {
+                  composingRef.current = true;
+                }}
+                onCompositionEnd={() => {
+                  composingRef.current = false;
+                }}
                 onKeyDown={(e) => {
+                  if (isImeComposing(e, composingRef.current)) return;
                   if (slash && filteredSlash.length > 0) {
                     if (e.key === 'ArrowDown') {
                       e.preventDefault();
@@ -1335,7 +1511,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                     setMention(null);
                     return;
                   }
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  if (
+                    e.key === 'Enter' &&
+                    !e.shiftKey &&
+                    !e.altKey &&
+                    (e.metaKey || e.ctrlKey || !mention)
+                  ) {
                     e.preventDefault();
                     void submit();
                   }
@@ -1452,14 +1633,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                             <span>{t('chat.importLabel')}</span>
                           </>
                         ) : null}
-                        {tab === 'pet' ? (
-                          <>
-                            <span className="composer-tools-tab-glyph" aria-hidden>
-                              {resolveActivePet(petConfig)?.glyph ?? '🐾'}
-                            </span>
-                            <span>{t('pet.composerMenuTitle')}</span>
-                          </>
-                        ) : null}
                       </button>
                     ))}
                   </div>
@@ -1529,45 +1702,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                         }}
                       />
                     ) : null}
-                    {toolsTab === 'pet' && petEnabled ? (
-                      <ToolsPetPanel
-                        t={t}
-                        petConfig={petConfig}
-                        onTogglePet={() => {
-                          onTogglePet?.();
-                          setToolsOpen(false);
-                        }}
-                        onAdoptPet={(id) => {
-                          onAdoptPet?.(id);
-                          setToolsOpen(false);
-                        }}
-                        onOpenPetSettings={() => {
-                          onOpenPetSettings?.();
-                          setToolsOpen(false);
-                        }}
-                      />
-                    ) : null}
                   </div>
-
-                  {onOpenSettings ? (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="composer-tools-settings"
-                      onClick={() => {
-                        trackChatPanelClick(analytics.track, {
-                          page_name: 'chat_panel',
-                          area: 'chat_panel',
-                          element: 'composer_settings',
-                        });
-                        setToolsOpen(false);
-                        onOpenSettings?.();
-                      }}
-                    >
-                      <Icon name="settings" size={13} />
-                      <span>{t('pet.composerOpenSettings')}</span>
-                    </button>
-                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1592,8 +1727,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 <Icon name="attach" size={15} />
               )}
             </button>
+            {footerAccessory}
             <span className="composer-spacer" />
-            {streaming ? (
+            {showStopButton ? (
               <button
                 type="button"
                 className="composer-send stop"
@@ -1602,7 +1738,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 <Icon name="stop" size={13} />
                 <span>{t('chat.stop')}</span>
               </button>
-            ) : (
+            ) : null}
+            {showSendButton ? (
               <button
                 type="button"
                 className="composer-send"
@@ -1615,15 +1752,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                   });
                   void submit();
                 }}
-                disabled={
-                  sendDisabled ||
-                  (!draft.trim() && staged.length === 0 && currentCommentAttachments().length === 0)
-                }
+                disabled={sendDisabled || !hasComposerPayload}
+                aria-label={t('chat.send')}
+                title={t('chat.send')}
               >
                 <Icon name="send" size={13} />
                 <span>{t('chat.send')}</span>
               </button>
-            )}
+            ) : null}
           </div>
         </div>
         {uploadError ? <span className="composer-hint">{uploadError}</span> : null}
@@ -1815,7 +1951,7 @@ function StagedAttachments({
           );
         })}
       </div>
-      {preview && previewUrl ? (
+      {preview && previewUrl ? createPortal(
         <div
           className="staged-preview-modal"
           role="dialog"
@@ -1840,7 +1976,8 @@ function StagedAttachments({
             </div>
             <img src={previewUrl} alt={preview.name} />
           </div>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </>
   );
@@ -1900,8 +2037,8 @@ function StagedCommentAttachments({
     <div className="staged-row comment-staged-row" data-testid="staged-comment-attachments">
       {visibleAttachments.map((a) => (
         <div key={a.id} className="staged-chip staged-comment">
-          <span className="staged-name" title={`${a.screenshotPath ? `${a.screenshotPath}: ` : ''}${a.elementId}: ${a.comment}`}>
-            <strong>{a.selectionKind === 'visual' ? 'Visual mark' : a.elementId}</strong>
+          <span className="staged-name" title={`${a.screenshotPath ? `${a.screenshotPath}: ` : ''}${commentTargetDisplayName(a)}: ${a.comment}`}>
+            <strong>{commentTargetDisplayName(a)}</strong>
             <span>{a.comment}</span>
           </span>
           <button
@@ -2153,6 +2290,7 @@ function ToolsSkillsPanel({
   currentSkillId: string | null;
   onPick: (skill: SkillSummary) => void | Promise<void>;
 }) {
+  const { locale } = useI18n();
   const [query, setQuery] = useState('');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const visibleSkills = useMemo(
@@ -2193,11 +2331,11 @@ function ToolsSkillsPanel({
                   }
                 }}
                 disabled={pendingId !== null}
-                title={skill.description}
+                title={localizeSkillDescription(locale, skill)}
               >
                 <Icon name={active ? 'check' : 'file'} size={12} />
                 <span className="composer-tools-row-body">
-                  <strong>{skill.name}</strong>
+                  <strong>{localizeSkillName(locale, skill)}</strong>
                   <span className="composer-tools-row-meta">
                     {skill.mode}
                     {skill.surface ? ` · ${skill.surface}` : ''}
@@ -2312,67 +2450,6 @@ function ToolsImportPanel({
       />
       <ImportItem icon="sparkles" label={t('chat.importSkills')} t={t} />
       <ImportItem icon="file" label={t('chat.importProject')} t={t} />
-    </div>
-  );
-}
-
-function ToolsPetPanel({
-  t,
-  petConfig,
-  onTogglePet,
-  onAdoptPet,
-  onOpenPetSettings,
-}: {
-  t: TranslateFn;
-  petConfig: AppConfig['pet'] | undefined;
-  onTogglePet: () => void;
-  onAdoptPet: (id: string) => void;
-  onOpenPetSettings: () => void;
-}) {
-  return (
-    <div className="composer-tools-pet">
-      <div className="composer-tools-pet-head">
-        <span className="hint">{t('pet.composerMenuHint')}</span>
-      </div>
-      {petConfig?.adopted ? (
-        <button
-          type="button"
-          role="menuitem"
-          className="composer-tools-row composer-tools-row-toggle"
-          onClick={onTogglePet}
-        >
-          <Icon name={petConfig.enabled ? 'eye' : 'sparkles'} size={12} />
-          <span>{petConfig.enabled ? t('pet.tuck') : t('pet.wake')}</span>
-        </button>
-      ) : null}
-      <div className="composer-tools-pet-grid">
-        {BUILT_IN_PETS.map((p) => {
-          const active = petConfig?.adopted && petConfig.petId === p.id;
-          return (
-            <button
-              type="button"
-              role="menuitem"
-              key={p.id}
-              className={`composer-tools-pet-item${active ? ' active' : ''}`}
-              onClick={() => onAdoptPet(p.id)}
-              style={{ ['--pet-accent' as string]: p.accent }}
-              title={p.flavor}
-            >
-              <span aria-hidden>{p.glyph}</span>
-              <span>{p.name}</span>
-            </button>
-          );
-        })}
-      </div>
-      <button
-        type="button"
-        role="menuitem"
-        className="composer-tools-row composer-tools-row-action"
-        onClick={onOpenPetSettings}
-      >
-        <Icon name="settings" size={12} />
-        <span>{t('pet.composerOpenSettings')}</span>
-      </button>
     </div>
   );
 }
@@ -2497,6 +2574,7 @@ function MentionPopover({
   onPickMcp: (server: McpServerConfig) => void;
   onPickConnector: (connector: ConnectorDetail) => void;
 }) {
+  const { locale } = useI18n();
   const ref = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<MentionTab>('all');
   const tabs: Array<{ id: MentionTab; label: string }> = [
@@ -2584,13 +2662,13 @@ function MentionPopover({
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPickSkill(skill)}
-                  title={skill.description}
+                  title={localizeSkillDescription(locale, skill)}
                 >
                   <Icon name={active ? 'check' : 'file'} size={12} />
                   <span className="mention-item-body">
-                    <strong>{skill.name}</strong>
+                    <strong>{localizeSkillName(locale, skill)}</strong>
                     <span className="mention-meta mention-meta--desc">
-                      {skill.description || skill.id}
+                      {localizeSkillDescription(locale, skill) || skill.id}
                     </span>
                   </span>
                   <span className="mention-meta">{active ? 'Active' : skill.mode}</span>
@@ -2677,6 +2755,28 @@ function MentionPopover({
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function loadComposerDraft(key?: string): string | null {
+  if (!key || typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function saveComposerDraft(key: string | undefined, draft: string) {
+  if (!key || typeof window === 'undefined') return;
+  try {
+    if (draft) {
+      window.localStorage.setItem(key, draft);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Storage can be unavailable in privacy modes; the composer should still work.
+  }
 }
 
 function looksLikeImage(name: string): boolean {

@@ -28,6 +28,9 @@ import {
 
 import type { ToolPackConfig } from "./config.js";
 import { copyBundledResourceTrees, linuxResources } from "./resources.js";
+import { copyOptionalVelaCliBinary } from "./vela-cli.js";
+import { electronBuilderVersionForAppVersion, readRuntimeAppVersion } from "./versions.js";
+import { processWebSourcemaps } from "./web-sourcemaps.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -174,6 +177,9 @@ export function buildDockerArgs(
     `--namespace ${config.namespace}`,
     "--dir /tools-pack",
   ];
+  if (config.requireVelaCli) {
+    innerArgs.push("--require-vela-cli");
+  }
   if (config.portable) {
     innerArgs.push("--portable");
   }
@@ -208,6 +214,23 @@ export function buildDockerArgs(
   ];
   if (config.telemetryRelayUrl != null) {
     dockerArgs.push("-e", `OPEN_DESIGN_TELEMETRY_RELAY_URL=${config.telemetryRelayUrl}`);
+  }
+  const velaBinHost = process.env.OPEN_DESIGN_VELA_CLI_BIN?.trim();
+  if (velaBinHost) {
+    // The container only mounts /project, /tools-pack and cache/home dirs by
+    // default, so a Vela CLI living outside those (a host path like
+    // `~/.local/bin/vela` is the common dev case) would be invisible inside.
+    // Bind-mount the containing directory read-only and rewrite the env to
+    // the container-side path so `copyOptionalVelaCliBinary` can actually
+    // read it.
+    const hostVelaDir = dirname(velaBinHost);
+    const velaBinBase = basename(velaBinHost);
+    const containerVelaDir = "/opt/vela-cli";
+    dockerArgs.push("-v", `${hostVelaDir}:${containerVelaDir}:ro`);
+    dockerArgs.push("-e", `OPEN_DESIGN_VELA_CLI_BIN=${containerVelaDir}/${velaBinBase}`);
+  }
+  if (config.amrProfile != null) {
+    dockerArgs.push("-e", `OPEN_DESIGN_AMR_PROFILE=${config.amrProfile}`);
   }
   dockerArgs.push(
     "-w",
@@ -357,13 +380,7 @@ async function runProductionInstall(appRoot: string): Promise<void> {
 }
 
 async function readPackagedVersion(config: ToolPackConfig): Promise<string> {
-  if (config.appVersion != null) return config.appVersion;
-  const packageJsonPath = join(config.workspaceRoot, "apps", "packaged", "package.json");
-  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as { version?: unknown };
-  if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
-    throw new Error(`missing apps/packaged package version in ${packageJsonPath}`);
-  }
-  return packageJson.version;
+  return readRuntimeAppVersion(config);
 }
 
 async function buildWorkspaceArtifacts(config: ToolPackConfig): Promise<void> {
@@ -382,6 +399,10 @@ async function buildWorkspaceArtifacts(config: ToolPackConfig): Promise<void> {
   try {
     await runPnpm(config, ["--filter", "@open-design/web", "build"], { OD_WEB_OUTPUT_MODE: "server" });
     await runPnpm(config, ["--filter", "@open-design/web", "build:sidecar"]);
+    // Inject chunk IDs + upload browser sourcemaps to PostHog, then strip
+    // .map files before AppImage packaging. See
+    // `tools/pack/src/web-sourcemaps.ts`.
+    await processWebSourcemaps(config);
   } finally {
     if (previousWebNextEnv == null) {
       await rm(webNextEnvPath, { force: true });
@@ -431,6 +452,11 @@ async function copyResourceTree(config: ToolPackConfig, paths: LinuxPaths): Prom
   await mkdir(join(paths.resourceRoot, "bin"), { recursive: true });
   await cp(process.execPath, join(paths.resourceRoot, "bin", "node"));
   await chmod(join(paths.resourceRoot, "bin", "node"), 0o755);
+  await copyOptionalVelaCliBinary({
+    platform: "linux",
+    requireBundled: config.requireVelaCli,
+    resourceRoot: paths.resourceRoot,
+  });
 }
 
 // --- Step 4: writeAssembledApp helper ---
@@ -453,12 +479,19 @@ async function writeAssembledApp(
   }
 
   const version = await readPackagedVersion(config);
+  const packageVersion = electronBuilderVersionForAppVersion(version);
   const packageJson = {
     name: "open-design-packaged",
-    version,
+    version: packageVersion,
     private: true,
     main: "main.cjs",
     dependencies,
+    description: "Local-first design product: detects your installed code-agent CLI, runs design skills + design systems, streams artifacts into a sandboxed preview.",
+    author: "Open Design Team",
+    repository: {
+      type: "git",
+      url: "https://github.com/nexu-io/open-design.git"
+    }
   };
   await writeFile(paths.assembledPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
 
@@ -469,6 +502,7 @@ async function writeAssembledApp(
     paths.packagedConfigPath,
     `${JSON.stringify(
       {
+        ...(config.amrProfile == null ? {} : { amrProfile: config.amrProfile }),
         appVersion: version,
         namespace: config.namespace,
         nodeCommandRelative: "open-design/bin/node",
@@ -492,6 +526,7 @@ async function writeLinuxBuilderConfig(config: ToolPackConfig, paths: LinuxPaths
   const target = config.to === "dir" ? ["dir"] : ["AppImage"];
   const namespaceToken = sanitizeNamespace(config.namespace);
   const packagedVersion = await readPackagedVersion(config);
+  const packageVersion = electronBuilderVersionForAppVersion(packagedVersion);
 
   const builderConfig: Record<string, unknown> = {
     appId: "io.open-design.desktop",
@@ -511,7 +546,7 @@ async function writeLinuxBuilderConfig(config: ToolPackConfig, paths: LinuxPaths
       main: "./main.cjs",
       name: "open-design-packaged-app",
       productName: PRODUCT_NAME,
-      version: packagedVersion,
+      version: packageVersion,
       ...(config.portable ? {} : { odToolsPackRuntimeRoot: config.roots.runtime.namespaceBaseRoot }),
     },
     extraResources: [

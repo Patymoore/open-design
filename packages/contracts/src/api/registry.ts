@@ -20,6 +20,18 @@ export interface AgentInfo {
   installUrl?: string;
   /** Optional HTTPS URL for configuration / auth / usage docs. */
   docsUrl?: string;
+  /**
+   * How the daemon forwards the user's `.od/mcp-config.json` external MCP
+   * servers to this runtime at spawn time. Mirrors the field on
+   * `RuntimeAgentDef` in the daemon. Undefined means the runtime has no
+   * native MCP transport wired yet, in which case the settings UI surfaces
+   * a "configure MCP in the agent's own config file" hint instead of
+   * silently dropping the servers (issue #2142).
+   */
+  externalMcpInjection?:
+    | 'claude-mcp-json'
+    | 'acp-merge'
+    | 'opencode-env-content';
 }
 
 export interface AgentsResponse {
@@ -31,7 +43,9 @@ export type SkillSource = 'built-in' | 'user';
 export interface SkillSummary {
   id: string;
   name: string;
+  displayName?: Record<string, string>;
   description: string;
+  descriptionI18n?: Record<string, string>;
   triggers: string[];
   mode:
     | 'prototype'
@@ -65,6 +79,7 @@ export interface SkillSummary {
   craftRequires?: string[];
   hasBody: boolean;
   examplePrompt: string;
+  examplePromptI18n?: Record<string, string>;
   // True when this skill exists only to group derived `<parent>:<child>`
   // example cards. The Examples gallery hides such cards because their
   // preview would duplicate one of the derived cards and add no extra

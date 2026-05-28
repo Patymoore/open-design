@@ -7,11 +7,17 @@ import {
 } from '@open-design/host';
 import { useAnalytics } from '../analytics/provider';
 import {
+  trackDesignSystemApplyResult,
   trackNewProjectModalElementClick,
   trackNewProjectModalSurfaceView,
   trackNewProjectModalTabClick,
 } from '../analytics/events';
 import type { ConnectorDetail } from '@open-design/contracts';
+import type {
+  TrackingDesignSystemApplyTargetKind,
+  TrackingDesignSystemOrigin,
+  TrackingDesignSystemStatusValue,
+} from '@open-design/contracts/analytics';
 
 import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
@@ -108,6 +114,10 @@ export interface CreateInput {
   metadata: ProjectMetadata;
 }
 
+export type ImportClaudeDesignOutcome =
+  | { ok: true }
+  | { ok: false; message?: string; details?: string };
+
 interface Props {
   skills: SkillSummary[];
   designSystems: DesignSystemSummary[];
@@ -116,7 +126,9 @@ interface Props {
   onDeleteTemplate?: (id: string) => Promise<boolean>;
   promptTemplates: PromptTemplateSummary[];
   onCreate: (input: CreateInput & { requestId?: string }) => void;
-  onImportClaudeDesign?: (file: File) => Promise<void> | void;
+  onImportClaudeDesign?: (
+    file: File,
+  ) => Promise<ImportClaudeDesignOutcome | void> | ImportClaudeDesignOutcome | void;
   // Web fallback: the user types an absolute baseDir into the manual
   // input and the renderer POSTs `/api/import/folder` itself. Browser
   // builds have no `shell.openPath` surface, so the renderer naming a
@@ -144,6 +156,66 @@ const TAB_LABEL_KEYS: Record<CreateTab, keyof Dict> = {
   media: 'newproj.tabMedia',
   other: 'newproj.tabOther',
 };
+
+// Maps the New Project tab + media surface to the apply-result target
+// kind enum. `media` collapses to image/video/audio inside callers;
+// this helper covers the non-media tabs and the live-artifact special
+// case. Media surfaces map case-by-case at the call site.
+function newProjectTabToApplyKind(
+  tab: CreateTab,
+): TrackingDesignSystemApplyTargetKind {
+  switch (tab) {
+    case 'prototype':
+      return 'prototype';
+    case 'deck':
+      return 'slide_deck';
+    case 'live-artifact':
+      return 'live_artifact';
+    case 'media':
+      // Media tab has its own surface picker; the apply emission
+      // happens before the user selects image/video/audio, so we
+      // mark it `unknown` rather than guessing. The picker is also
+      // typically hidden under media but the helper stays total.
+      return 'unknown';
+    case 'template':
+    case 'other':
+      return 'unknown';
+  }
+}
+
+// Maps a `DesignSystemSummary.source` value to the DS origin enum used
+// by `design_system_apply_result.design_system_source`. The summary
+// shape only carries `'built-in' | 'installed' | 'user'`; we map them
+// onto the doc's enum: user → manual_create, built-in → official_preset,
+// installed → template.
+function deriveDesignSystemOrigin(
+  system: DesignSystemSummary | undefined,
+): TrackingDesignSystemOrigin | undefined {
+  if (!system) return undefined;
+  switch (system.source) {
+    case 'user':
+      return 'manual_create';
+    case 'built-in':
+      return 'official_preset';
+    case 'installed':
+      return 'template';
+    default:
+      return 'unknown';
+  }
+}
+
+function deriveDesignSystemStatusValue(
+  system: DesignSystemSummary | undefined,
+): TrackingDesignSystemStatusValue | undefined {
+  if (!system) return undefined;
+  switch (system.status) {
+    case 'draft':
+    case 'published':
+      return system.status;
+    default:
+      return 'unknown';
+  }
+}
 
 const MEDIA_SURFACE_LABEL_KEYS: Record<MediaSurface, keyof Dict> = {
   image: 'newproj.surfaceImage',
@@ -195,6 +267,9 @@ export function NewProjectPanel({
   const analytics = useAnalytics();
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importZipError, setImportZipError] = useState<
+    { message: string; details?: string } | null
+  >(null);
   const [baseDir, setBaseDir] = useState('');
   const [importingFolder, setImportingFolder] = useState(false);
   // PR #974 round-4 (mrcfps): pickAndImport now returns structured
@@ -315,6 +390,47 @@ export function NewProjectPanel({
     if (dsSelectionTouched) return;
     setSelectedDsIds(initialDefaultDsSelection);
   }, [dsSelectionTouched, initialDefaultDsSelection]);
+
+  // Fires `design_system_apply_result` with `auto_select` when the
+  // picker mounts/refreshes and pre-selects the user's default DS
+  // without an explicit click. Only emits once per default-id while
+  // the picker is showing, and only while the user hasn't manually
+  // changed the selection (so the dashboard separates auto vs manual
+  // attribution). The picker visibility guard skips media tabs where
+  // the DS picker isn't rendered.
+  const autoSelectFiredForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!showDesignSystemPicker) return;
+    if (dsSelectionTouched) return;
+    const primary = initialDefaultDsSelection[0];
+    if (!primary) return;
+    if (autoSelectFiredForRef.current === primary) return;
+    autoSelectFiredForRef.current = primary;
+    const picked = designSystems.find((d) => d.id === primary);
+    trackDesignSystemApplyResult(analytics.track, {
+      page_name: 'home',
+      area: 'design_system_picker',
+      action: 'auto_select',
+      result: 'success',
+      target_project_kind: newProjectTabToApplyKind(tab),
+      design_system_id: primary,
+      design_system_source: deriveDesignSystemOrigin(picked),
+      design_system_status: deriveDesignSystemStatusValue(picked),
+      design_system_applied: true,
+      design_system_selection_mode: 'default',
+      is_default: true,
+      is_auto_selected: true,
+      available_design_system_count: designSystems.length,
+      duration_ms: 0,
+    });
+  }, [
+    analytics.track,
+    designSystems,
+    dsSelectionTouched,
+    initialDefaultDsSelection,
+    showDesignSystemPicker,
+    tab,
+  ]);
 
   // When entering the template tab, snap to the first user-saved template
   // if there is one (and we don't already have a valid pick). The template
@@ -458,6 +574,51 @@ export function NewProjectPanel({
   function handleDesignSystemChange(ids: string[]) {
     setDsSelectionTouched(true);
     setSelectedDsIds(ids);
+    const previousPrimary = selectedDsIds[0] ?? null;
+    const nextPrimary = ids[0] ?? null;
+    // Only emit when the primary actually changed; secondary reorders
+    // inside multi-select don't count as a fresh apply.
+    if (previousPrimary === nextPrimary) return;
+    const targetKind = newProjectTabToApplyKind(tab);
+    if (ids.length === 0) {
+      trackDesignSystemApplyResult(analytics.track, {
+        page_name: 'home',
+        area: 'design_system_picker',
+        action: 'clear_selection',
+        result: 'success',
+        target_project_kind: targetKind,
+        design_system_applied: false,
+        design_system_selection_mode: 'none',
+        is_default: false,
+        is_auto_selected: false,
+        available_design_system_count: designSystems.length,
+        duration_ms: 0,
+      });
+      return;
+    }
+    if (!nextPrimary) return;
+    const picked = designSystems.find((d) => d.id === nextPrimary);
+    const isDefault = nextPrimary === defaultDesignSystemId;
+    trackDesignSystemApplyResult(analytics.track, {
+      page_name: 'home',
+      area: 'design_system_picker',
+      action: 'select_design_system',
+      result: 'success',
+      target_project_kind: targetKind,
+      design_system_id: nextPrimary,
+      design_system_source: deriveDesignSystemOrigin(picked),
+      design_system_status: deriveDesignSystemStatusValue(picked),
+      design_system_applied: true,
+      design_system_selection_mode: isDefault ? 'default' : 'manual',
+      is_default: isDefault,
+      // `is_auto_selected` reports whether this row was picked by the
+      // app (initial default selection from `initialDefaultDsSelection`)
+      // rather than by the user. Once `dsSelectionTouched` is set we
+      // know any subsequent change came from a click.
+      is_auto_selected: false,
+      available_design_system_count: designSystems.length,
+      duration_ms: 0,
+    });
   }
 
   useEffect(() => {
@@ -555,8 +716,19 @@ export function NewProjectPanel({
     ev.target.value = '';
     if (!file || !onImportClaudeDesign) return;
     setImporting(true);
+    setImportZipError(null);
     try {
-      await onImportClaudeDesign(file);
+      const result = await onImportClaudeDesign(file);
+      if (result?.ok === false) {
+        setImportZipError({
+          message: result.message ? `Import failed: ${result.message}` : 'Import failed',
+          details: result.details,
+        });
+      }
+    } catch (err) {
+      setImportZipError({
+        message: err instanceof Error ? `Import failed: ${err.message}` : 'Import failed',
+      });
     } finally {
       setImporting(false);
     }
@@ -903,6 +1075,14 @@ export function NewProjectPanel({
         ) : null}
       </div>
       <div className="newproj-footer">{t('newproj.privacyFooter')}</div>
+      {importZipError ? (
+        <Toast
+          message={importZipError.message}
+          details={importZipError.details ?? null}
+          ttlMs={6000}
+          onDismiss={() => setImportZipError(null)}
+        />
+      ) : null}
       {importFolderError ? (
         <Toast
           message={importFolderError.message}
@@ -1325,6 +1505,37 @@ function TemplatePicker({
   onDelete?: (id: string) => Promise<boolean>;
 }) {
   const t = useT();
+  const [confirmDelete, setConfirmDelete] = useState<
+    { id: string; name: string } | null
+  >(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(false);
+
+  function closeConfirm() {
+    setConfirmDelete(null);
+    setDeleting(false);
+    setDeleteError(false);
+  }
+
+  async function runDelete() {
+    if (!confirmDelete || !onDelete) return;
+    setDeleting(true);
+    setDeleteError(false);
+    let ok = false;
+    try {
+      ok = await onDelete(confirmDelete.id);
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      if (value === confirmDelete.id) onChange(null);
+      closeConfirm();
+    } else {
+      setDeleting(false);
+      setDeleteError(true);
+    }
+  }
+
   return (
     <div className="newproj-section">
       <label className="newproj-label">{t('newproj.templateLabel')}</label>
@@ -1350,10 +1561,7 @@ function TemplatePicker({
                 key={tpl.id}
                 active={value === tpl.id}
                 onClick={() => onChange(tpl.id)}
-                onDelete={onDelete ? async () => {
-                  const ok = await onDelete(tpl.id);
-                  if (ok && value === tpl.id) onChange(null);
-                } : () => {}}
+                onDelete={onDelete ? () => setConfirmDelete({ id: tpl.id, name: tpl.name }) : () => {}}
                 name={tpl.name}
                 description={tpl.description ?? fallbackDesc}
               />
@@ -1361,6 +1569,43 @@ function TemplatePicker({
           })}
         </div>
       )}
+      {confirmDelete ? (
+        <div
+          className="modal-backdrop"
+          onClick={deleting ? undefined : closeConfirm}
+        >
+          <div
+            className="modal modal-confirm"
+            onClick={(e) => e.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+          >
+            <h2>{t('newproj.deleteTemplateTitle')}</h2>
+            <p className="modal-confirm-message">
+              {t('newproj.deleteTemplateConfirm', { name: confirmDelete.name })}
+            </p>
+            {deleteError ? (
+              <p className="modal-confirm-error" role="alert">
+                {t('newproj.deleteTemplateError')}
+              </p>
+            ) : null}
+            <div className="row">
+              <button type="button" onClick={closeConfirm} disabled={deleting}>
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="primary danger"
+                autoFocus
+                disabled={deleting}
+                onClick={runDelete}
+              >
+                {t('newproj.deleteTemplateConfirmCta')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

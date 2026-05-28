@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { APP_CHROME_FILE_ACTIONS_ID } from './AppChromeHeader';
+import { APP_CHROME_FILE_ACTIONS_ID, APP_CHROME_FILE_ACTIONS_SELECTOR } from './AppChromeHeader';
 import {
   anonymizeArtifactId,
   artifactKindToTracking,
   type TrackingProjectKind,
 } from '@open-design/contracts/analytics';
 import { useAnalytics } from '../analytics/provider';
+import { trackIframeLoad } from '../observability/iframe-error';
 import {
   trackArtifactExportResult,
   trackArtifactHeaderClick,
   trackArtifactToolbarClick,
+  trackCommentPopoverClick,
   trackPageView,
   trackPresentPopoverClick,
   trackShareOptionPopoverClick,
-  trackTweaksPopoverClick,
 } from '../analytics/events';
 import { MarkdownRenderer, artifactRendererRegistry } from '../artifacts/renderer-registry';
 import { renderMarkdownToSafeHtml } from '../artifacts/markdown';
@@ -32,6 +33,7 @@ import {
   fetchDeployConfig,
   fetchProjectDeployments,
   fetchProjectFilePreview,
+  fetchProjectFiles,
   fetchProjectFileText,
   uploadProjectFiles,
   liveArtifactPreviewUrl,
@@ -47,6 +49,7 @@ import {
   type WebDeployProviderId,
   type WebUpdateDeployConfigRequest,
   writeProjectTextFile,
+  writeProjectTextFileDetailed,
 } from '../providers/registry';
 import type { ProjectFilePreview } from '../providers/registry';
 import {
@@ -61,11 +64,15 @@ import {
   exportReactComponentAsZip,
   openSandboxedPreviewInNewTab,
   requestPreviewSnapshot,
+  requestPreviewSnapshotResult,
+  type PreviewSnapshotResult,
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
+import { findHtmlEntriesReferencing } from '../runtime/jsx-module-refs';
 import { buildLazySrcdocTransport, buildSrcdoc, canActivateSrcDocTransport } from '../runtime/srcdoc';
 import {
   hasUrlModeBridge,
+  htmlNeedsFocusGuard,
   htmlNeedsSandboxShim,
   parseForceInline,
   shouldUrlLoadHtmlPreview,
@@ -80,11 +87,12 @@ import type {
   ProjectFile,
 } from '../types';
 import { Icon } from './Icon';
+import { RemixIcon } from './RemixIcon';
 import { Toast } from './Toast';
-import { PaletteTweaks, type PaletteId } from './PaletteTweaks';
-import { PreviewDrawOverlay, type PreviewDrawMode } from './PreviewDrawOverlay';
+import { PreviewDrawOverlay } from './PreviewDrawOverlay';
 import {
   buildBoardCommentAttachments,
+  commentTargetDisplayName,
   commentsToAttachments,
   liveSnapshotForComment,
   overlayBoundsFromSnapshot,
@@ -93,7 +101,7 @@ import {
   type PreviewCommentSnapshot,
 } from '../comments';
 import { applyPodMemberRemoval } from '../lib/pod-members';
-import { BoardComposerPopover } from './BoardComposerPopover';
+import { AnnotationHoverPopover, BoardComposerPopover } from './BoardComposerPopover';
 import type {
   ChatCommentAttachment,
   PreviewComment,
@@ -111,6 +119,11 @@ import {
 } from '../edit-mode/source-patches';
 import { MANUAL_EDIT_STYLE_PROPS, type ManualEditBridgeMessage, type ManualEditHistoryEntry, type ManualEditPatch, type ManualEditStyles, type ManualEditTarget } from '../edit-mode/types';
 import { isRenderableSketchJson, SketchPreview } from './SketchPreview';
+
+function resolveChromeActionsHost(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(APP_CHROME_FILE_ACTIONS_SELECTOR)
+    ?? document.getElementById(APP_CHROME_FILE_ACTIONS_ID);
+}
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 type SlideState = { active: number; count: number };
@@ -185,6 +198,7 @@ const PREVIEW_VIEWPORT_PRESETS: PreviewViewportPreset[] = [
     titleKey: 'fileViewer.viewportMobileTitle',
   },
 ];
+const EXPORT_READY_NUDGE_STORAGE_PREFIX = 'open-design:export-ready-nudge:';
 
 // The five basic style facets the inspect panel exposes. Kept narrow on
 // purpose — open-slide's design tokens panel only edits global tokens, so
@@ -435,7 +449,7 @@ function PreviewViewportControls({
         onClick={() => setOpen((value) => !value)}
       >
         <span>{t(activePreset.labelKey)}</span>
-        <Icon name="chevron-down" size={11} />
+        <RemixIcon name="arrow-down-s-line" size={14} />
       </button>
       {open ? (
         <div className="viewer-viewport-menu" id={listboxId} role="listbox" aria-label={t('fileViewer.viewportAria')}>
@@ -532,6 +546,97 @@ function manualEditPreviewShellStyle(
   return previewScaleShellStyle(viewport, previewScale);
 }
 
+async function previewSnapshotDataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const response = await fetch(dataUrl);
+  return response.blob();
+}
+
+async function previewSnapshotBlobFromIframes(
+  iframes: Array<HTMLIFrameElement | null>,
+  t: (key: keyof Dict, vars?: Record<string, string | number>) => string,
+): Promise<{ blob: Blob; fallback?: PreviewSnapshotResult }> {
+  let fallback: PreviewSnapshotResult | undefined;
+  for (const iframe of iframes) {
+    if (!iframe) {
+      fallback ??= { ok: false, reason: 'loading' };
+      continue;
+    }
+    const result = await requestPreviewSnapshotResultWithRetries(iframe);
+    if (result.ok) {
+      return { blob: await previewSnapshotDataUrlToBlob(result.snapshot.dataUrl), fallback };
+    }
+    fallback ??= result;
+  }
+  throw new Error(snapshotFailureMessage(fallback, t));
+}
+
+async function requestPreviewSnapshotResultWithRetries(
+  iframe: HTMLIFrameElement,
+): Promise<PreviewSnapshotResult> {
+  let last: PreviewSnapshotResult | null = null;
+  const timeouts = [750, 1500, 3000, 8000];
+  for (const timeout of timeouts) {
+    const result = await requestPreviewSnapshotResult(iframe, timeout);
+    if (result.ok) return result;
+    last = result;
+    if (result.reason === 'render-error' || result.reason === 'post-message-error') return result;
+  }
+  return last ?? { ok: false, reason: 'timeout' };
+}
+
+function snapshotFailureMessage(
+  result: PreviewSnapshotResult | undefined,
+  t: (key: keyof Dict, vars?: Record<string, string | number>) => string,
+): string {
+  if (!result) return t('fileViewer.screenshotCaptureFailed');
+  if (!result.ok && result.reason === 'loading') return t('fileViewer.screenshotPreviewLoading');
+  return t('fileViewer.screenshotCaptureFailed');
+}
+
+function clipboardFailureMessage(
+  err: unknown,
+  t: (key: keyof Dict, vars?: Record<string, string | number>) => string,
+): string {
+  const message = err instanceof Error ? err.message : String(err || '');
+  if (/clipboard|notallowed|permission|denied|write/i.test(message)) {
+    return t('fileViewer.screenshotClipboardDenied');
+  }
+  if (message === t('fileViewer.screenshotPreviewLoading')) return message;
+  return message || t('fileViewer.screenshotCaptureFailed');
+}
+
+function manualEditFloatingPanelStyle(
+  target: ManualEditTarget,
+  previewScale: number,
+  canvasSize: PreviewCanvasSize | undefined,
+): CSSProperties {
+  const scale = Number.isFinite(previewScale) && previewScale > 0 ? previewScale : 1;
+  const panelWidth = 320;
+  const preferredPanelHeight = 380;
+  const pad = 12;
+  const canvasWidth = canvasSize?.width ?? 1200;
+  const canvasHeight = canvasSize?.height ?? 800;
+  const panelHeight = Math.min(preferredPanelHeight, Math.max(260, canvasHeight - pad * 2));
+  const targetLeft = target.rect.x * scale;
+  const targetTop = target.rect.y * scale;
+  const targetRight = (target.rect.x + target.rect.width) * scale;
+  let left = targetRight + pad;
+  if (left + panelWidth > canvasWidth - pad) {
+    left = Math.max(pad, targetLeft - panelWidth - pad);
+  }
+  const top = Math.max(
+    pad,
+    Math.min(targetTop, Math.max(pad, canvasHeight - panelHeight - pad)),
+  );
+  return {
+    left,
+    top,
+    width: panelWidth,
+    height: panelHeight,
+    maxHeight: `calc(100% - ${pad * 2}px)`,
+  };
+}
+
 export function cancelManualEditPendingStyleSnapshot(
   pending: ManualEditPendingStyleSave | null,
   id: string,
@@ -605,6 +710,12 @@ interface Props {
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
+  // Open `openName` as a tab (focusing it) and close `closeName` in one
+  // atomic tab-state update. The React module pointer uses this to jump to the
+  // HTML entry that renders a module and drop the dead-end module tab.
+  onOpenFileReplacing?: (openName: string, closeName: string) => void;
+  commentPortalId?: string;
+  onCommentModeChange?: (active: boolean) => void;
 }
 
 export function FileViewer({
@@ -621,6 +732,9 @@ export function FileViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
+  onOpenFileReplacing,
+  commentPortalId,
+  onCommentModeChange,
 }: Props) {
   const rendererMatch = artifactRendererRegistry.resolve({
     file,
@@ -658,11 +772,19 @@ export function FileViewer({
         onRemovePreviewComment={onRemovePreviewComment}
         onSendBoardCommentAttachments={onSendBoardCommentAttachments}
         onFileSaved={onFileSaved}
+        commentPortalId={commentPortalId}
+        onCommentModeChange={onCommentModeChange}
       />
     );
   }
   if (rendererMatch?.renderer.id === 'react-component') {
-    return <ReactComponentViewer projectId={projectId} file={file} />;
+    return (
+      <ReactComponentViewer
+        projectId={projectId}
+        file={file}
+        onOpenFileReplacing={onOpenFileReplacing}
+      />
+    );
   }
   if (rendererMatch?.renderer.id === 'markdown') {
     return <MarkdownViewer projectId={projectId} file={file} />;
@@ -731,7 +853,7 @@ export function LiveArtifactViewer({
   const [chromeActionsHost, setChromeActionsHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    setChromeActionsHost(document.getElementById(APP_CHROME_FILE_ACTIONS_ID));
+    setChromeActionsHost(resolveChromeActionsHost());
   }, []);
   useEffect(() => {
     if (!presentMenuOpen) return;
@@ -867,6 +989,22 @@ export function LiveArtifactViewer({
   );
   const previewScale = zoom / 100;
 
+  // Instrument the live-artifact iframe so failed loads — usually a
+  // missing artifact file or a stuck `od://` resolver — surface in
+  // PostHog. iframe load errors don't propagate to window.error, so
+  // observability/install.ts cannot catch them globally.
+  useEffect(() => {
+    if (mode !== 'preview') return undefined;
+    const node = iframeRef.current;
+    if (!node) return undefined;
+    return trackIframeLoad({
+      iframe: node,
+      surface: 'live_artifact_preview',
+      artifactId: liveArtifact.artifactId,
+      projectId,
+    });
+  }, [mode, previewUrl, liveArtifact.artifactId, projectId]);
+
   function bumpZoom(delta: number) {
     setZoom((z) => Math.max(25, Math.min(200, z + delta)));
   }
@@ -941,27 +1079,28 @@ export function LiveArtifactViewer({
       ))(
         <div className="present-wrap chrome-present-wrap" ref={presentWrapRef}>
           <button
-            className="chrome-action chrome-action-secondary present-trigger"
+            className="chrome-action chrome-action-secondary chrome-action-icon present-trigger"
             aria-haspopup="menu"
             aria-expanded={presentMenuOpen}
+            aria-label={t('fileViewer.present')}
+            data-tooltip={t('fileViewer.present')}
+            title={t('fileViewer.present')}
             onClick={() => setPresentMenuOpen((v) => !v)}
           >
-            <Icon name="present" size={13} />
-            <span>{t('fileViewer.present')}</span>
-            <Icon name="chevron-down" size={11} />
+            <RemixIcon name="slideshow-3-line" size={15} />
           </button>
           {presentMenuOpen ? (
             <div className="present-menu" role="menu">
               <button role="menuitem" onClick={presentInThisTab}>
-                <span className="present-icon"><Icon name="eye" size={13} /></span>{' '}
+                <span className="present-icon"><RemixIcon name="eye-line" size={14} /></span>{' '}
                 {t('fileViewer.presentInTab')}
               </button>
               <button role="menuitem" onClick={presentFullscreen}>
-                <span className="present-icon"><Icon name="play" size={13} /></span>{' '}
+                <span className="present-icon"><RemixIcon name="play-line" size={14} /></span>{' '}
                 {t('fileViewer.presentFullscreen')}
               </button>
               <button role="menuitem" onClick={presentNewTab}>
-                <span className="present-icon"><Icon name="share" size={13} /></span>{' '}
+                <span className="present-icon"><RemixIcon name="share-forward-line" size={14} /></span>{' '}
                 {t('fileViewer.presentNewTab')}
               </button>
             </div>
@@ -985,8 +1124,8 @@ export function LiveArtifactViewer({
             type="button"
             className="icon-only"
             onClick={() => setReloadKey((n) => n + 1)}
-            title={t('fileViewer.reload')}
-            aria-label={t('fileViewer.reloadAria')}
+            title={`${t('fileViewer.reload')} ${t('fileViewer.preview')}`}
+            aria-label={`${t('fileViewer.reloadAria')} ${t('fileViewer.preview')}`}
           >
             <Icon name="reload" size={14} />
           </button>
@@ -1105,26 +1244,27 @@ export function LiveArtifactViewer({
             action={t('liveArtifact.refresh.failureAction')}
           />
         ) : null}
-        {mode === 'preview' ? (
-          <div
-            className={`live-artifact-preview-layer preview-viewport preview-viewport-${previewViewport}`}
-            style={previewViewportStyle(previewViewport, previewScale, previewBodySize)}
-          >
-            <div className="preview-frame-clip">
-              <div style={previewScaleShellStyle(previewViewport, previewScale)}>
-                <PreviewDrawOverlay>
-                  <iframe
-                    ref={iframeRef}
-                    data-testid="live-artifact-preview-frame"
-                    title={liveArtifact.title}
-                    sandbox="allow-scripts allow-popups allow-downloads"
-                    src={previewUrl}
-                  />
-                </PreviewDrawOverlay>
-              </div>
+        <div
+          className={`live-artifact-preview-layer preview-viewport preview-viewport-${previewViewport}`}
+          data-active={mode === 'preview' ? 'true' : 'false'}
+          aria-hidden={mode === 'preview' ? undefined : true}
+          style={previewViewportStyle(previewViewport, previewScale, previewBodySize)}
+        >
+          <div className="preview-frame-clip">
+            <div style={previewScaleShellStyle(previewViewport, previewScale)}>
+              <PreviewDrawOverlay>
+                <iframe
+                  ref={iframeRef}
+                  data-testid="live-artifact-preview-frame"
+                  title={liveArtifact.title}
+                  sandbox="allow-scripts allow-popups allow-downloads"
+                  src={previewUrl}
+                />
+              </PreviewDrawOverlay>
             </div>
           </div>
-        ) : loading ? (
+        </div>
+        {mode !== 'preview' && loading ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'code' ? (
           <LiveArtifactCodePanel
@@ -1428,6 +1568,26 @@ function formatDurationMs(ms: number | undefined): string | null {
   const minutes = Math.floor(ms / 60_000);
   const seconds = Math.round((ms % 60_000) / 1000);
   return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+function exportReadyNudgeKey(projectId: string, fileName: string): string {
+  return `${EXPORT_READY_NUDGE_STORAGE_PREFIX}${projectId}:${fileName}`;
+}
+
+function hasSeenExportReadyNudge(projectId: string, fileName: string): boolean {
+  try {
+    return window.sessionStorage.getItem(exportReadyNudgeKey(projectId, fileName)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markExportReadyNudgeSeen(projectId: string, fileName: string) {
+  try {
+    window.sessionStorage.setItem(exportReadyNudgeKey(projectId, fileName), '1');
+  } catch {
+    // Ignore storage-denied contexts; the in-memory state still prevents loops.
+  }
 }
 
 interface RefreshStatusDescriptor {
@@ -1845,17 +2005,24 @@ function formatCommentTime(ts: number, t: TranslateFn): string {
 
 function commentDisplayLabel(comment: PreviewComment, t: TranslateFn): string {
   if (comment.elementId.startsWith('pin-')) return t('chat.comments.pin');
-  return comment.label || comment.elementId;
-}
-
-function commentAvatarInitial(comment: PreviewComment): string {
-  const seed = comment.label || comment.elementId || '?';
-  return seed.charAt(0).toUpperCase();
+  const label = String(comment.label || '').trim().toLowerCase();
+  const htmlHint = String(comment.htmlHint || '').trim().toLowerCase();
+  const elementId = String(comment.elementId || '').trim().toLowerCase();
+  const source = `${label} ${htmlHint} ${elementId}`;
+  if (/\b(?:img|picture|video|canvas|svg)\b/.test(source)) return t('chat.comments.targetImage');
+  if (/\b(?:button|input|textarea|select|label)\b/.test(source)) return t('chat.comments.targetControl');
+  if (/^<a\b/.test(htmlHint)) return t('chat.comments.targetLink');
+  if (/\b(?:h1|h2|h3|h4|h5|h6|p|span|strong|em|small|li|dt|dd)\b/.test(source)) return t('chat.comments.targetText');
+  if (/\b(?:section|main|header|footer|nav|article|aside)\b/.test(source)) return t('chat.comments.targetSection');
+  if (label.endsWith('.html') || elementId.startsWith('file-comment-')) return t('chat.comments.targetPage');
+  if (comment.text.trim()) return t('chat.comments.targetText');
+  return t('chat.comments.targetArea');
 }
 
 export function CommentSidePanel({
   comments,
   selectedIds,
+  activeCommentId,
   collapsed,
   onCollapsedChange,
   onClose,
@@ -1863,11 +2030,14 @@ export function CommentSidePanel({
   onClearSelection,
   onReply,
   onSendSelected,
+  onCreateComment,
   sending,
   t,
+  composer,
 }: {
   comments: PreviewComment[];
   selectedIds: Set<string>;
+  activeCommentId: string | null;
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onClose: () => void;
@@ -1875,13 +2045,22 @@ export function CommentSidePanel({
   onClearSelection: () => void;
   onReply: (comment: PreviewComment) => void;
   onSendSelected: () => void | Promise<void>;
+  onCreateComment?: (note: string) => boolean | Promise<boolean>;
   sending: boolean;
   t: TranslateFn;
+  composer?: ReactNode;
 }) {
+  const [newCommentDraft, setNewCommentDraft] = useState('');
   const sorted = [...comments].sort((a, b) => b.createdAt - a.createdAt);
   const visibleSelectedIds = new Set(comments.filter((comment) => selectedIds.has(comment.id)).map((comment) => comment.id));
   const selectedCount = visibleSelectedIds.size;
   const commentsLabel = t('chat.tabComments');
+  const canCreateComment = Boolean(onCreateComment) && newCommentDraft.trim().length > 0 && !sending;
+  const submitNewComment = async () => {
+    if (!onCreateComment || !newCommentDraft.trim()) return;
+    const saved = await onCreateComment(newCommentDraft.trim());
+    if (saved) setNewCommentDraft('');
+  };
   if (collapsed) {
     return (
       <button
@@ -1892,7 +2071,7 @@ export function CommentSidePanel({
         title={t('preview.showSidebar', { label: commentsLabel })}
         onClick={() => onCollapsedChange(false)}
       >
-        <Icon name="comment" size={14} />
+        <RemixIcon name="message-3-line" size={15} />
         <span>{commentsLabel}</span>
         {comments.length > 0 ? <strong>{comments.length}</strong> : null}
       </button>
@@ -1903,7 +2082,7 @@ export function CommentSidePanel({
     <aside className="comment-side-panel" data-testid="comment-side-panel" aria-label={commentsLabel}>
       <div className="comment-side-header">
         <div className="comment-side-title">
-          <Icon name="comment" size={14} />
+          <RemixIcon name="message-3-line" size={15} />
           <span>{commentsLabel}</span>
         </div>
         <button
@@ -1921,20 +2100,20 @@ export function CommentSidePanel({
           <div className="comment-side-empty">
             {t('chat.comments.emptySaved')}
           </div>
-        ) : sorted.map((comment) => {
+        ) : sorted.map((comment, index) => {
           const selected = visibleSelectedIds.has(comment.id);
+          const active = comment.id === activeCommentId;
           return (
             <div
               key={comment.id}
-              className={`comment-side-item${selected ? ' selected' : ''}`}
+              className={`comment-side-item${selected ? ' selected' : ''}${active ? ' active' : ''}`}
               data-testid="comment-side-item"
+              data-comment-id={comment.id}
+              aria-current={active ? 'true' : undefined}
             >
               <div className="comment-side-item-head">
                 <span className="comment-side-author">
-                  <span className="comment-side-avatar" aria-hidden>
-                    {commentAvatarInitial(comment)}
-                  </span>
-                  <strong>{commentDisplayLabel(comment, t)}</strong>
+                  <strong>{`${index + 1}. ${commentDisplayLabel(comment, t)}`}</strong>
                 </span>
                 <span className="comment-side-time">{formatCommentTime(comment.createdAt, t)}</span>
                 <button
@@ -1976,6 +2155,66 @@ export function CommentSidePanel({
             {sending ? t('chat.comments.sending') : t('chat.comments.sendToChat')}
           </button>
         </div>
+      ) : null}
+      {composer ? <div className="comment-side-composer">{composer}</div> : null}
+      {onCreateComment ? (
+        <form
+          className="comment-side-new-comment composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitNewComment();
+          }}
+        >
+          <div className="composer-shell comment-side-new-comment-shell">
+            <div className="composer-input-wrap">
+              <div className="composer-textarea-layer">
+                <textarea
+                  value={newCommentDraft}
+                  placeholder={t('chat.comments.placeholder')}
+                  aria-label={t('chat.comments.placeholder')}
+                  onChange={(event) => setNewCommentDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                      event.preventDefault();
+                      void submitNewComment();
+                    }
+                  }}
+                />
+              </div>
+            </div>
+            <div className="composer-row comment-side-new-comment-actions">
+              <button
+                type="button"
+                className="icon-btn"
+                title={t('chat.cliSettingsTitle')}
+                aria-label={t('chat.cliSettingsAria')}
+                disabled
+              >
+                <span className="composer-tools-at" aria-hidden>
+                  @
+                </span>
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title={t('chat.attachTitle')}
+                aria-label={t('chat.attachAria')}
+                disabled
+              >
+                <Icon name="attach" size={15} />
+              </button>
+              <span className="composer-spacer" />
+              <button
+                type="submit"
+                className={`composer-send${sending ? ' is-sending' : ''}`}
+                disabled={!canCreateComment}
+              >
+                <Icon name="send" size={13} />
+                <span>{sending ? t('chat.comments.sending') : t('chat.send')}</span>
+              </button>
+            </div>
+          </div>
+        </form>
       ) : null}
     </aside>
   );
@@ -2692,6 +2931,7 @@ function CommentPreviewOverlays({
   hoveredPodMemberId,
   activeTarget,
   boardTool,
+  showActivePin = false,
   scale,
   strokePoints,
   onOpenComment,
@@ -2702,6 +2942,7 @@ function CommentPreviewOverlays({
   hoveredPodMemberId: string | null;
   activeTarget: PreviewCommentSnapshot | null;
   boardTool: BoardTool;
+  showActivePin?: boolean;
   scale: number;
   strokePoints: StrokePoint[];
   onOpenComment: (comment: PreviewComment, snapshot: PreviewCommentSnapshot) => void;
@@ -2715,11 +2956,18 @@ function CommentPreviewOverlays({
     .filter((item): item is { comment: PreviewComment; index: number; snapshot: PreviewCommentSnapshot } =>
       Boolean(item.snapshot),
     );
+  const activeSavedIndex = activeTarget
+    ? visibleComments.findIndex(({ snapshot }) => snapshot.elementId === activeTarget.elementId)
+    : -1;
+  const activePinNumber = activeSavedIndex >= 0
+    ? activeSavedIndex + 1
+    : visibleComments.length + 1;
   const targetOverlay = activeTarget ?? hoveredTarget;
   return (
     <div className="comment-overlay-layer" aria-hidden={false}>
       {visibleComments.map(({ comment, index, snapshot }) => {
         const bounds = overlayBoundsFromSnapshot(snapshot, scale);
+        const label = commentTargetDisplayName(comment);
         return (
           <div
             key={comment.id}
@@ -2731,14 +2979,18 @@ function CommentPreviewOverlays({
               height: bounds.height,
             }}
             data-testid={`comment-saved-marker-${comment.elementId}`}
+            onClick={() => onOpenComment(comment, snapshot)}
           >
             <div className="comment-saved-outline" />
             <button
               type="button"
               className="comment-saved-pin"
-              onClick={() => onOpenComment(comment, snapshot)}
-              title={`${comment.elementId}: ${comment.note}`}
-              aria-label={`Open comment for ${comment.elementId}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenComment(comment, snapshot);
+              }}
+              title={`${index + 1}. ${label}: ${comment.note}`}
+              aria-label={`Open comment for ${label}`}
             >
               {index + 1}
             </button>
@@ -2753,6 +3005,16 @@ function CommentPreviewOverlays({
           hoveredMemberId={hoveredPodMemberId}
         />
       ) : null}
+      {showActivePin && activeTarget ? (
+        <div
+          className="comment-active-pin"
+          style={activeCommentPinStyle(activeTarget, scale)}
+          data-testid="comment-active-pin"
+          aria-hidden="true"
+        >
+          {activePinNumber}
+        </div>
+      ) : null}
       {boardTool === 'pod' && strokePoints.length > 1 ? (
         <svg className="board-pod-stroke">
           <polyline
@@ -2762,6 +3024,18 @@ function CommentPreviewOverlays({
       ) : null}
     </div>
   );
+}
+
+function activeCommentPinStyle(target: PreviewCommentSnapshot, scale: number): CSSProperties {
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const anchor = target.hoverPoint ?? {
+    x: target.position.x,
+    y: target.position.y,
+  };
+  return {
+    left: Math.round(anchor.x * safeScale),
+    top: Math.round(anchor.y * safeScale),
+  };
 }
 
 export function CommentTargetOverlay({
@@ -2914,6 +3188,7 @@ function buildPodSnapshot(input: {
     text: snapshot.text,
     position: snapshot.position,
     htmlHint: snapshot.htmlHint,
+    style: snapshot.style,
   }));
   const summary = selected
     .slice(0, 3)
@@ -3096,18 +3371,85 @@ function finiteBridgeInteger(value: unknown): number | undefined {
   return clampBridgeCoordinate(value);
 }
 
+function normalizeAnnotationStyle(input: unknown): PreviewCommentSnapshot['style'] {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, unknown>;
+  const style: NonNullable<PreviewCommentSnapshot['style']> = {};
+  for (const key of ANNOTATION_STYLE_KEYS) {
+    const value = raw[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.replace(/\s+/g, ' ').trim();
+    if (trimmed) style[key] = trimmed.slice(0, 120);
+  }
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+const ANNOTATION_STYLE_KEYS = [
+  'color',
+  'backgroundColor',
+  'fontSize',
+  'fontWeight',
+  'lineHeight',
+  'textAlign',
+  'fontFamily',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'borderRadius',
+] as const;
+
 function clampBridgeCoordinate(value: unknown): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return Math.max(-MAX_BRIDGE_COORDINATE, Math.min(MAX_BRIDGE_COORDINATE, Math.round(numeric)));
 }
 
+// Shown instead of the React runtime when a .jsx/.tsx is a module loaded by a
+// sibling HTML entry (issue #2744): such a file has no standalone component to
+// render, so point the user at the page(s) that do. Clicking an entry opens
+// (or focuses) that page and closes the now-useless module tab.
+function ReactModulePointer({
+  entries,
+  onOpenEntry,
+}: {
+  entries: string[];
+  onOpenEntry?: (name: string) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="viewer-module-pointer" role="note">
+      <Icon name="info" size={20} />
+      <h2 className="viewer-module-pointer__title">{t('fileViewer.jsxModuleTitle')}</h2>
+      <p className="viewer-module-pointer__body">{t('fileViewer.jsxModuleBody')}</p>
+      <p className="viewer-module-pointer__cta">{t('fileViewer.jsxModuleCta')}</p>
+      <ul className="viewer-module-pointer__entries">
+        {entries.map((name) => (
+          <li key={name}>
+            <button
+              type="button"
+              className="viewer-module-pointer__link"
+              onClick={() => onOpenEntry?.(name)}
+              disabled={!onOpenEntry}
+            >
+              <Icon name="external-link" size={14} />
+              <span>{name}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ReactComponentViewer({
   projectId,
   file,
+  onOpenFileReplacing,
 }: {
   projectId: string;
   file: ProjectFile;
+  onOpenFileReplacing?: (openName: string, closeName: string) => void;
 }) {
   const t = useT();
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
@@ -3116,6 +3458,11 @@ function ReactComponentViewer({
   const [reloadKey, setReloadKey] = useState(0);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const shareRef = useRef<HTMLDivElement | null>(null);
+  // HTML entries that load this file as a Babel module. `null` = still
+  // checking; `[]` = standalone artifact; non-empty = a module of a
+  // multi-file React prototype, which has no standalone preview. Issue #2744.
+  const [moduleEntries, setModuleEntries] = useState<string[] | null>(null);
+  const isModule = (moduleEntries?.length ?? 0) > 0;
 
   useEffect(() => {
     setSource(null);
@@ -3123,6 +3470,36 @@ function ReactComponentViewer({
     void fetchProjectFileText(projectId, file.name).then((text) => {
       if (!cancelled) setSource(text ?? '');
     });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, file.name, file.mtime, reloadKey]);
+
+  // Detect whether this .jsx/.tsx is a module loaded by a sibling HTML entry.
+  // Runs before any srcdoc is built so a module never flashes the raw
+  // "No React component export found" error from the React runtime.
+  useEffect(() => {
+    setModuleEntries(null);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const files = await fetchProjectFiles(projectId);
+        const htmlNames = files
+          .filter((entry) => /\.html?$/i.test(entry.name))
+          .map((entry) => entry.name);
+        const htmlSources = new Map<string, string>();
+        await Promise.all(
+          htmlNames.map(async (name) => {
+            const text = await fetchProjectFileText(projectId, name).catch(() => null);
+            if (text != null) htmlSources.set(name, text);
+          }),
+        );
+        if (cancelled) return;
+        setModuleEntries(findHtmlEntriesReferencing(file.name, htmlSources));
+      } catch {
+        if (!cancelled) setModuleEntries([]);
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -3149,7 +3526,9 @@ function ReactComponentViewer({
   const sourceExtension = file.name.toLowerCase().endsWith('.tsx') ? '.tsx' : '.jsx';
 
   useEffect(() => {
-    if (source === null) {
+    if (source === null || moduleEntries === null || isModule) {
+      // No source yet, still checking module status, or this file is a module
+      // with no standalone preview — never build the React runtime srcdoc.
       setSrcDoc('');
       return;
     }
@@ -3173,7 +3552,7 @@ function ReactComponentViewer({
     return () => {
       cancelled = true;
     };
-  }, [source, exportTitle]);
+  }, [source, exportTitle, moduleEntries, isModule]);
 
   return (
     <div className="viewer react-component-viewer">
@@ -3183,8 +3562,8 @@ function ReactComponentViewer({
             type="button"
             className="icon-only"
             onClick={() => setReloadKey((n) => n + 1)}
-            title={t('fileViewer.reload')}
-            aria-label={t('fileViewer.reloadAria')}
+            title={`${t('fileViewer.reload')} ${t('fileViewer.preview')}`}
+            aria-label={`${t('fileViewer.reloadAria')} ${t('fileViewer.preview')}`}
           >
             <Icon name="reload" size={14} />
           </button>
@@ -3215,16 +3594,20 @@ function ReactComponentViewer({
               <div className="share-menu" ref={shareRef}>
                 <button
                   type="button"
-                  className="viewer-action primary"
+                  className="viewer-action primary viewer-action-export"
                   aria-haspopup="menu"
                   aria-expanded={shareMenuOpen}
                   onClick={() => setShareMenuOpen((v) => !v)}
                 >
+                  <span className="export-action-spacer" aria-hidden />
                   <span>{t('fileViewer.shareLabel')}</span>
-                  <Icon name="chevron-down" size={11} />
+                  <RemixIcon name="arrow-down-s-line" size={14} />
                 </button>
                 {shareMenuOpen ? (
                   <div className="share-menu-popover" role="menu">
+                    <div className="share-menu-section-label" role="presentation">
+                      {t('common.share')}
+                    </div>
                     <button
                       type="button"
                       className="share-menu-item"
@@ -3234,7 +3617,7 @@ function ReactComponentViewer({
                         exportAsJsx(source, exportTitle, sourceExtension);
                       }}
                     >
-                      <span className="share-menu-icon"><Icon name="file-code" size={14} /></span>
+                      <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
                       <span>{t('fileViewer.exportJsx')}</span>
                     </button>
                     <button
@@ -3246,7 +3629,7 @@ function ReactComponentViewer({
                         exportReactComponentAsHtml(source, exportTitle);
                       }}
                     >
-                      <span className="share-menu-icon"><Icon name="file" size={14} /></span>
+                      <span className="share-menu-icon"><RemixIcon name="file-line" size={15} /></span>
                       <span>{t('fileViewer.exportReactHtml')}</span>
                     </button>
                     <div className="share-menu-divider" />
@@ -3259,7 +3642,7 @@ function ReactComponentViewer({
                         exportReactComponentAsZip(source, exportTitle, sourceExtension);
                       }}
                     >
-                      <span className="share-menu-icon"><Icon name="download" size={14} /></span>
+                      <span className="share-menu-icon"><RemixIcon name="file-zip-line" size={15} /></span>
                       <span>{t('fileViewer.exportZip')}</span>
                     </button>
                   </div>
@@ -3270,7 +3653,15 @@ function ReactComponentViewer({
         </div>
       </div>
       <div className="viewer-body">
-        {source === null || (mode === 'preview' && !srcDoc) ? (
+        {isModule && mode === 'preview' ? (
+          // Module of a multi-file prototype: no standalone preview, so the
+          // Preview tab shows a pointer to the HTML entry. The Source tab still
+          // renders the raw code below. Issue #2744.
+          <ReactModulePointer
+            entries={moduleEntries ?? []}
+            onOpenEntry={(htmlName) => onOpenFileReplacing?.(htmlName, file.name)}
+          />
+        ) : source === null || (mode === 'preview' && !srcDoc) ? (
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'preview' ? (
           <PreviewDrawOverlay>
@@ -3390,6 +3781,8 @@ function HtmlViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
+  commentPortalId,
+  onCommentModeChange,
 }: {
   projectId: string;
   projectKind: TrackingProjectKind;
@@ -3404,6 +3797,8 @@ function HtmlViewer({
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
+  commentPortalId?: string;
+  onCommentModeChange?: (active: boolean) => void;
 }) {
   const t = useT();
   const analytics = useAnalytics();
@@ -3459,15 +3854,17 @@ function HtmlViewer({
         { requestId },
       );
     };
+    const toastFormats = new Set(['pdf', 'pptx', 'zip', 'html', 'markdown']);
     try {
       const out = fn();
       if (out && typeof (out as Promise<unknown>).then === 'function') {
         (out as Promise<unknown>).then(
-          () => finish('success'),
+          () => { finish('success'); if (toastFormats.has(format)) setExportToast(t('fileViewer.exportStarted')); },
           (err) => finish('failed', err instanceof Error ? err.name : 'UNKNOWN'),
         );
       } else {
         finish('success');
+        if (toastFormats.has(format)) setExportToast(t('fileViewer.exportStarted'));
       }
     } catch (err) {
       finish('failed', err instanceof Error ? err.name : 'UNKNOWN');
@@ -3522,17 +3919,28 @@ function HtmlViewer({
       artifact_kind: artifactKindToTracking({ fileKind: file.kind ?? null }),
     });
   };
+  const fireCommentPopoverClick = (
+    element: 'save_comment' | 'send_to_chat' | 'add_note',
+  ) => {
+    trackCommentPopoverClick(analytics.track, {
+      page_name: 'artifact',
+      area: 'comment_popover',
+      element,
+      artifact_id: anonymizeArtifactId({ projectId, fileName: file.name }),
+      artifact_kind: artifactKindToTracking({ fileKind: file.kind ?? null }),
+    });
+  };
   const [mode, setMode] = useState<'preview' | 'source'>('preview');
   const [source, setSource] = useState<string | null>(liveHtml ?? null);
   const [inlinedSource, setInlinedSource] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
   const [previewViewport, setPreviewViewport] = useState<PreviewViewportId>('desktop');
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
-  const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const zoomMenuRef = useRef<HTMLDivElement | null>(null);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
+  const [exportReadyNudge, setExportReadyNudge] = useState(false);
+  const exportReadyNudgeSeenRef = useRef<Set<string>>(new Set());
   // Template save UX. We surface a transient "Saved" pill in the share
   // menu so the user gets feedback without a noisy toast layer.
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -3565,23 +3973,33 @@ function HtmlViewer({
   const [inTabPresent, setInTabPresent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [boardMode, setBoardMode] = useState(false);
+  const [commentPanelOpen, setCommentPanelOpen] = useState(false);
+  const [commentCreateMode, setCommentCreateMode] = useState(false);
   const [boardTool, setBoardTool] = useState<BoardTool>('inspect');
   const [inspectMode, setInspectMode] = useState(false);
-  const [palettePopoverOpen, setPalettePopoverOpen] = useState(false);
-  const [selectedPalette, setSelectedPalette] = useState<PaletteId | null>(null);
-  const [previewPalette, setPreviewPalette] = useState<PaletteId | null>(null);
+  const [agentToolsOpen, setAgentToolsOpen] = useState(false);
   const [drawOverlayOpen, setDrawOverlayOpen] = useState(false);
-  const [drawOverlayMode, setDrawOverlayMode] = useState<PreviewDrawMode>('click');
+  const [drawOverlayIntent, setDrawOverlayIntent] = useState<'draw' | 'screenshot'>('draw');
+  const [screenshotCaptureActive, setScreenshotCaptureActive] = useState(false);
+  const [screenshotToast, setScreenshotToast] = useState<string | null>(null);
   // for hint managing hint box state
   const [openHintBox, setOpenHintBox] = useState(true);
   const [manualEditMode, setManualEditModeRaw] = useState(false);
   const [manualEditFrozenSource, setManualEditFrozenSource] = useState<string | null>(null);
   const [manualEditViewportWidth, setManualEditViewportWidth] = useState<number | null>(null);
+  const [commentPortalHost, setCommentPortalHost] = useState<HTMLElement | null>(null);
   const [previewBodyRef, previewBodySize] = usePreviewCanvasSize<HTMLDivElement>();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const urlPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const srcDocPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const activatedSrcDocTransportHtmlRef = useRef<string | null>(null);
+  // Tracks the iframe DOM node whose dedupe ref was last reset by the
+  // srcDoc onLoad handler. We reset the dedupe exactly once per freshly
+  // mounted iframe (the first load is the shell HTML), and skip every
+  // subsequent load on the same node (those are our own
+  // document.open/write/close inside the shell). See onLoad below for
+  // the infinite-loop story (issue #2361).
+  const srcDocFrameDedupeResetForRef = useRef<HTMLIFrameElement | null>(null);
   const isActivePreviewIframeSource = useCallback((source: MessageEventSource | null) => {
     return !!source && source === iframeRef.current?.contentWindow;
   }, []);
@@ -3625,6 +4043,32 @@ function HtmlViewer({
       return value;
     });
   }, []);
+  useEffect(() => {
+    onCommentModeChange?.(commentPanelOpen);
+  }, [commentPanelOpen, onCommentModeChange]);
+  useEffect(() => () => {
+    onCommentModeChange?.(false);
+  }, [onCommentModeChange]);
+  useEffect(() => {
+    if (!commentPanelOpen || !commentPortalId) {
+      setCommentPortalHost(null);
+      return;
+    }
+    let cancelled = false;
+    let raf = 0;
+    const findHost = () => {
+      if (cancelled) return;
+      const host = document.getElementById(commentPortalId);
+      setCommentPortalHost(host);
+      if (!host) raf = window.requestAnimationFrame(findHost);
+    };
+    findHost();
+    return () => {
+      cancelled = true;
+      if (raf) window.cancelAnimationFrame(raf);
+      setCommentPortalHost(null);
+    };
+  }, [commentPanelOpen, commentPortalId]);
   const capturePreviewScrollPosition = useCallback(() => {
     const host = previewBodyRef.current;
     let frameLeft = 0;
@@ -3692,8 +4136,9 @@ function HtmlViewer({
       });
     });
   }, []);
-  const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([]);
+const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([]);
   const [selectedManualEditTarget, setSelectedManualEditTarget] = useState<ManualEditTarget | null>(null);
+  const [manualEditPanelPosition, setManualEditPanelPosition] = useState<{ left: number; top: number } | null>(null);
   const selectedManualEditTargetIdRef = useRef<string | null>(null);
   const [manualEditDraft, setManualEditDraft] = useState<ManualEditDraft>(() => emptyManualEditDraft());
   const [manualEditHistory, setManualEditHistory] = useState<ManualEditHistoryEntry[]>([]);
@@ -3747,6 +4192,8 @@ function HtmlViewer({
   const [sendingBoardBatch, setSendingBoardBatch] = useState(false);
   const [commentSavedToast, setCommentSavedToast] = useState<string | null>(null);
   const [templateSavedToast, setTemplateSavedToast] = useState<string | null>(null);
+  const [deploySavedToast, setDeploySavedToast] = useState<{ message: string; details: string } | null>(null);
+  const [exportToast, setExportToast] = useState<string | null>(null);
   const [selectedSideCommentIds, setSelectedSideCommentIds] = useState<Set<string>>(() => new Set());
   const [commentSidePanelCollapsed, setCommentSidePanelCollapsed] = useState(false);
   const [strokePoints, setStrokePoints] = useState<StrokePoint[]>([]);
@@ -3880,7 +4327,7 @@ function HtmlViewer({
   const [chromeActionsHost, setChromeActionsHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    setChromeActionsHost(document.getElementById(APP_CHROME_FILE_ACTIONS_ID));
+    setChromeActionsHost(resolveChromeActionsHost());
   }, []);
 
   useEffect(() => {
@@ -3902,11 +4349,23 @@ function HtmlViewer({
       sourceRef.current = null;
     }
     let cancelled = false;
-    void fetchProjectFileText(projectId, file.name).then((text) => {
-      if (!cancelled) {
-        setSource(text);
-        sourceRef.current = text;
-      }
+    // Cache-bust the fetch on every mtime / reload / files-refresh bump.
+    // Without this, an agent edit during Comment mode (srcDoc path) gets
+    // stale HTML from the browser HTTP cache — the source state ends up
+    // identical to the previous value, srcDoc is byte-equal to the last
+    // activated HTML, canActivateSrcDocTransport bails on the dedupe
+    // check, and the preview only refreshes when Comment closes and the
+    // url-load iframe takes over with its own ?v=mtime cache-bust.
+    void fetchProjectFileText(projectId, file.name, {
+      cacheBustKey: `${file.mtime}-${reloadKey}-${filesRefreshKey}`,
+    }).then((text) => {
+      if (cancelled) return;
+      // Chokidar emits agent rewrites as unlink+add+change bursts; a
+      // transient null mid-burst would blank source → srcDoc empty →
+      // shell stays on prior frame. Keep the last good text instead.
+      if (text == null) return;
+      setSource(text);
+      sourceRef.current = text;
     });
     return () => {
       cancelled = true;
@@ -3955,7 +4414,6 @@ function HtmlViewer({
     ? manualEditFrozenSource
     : livePreviewSource;
   const manualEditPageStylesEnabled = typeof source === 'string' && isManualEditFullHtmlDocument(source);
-  const drawClickSelectionMode = drawOverlayOpen && drawOverlayMode === 'click' && !manualEditMode;
   const urlModeBridge = hasUrlModeBridge(source);
   // When we URL-load the iframe directly, skip every in-host inlining /
   // srcDoc-rebuilding step. The browser does the asset resolution itself,
@@ -3971,16 +4429,20 @@ function HtmlViewer({
     () => source != null && htmlNeedsSandboxShim(source),
     [source],
   );
+  const needsFocusGuard = useMemo(
+    () => source != null && htmlNeedsFocusGuard(source),
+    [source],
+  );
   const useUrlLoadPreview = shouldUrlLoadHtmlPreview({
     mode,
     isDeck: effectiveDeck,
-    commentMode: boardMode || drawClickSelectionMode,
+    commentMode: boardMode,
     editMode: manualEditMode,
     urlModeBridge,
     inspectMode,
-    paletteActive: palettePopoverOpen || selectedPalette !== null,
-    drawMode: drawOverlayOpen,
+    drawMode: drawOverlayOpen || screenshotCaptureActive,
     forceInline: forceInline || needsSandboxShim,
+    needsFocusGuard,
   });
   const basePreviewSrcUrl = useMemo(
     () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}`,
@@ -4033,19 +4495,15 @@ function HtmlViewer({
       initialSlideIndex: htmlPreviewSlideState.get(previewStateKey)?.active ?? 0,
       selectionBridge: true,
       editBridge: manualEditMode,
-      paletteBridge: true,
-      initialPalette: selectedPalette,
+      paletteBridge: false,
+      previewFocusGuard: true,
     }) : ''),
-    [previewSource, effectiveDeck, projectId, file.name, previewStateKey, manualEditMode, selectedPalette],
+    [previewSource, effectiveDeck, projectId, file.name, previewStateKey, manualEditMode],
   );
   const lazySrcDocTransport = useMemo(() => buildLazySrcdocTransport(), []);
-  const [hasLazySrcDocTransport, setHasLazySrcDocTransport] = useState(useUrlLoadPreview);
   const [srcDocTransportResetKey, setSrcDocTransportResetKey] = useState(0);
   const [srcDocShellReady, setSrcDocShellReady] = useState(false);
   const wasUrlLoadPreviewRef = useRef(useUrlLoadPreview);
-  useEffect(() => {
-    if (useUrlLoadPreview) setHasLazySrcDocTransport(true);
-  }, [useUrlLoadPreview]);
   // Reset the shell-ready latch whenever the srcDoc iframe re-mounts. The
   // next shell will post `od:srcdoc-transport-ready` (or fire onLoad) and
   // flip this back to true. See #2253.
@@ -4067,7 +4525,13 @@ function HtmlViewer({
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
-  const useLazySrcDocTransport = useUrlLoadPreview || hasLazySrcDocTransport;
+  // Lazy transport preloads an empty shell only while URL-load is the active
+  // transport. Once srcdoc becomes active (sandbox shim, Draw, Screenshot,
+  // Tweaks, etc.), mount the real artifact HTML directly so we do not depend on
+  // a postMessage activation that can race (#2253) and strand the iframe blank
+  // (#2361, #2791).
+  const captureModeActive = drawOverlayOpen || screenshotCaptureActive;
+  const useLazySrcDocTransport = !manualEditMode && !captureModeActive && useUrlLoadPreview;
   const srcDocTransportContent = useLazySrcDocTransport ? lazySrcDocTransport : srcDoc;
   const urlTransportSrc = useUrlLoadPreview ? activePreviewSrcUrl : 'about:blank';
   const activateSrcDocTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
@@ -4078,12 +4542,44 @@ function HtmlViewer({
       shellReady: srcDocShellReady,
       activatedHtml: activatedSrcDocTransportHtmlRef.current,
     })) return false;
+    // A SECOND activation while Comment mode is on would document.open +
+    // write over the iframe's existing document. The window-level message
+    // listener survives, but iframe.onLoad does NOT refire for
+    // document.write, so host-side re-init (slide nav sync, scroll
+    // restore, bridge replay) is silently skipped — the visible page can
+    // drift out of sync with the host's tracked state (e.g. the page
+    // indicator shows 3 while the iframe rendered page 4 of the freshly
+    // edited deck). Force a fresh shell mount under Comment so onLoad
+    // fires and the full re-init pipeline runs against the new HTML.
+    //
+    // Skip the remount path in Manual Edit, where the postMessage
+    // activate carries the patched HTML and host-side scroll/slide
+    // state intentionally stays put across the patch.
+    if (boardMode && activatedSrcDocTransportHtmlRef.current !== null) {
+      activatedSrcDocTransportHtmlRef.current = null;
+      setSrcDocTransportResetKey((key) => key + 1);
+      return true;
+    }
     const win = target?.contentWindow;
     if (!win) return false;
     win.postMessage({ type: 'od:srcdoc-transport-activate', html: srcDoc }, '*');
     activatedSrcDocTransportHtmlRef.current = srcDoc;
     return true;
-  }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview, srcDocShellReady]);
+  }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview, srcDocShellReady, boardMode]);
+  const activateLoadedSrcDocTransport = useCallback((target: HTMLIFrameElement | null = srcDocPreviewIframeRef.current) => {
+    if (!canActivateSrcDocTransport({
+      srcDoc,
+      useUrlLoadPreview,
+      useLazySrcDocTransport,
+      shellReady: true,
+      activatedHtml: activatedSrcDocTransportHtmlRef.current,
+    })) return false;
+    const win = target?.contentWindow;
+    if (!win) return false;
+    win.postMessage({ type: 'od:srcdoc-transport-activate', html: srcDoc }, '*');
+    activatedSrcDocTransportHtmlRef.current = srcDoc;
+    return true;
+  }, [srcDoc, useLazySrcDocTransport, useUrlLoadPreview]);
   useEffect(() => {
     if (useUrlLoadPreview) {
       activatedSrcDocTransportHtmlRef.current = null;
@@ -4093,9 +4589,32 @@ function HtmlViewer({
       wasUrlLoadPreviewRef.current = true;
       return;
     }
+    if (wasUrlLoadPreviewRef.current) {
+      setSrcDocTransportResetKey((key) => key + 1);
+      activatedSrcDocTransportHtmlRef.current = null;
+    }
     wasUrlLoadPreviewRef.current = false;
     activateSrcDocTransport();
   }, [activateSrcDocTransport, useUrlLoadPreview]);
+  
+  // Leaving Manual Edit swaps the iframe from a fully materialized srcDoc
+  // document back to the lazy transport shell. Remount the shell before
+  // activation; posting into the old edit document can mark the new HTML as
+  // activated, then React replaces the iframe with an empty shell and the
+  // dedupe check suppresses the real activation.
+  const prevManualEditModeRef = useRef(manualEditMode);
+  useEffect(() => {
+    const wasInEditMode = prevManualEditModeRef.current;
+    const isNowInEditMode = manualEditMode;
+    prevManualEditModeRef.current = isNowInEditMode;
+
+    if (wasInEditMode && !isNowInEditMode && !useUrlLoadPreview) {
+      activatedSrcDocTransportHtmlRef.current = null;
+      setSrcDocShellReady(false);
+      setSrcDocTransportResetKey((key) => key + 1);
+    }
+  }, [manualEditMode, useUrlLoadPreview]);
+  
   useEffect(() => {
     restorePreviewScrollPosition();
   }, [boardMode, manualEditMode, srcDoc, restorePreviewScrollPosition]);
@@ -4217,10 +4736,10 @@ function HtmlViewer({
     if (!win) return;
     win.postMessage({
       type: 'od:comment-mode',
-      enabled: boardMode || drawClickSelectionMode,
-      mode: drawClickSelectionMode ? 'picker' : boardTool,
+      enabled: boardMode,
+      mode: boardTool,
     }, '*');
-  }, [boardMode, boardTool, drawClickSelectionMode, srcDoc]);
+  }, [boardMode, boardTool, srcDoc]);
 
   useEffect(() => {
     const win = iframeRef.current?.contentWindow;
@@ -4247,14 +4766,12 @@ function HtmlViewer({
     if (!win) return;
     win.postMessage({
       type: 'od:comment-mode',
-      enabled: boardMode || drawClickSelectionMode,
-      mode: drawClickSelectionMode ? 'picker' : boardTool,
+      enabled: boardMode,
+      mode: boardTool,
     }, '*');
     win.postMessage({ type: 'od-edit-mode', enabled: manualEditMode }, '*');
     postSelectedManualEditTargetToIframe(manualEditMode ? selectedManualEditTarget?.id ?? null : null, target);
     win.postMessage({ type: 'od:inspect-mode', enabled: inspectMode }, '*');
-    const palette = previewPalette ?? selectedPalette;
-    win.postMessage({ type: 'od:palette', palette }, '*');
   }
 
   useEffect(() => {
@@ -4262,13 +4779,6 @@ function HtmlViewer({
     if (!win) return;
     win.postMessage({ type: 'od:inspect-mode', enabled: inspectMode }, '*');
   }, [inspectMode, srcDoc]);
-
-  useEffect(() => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    const palette = previewPalette ?? selectedPalette;
-    win.postMessage({ type: 'od:palette', palette }, '*');
-  }, [previewPalette, selectedPalette, srcDoc]);
 
   // Mirror the bridge's `od:comment-targets` broadcast into
   // `liveCommentTargets` whenever EITHER Inspect or Comments mode is
@@ -4282,7 +4792,7 @@ function HtmlViewer({
   // artifacts) because the comment-mode listener short-circuits on
   // `!boardMode`. Issue #890.
   useEffect(() => {
-    if (!inspectMode && !boardMode && !drawClickSelectionMode) {
+    if (!inspectMode && !boardMode) {
       setLiveCommentTargets((current) => (current.size > 0 ? new Map() : current));
       return;
     }
@@ -4312,6 +4822,7 @@ function HtmlViewer({
             height: clampBridgeCoordinate(item?.position?.height),
           },
           htmlHint: String(item?.htmlHint || ''),
+          style: normalizeAnnotationStyle(item?.style),
           selectionKind: 'element',
           memberCount: undefined,
         });
@@ -4320,7 +4831,7 @@ function HtmlViewer({
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [inspectMode, boardMode, drawClickSelectionMode, file.name, isOurPreviewIframeSource]);
+  }, [inspectMode, boardMode, file.name, isOurPreviewIframeSource]);
 
   useEffect(() => {
     setActiveCommentTarget(null);
@@ -4337,6 +4848,7 @@ function HtmlViewer({
     setManualEditViewportWidth(null);
     setManualEditTargets([]);
     setSelectedManualEditTarget(null);
+    setManualEditPanelPosition(null);
     selectedManualEditTargetIdRef.current = null;
     setManualEditDraft(emptyManualEditDraft());
     setManualEditHistory([]);
@@ -4346,13 +4858,13 @@ function HtmlViewer({
     clearManualEditStyleTimer();
   }, [file.name]);
 
-  // Selecting a new file or turning inspect off resets the panel target.
+  // Selecting a new file or turning inspect/comment-inspect off resets the panel target.
   useEffect(() => {
-    if (!inspectMode) {
+    if (!inspectMode && !(boardMode && boardTool === 'inspect')) {
       setActiveInspectTarget(null);
       setInspectError(null);
     }
-  }, [inspectMode]);
+  }, [inspectMode, boardMode, boardTool]);
 
   // Hydrate the host-authoritative override map from the artifact source
   // synchronously, *before* React commits a render that carries a new
@@ -4389,8 +4901,8 @@ function HtmlViewer({
   }, [selectedManualEditTarget?.id]);
 
   useEffect(() => {
-    const selectionMode = boardMode || drawClickSelectionMode;
-    if (!selectionMode) {
+    if (!boardMode) {
+      setCommentCreateMode(false);
       setActiveCommentTarget((current) => (current ? null : current));
       setHoveredCommentTarget((current) => (current ? null : current));
       setActivePreviewCommentId((current) => (current ? null : current));
@@ -4411,7 +4923,14 @@ function HtmlViewer({
         width: clampBridgeCoordinate(data.position?.width),
         height: clampBridgeCoordinate(data.position?.height),
       },
+      hoverPoint: data.hoverPoint
+        ? {
+            x: clampBridgeCoordinate(data.hoverPoint.x),
+            y: clampBridgeCoordinate(data.hoverPoint.y),
+          }
+        : undefined,
       htmlHint: String(data.htmlHint || ''),
+      style: normalizeAnnotationStyle(data.style),
       selectionKind: data.selectionKind === 'pod' ? 'pod' : 'element',
       memberCount: finiteBridgeInteger(data.memberCount),
       podMembers: Array.isArray(data.podMembers) ? data.podMembers : undefined,
@@ -4466,10 +4985,12 @@ function HtmlViewer({
           comment.status === 'open' &&
           comment.elementId === snapshot.elementId,
         );
-        setActiveCommentTarget(snapshot);
+        const shouldOpenComposer = boardMode || commentCreateMode;
+        setActiveCommentTarget((current) => (shouldOpenComposer ? snapshot : current));
         setHoveredCommentTarget(snapshot);
         setLiveCommentTargets((current) => new Map(current).set(snapshot.elementId, snapshot));
-        if (boardMode) {
+        if (boardMode && shouldOpenComposer) {
+          setCommentCreateMode(true);
           setActivePreviewCommentId(existing?.id ?? null);
           setCommentDraft(existing?.note ?? '');
           setQueuedBoardNotes([]);
@@ -4514,12 +5035,13 @@ function HtmlViewer({
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [boardMode, drawClickSelectionMode, file.name, isOurPreviewIframeSource, previewComments]);
+  }, [activeCommentTarget, boardMode, boardTool, commentPortalHost, file.name, isOurPreviewIframeSource, previewComments]);
 
   useEffect(() => {
     if (!manualEditMode) {
       setManualEditTargets([]);
       setSelectedManualEditTarget(null);
+      setManualEditPanelPosition(null);
       setManualEditError(null);
       manualEditPendingStyleRef.current = null;
       if (manualEditStyleTimerRef.current) {
@@ -4546,6 +5068,20 @@ function HtmlViewer({
       }
       if (data.type === 'od-edit-select') {
         void selectManualEditTarget(data.target);
+        return;
+      }
+      if (data.type === 'od-edit-hover') {
+        if (data.target.id !== selectedManualEditTargetIdRef.current) {
+          void selectManualEditTarget(data.target);
+        }
+        return;
+      }
+      if (data.type === 'od-edit-text-commit') {
+        void applyManualEdit({
+          id: String(data.id),
+          kind: 'set-text',
+          value: String(data.value),
+        }, 'Edit text');
         return;
       }
     }
@@ -4596,14 +5132,6 @@ function HtmlViewer({
     setManualEditError('Saved styles differed from the active preview. Reconciled the selected target from source.');
   }
 
-  function scheduleManualEditStyleSave() {
-    if (manualEditStyleTimerRef.current) clearTimeout(manualEditStyleTimerRef.current);
-    manualEditStyleTimerRef.current = setTimeout(() => {
-      manualEditStyleTimerRef.current = null;
-      void flushManualEditStyleSave();
-    }, 1000);
-  }
-
   function clearManualEditStyleTimer() {
     if (!manualEditStyleTimerRef.current) return;
     clearTimeout(manualEditStyleTimerRef.current);
@@ -4630,29 +5158,66 @@ function HtmlViewer({
     manualEditPendingStyleRef.current = pending;
     setManualEditError(null);
     previewStyleToIframe(id, styles, version);
-    scheduleManualEditStyleSave();
   }
 
   async function flushManualEditStyleSave(): Promise<boolean> {
     const pending = manualEditPendingStyleRef.current;
     if (!pending) return true;
-    if (manualEditSavingRef.current) {
-      scheduleManualEditStyleSave();
-      return false;
-    }
+    if (manualEditSavingRef.current) return false;
     manualEditPendingStyleRef.current = null;
     return applyManualEdit({ id: pending.id, kind: 'set-style', styles: pending.styles }, pending.label);
+  }
+
+  function cancelManualEditStyleDraft() {
+    const pending = manualEditPendingStyleRef.current;
+    if (!pending) return;
+    clearManualEditStyleTimer();
+    manualEditPendingStyleRef.current = null;
+    const base = sourceRef.current ?? '';
+    const target = pending.id === '__body__'
+      ? null
+      : selectedManualEditTarget?.id === pending.id
+        ? selectedManualEditTarget
+        : manualEditTargets.find((item) => item.id === pending.id) ?? null;
+    const sourceStyles = target
+      ? inspectorManualEditStyles(target, base)
+      : readManualEditStyles(base, pending.id);
+    const resetStyles = MANUAL_EDIT_STYLE_PROPS.reduce<Partial<ManualEditStyles>>((acc, key) => {
+      acc[key] = sourceStyles[key] ?? '';
+      return acc;
+    }, {});
+    previewStyleToIframe(pending.id, resetStyles, nextManualEditPreviewVersion());
+    if (!target || target.id === selectedManualEditTarget?.id) {
+      setManualEditDraft((current) => ({
+        ...current,
+        styles: target ? sourceStyles : current.styles,
+        fullSource: base,
+      }));
+    }
+    setManualEditError(null);
   }
 
   async function exitManualEditModeAfterFlush(): Promise<boolean> {
     const ok = await flushManualEditStyleSave();
     if (!ok) return false;
+    setManualEditPanelPosition(null);
     setManualEditMode(false);
     return true;
   }
 
+  function cancelManualEditModeAndExit() {
+    cancelManualEditStyleDraft();
+    selectedManualEditTargetIdRef.current = null;
+    setSelectedManualEditTarget(null);
+    setManualEditPanelPosition(null);
+    setManualEditDraft(emptyManualEditDraft(sourceRef.current ?? ''));
+    setManualEditError(null);
+    setManualEditMode(false);
+    postSelectedManualEditTargetToIframe(null);
+  }
+
   async function selectManualEditTarget(target: ManualEditTarget) {
-    if (!(await flushManualEditStyleSave())) return;
+    if (manualEditPendingStyleRef.current?.id !== target.id) cancelManualEditStyleDraft();
     const base = sourceRef.current ?? '';
     const fields = readManualEditFields(base, target.id);
     setSelectedManualEditTarget(target);
@@ -4670,8 +5235,9 @@ function HtmlViewer({
   }
 
   async function clearManualEditTargetSelection() {
-    if (!(await flushManualEditStyleSave())) return;
+    cancelManualEditStyleDraft();
     setSelectedManualEditTarget(null);
+    setManualEditPanelPosition(null);
     setManualEditDraft(emptyManualEditDraft(sourceRef.current ?? ''));
     setManualEditError(null);
   }
@@ -4693,11 +5259,13 @@ function HtmlViewer({
         baseSource,
         'The file changed outside manual edit mode. Refreshing before applying manual edits.',
       ))) return false;
-      const saved = await writeProjectTextFile(projectId, file.name, result.source, {
+      const saved = await writeProjectTextFileDetailed(projectId, file.name, result.source, {
         artifactManifest: file.artifactManifest,
       });
-      if (!saved) {
-        setManualEditError('Could not save the edited file.');
+      if (!saved.ok) {
+        setManualEditError(
+          `Could not save the edited file${saved.status ? ` (${saved.status}${saved.code ? ` ${saved.code}` : ''})` : ''}: ${saved.message}`,
+        );
         return false;
       }
       const entry: ManualEditHistoryEntry = {
@@ -4711,18 +5279,38 @@ function HtmlViewer({
       setSource(result.source);
       sourceRef.current = result.source;
       setInlinedSource(null);
+      if (patch.kind !== 'set-style') {
+        setManualEditFrozenSource(result.source);
+      }
       setManualEditHistory((current) => [entry, ...current]);
       setManualEditUndone([]);
       setManualEditDraft((current) => ({ ...current, fullSource: result.source }));
+      if (patch.kind === 'set-text') {
+        setSelectedManualEditTarget((current) => current?.id === patch.id
+          ? { ...current, text: patch.value, fields: { ...current.fields, text: patch.value } }
+          : current);
+      } else if (patch.kind === 'remove-element') {
+        if (manualEditPendingStyleRef.current?.id === patch.id) {
+          manualEditPendingStyleRef.current = null;
+          clearManualEditStyleTimer();
+        }
+        selectedManualEditTargetIdRef.current = null;
+        setSelectedManualEditTarget(null);
+        setManualEditTargets((current) => current.filter((target) => target.id !== patch.id));
+        setManualEditDraft(emptyManualEditDraft(result.source));
+        postSelectedManualEditTargetToIframe(null);
+      } else {
+        setManualEditDraft((current) => ({ ...current, fullSource: result.source }));
+      }
       if (patch.kind === 'set-style') {
         reconcileManualEditStyleSave(patch.id, patch.styles, result.source);
       }
+      setManualEditError(null);
       await onFileSaved?.();
       return true;
     } finally {
       manualEditSavingRef.current = false;
       setManualEditSaving(false);
-      if (manualEditPendingStyleRef.current) scheduleManualEditStyleSave();
     }
   }
 
@@ -4764,6 +5352,7 @@ function HtmlViewer({
       setSource(latest.beforeSource);
       sourceRef.current = latest.beforeSource;
       setInlinedSource(null);
+      setManualEditFrozenSource(latest.beforeSource);
       setManualEditHistory(rest);
       setManualEditUndone((current) => [latest, ...current]);
       setManualEditDraft((current) => ({ ...current, fullSource: latest.beforeSource }));
@@ -4795,6 +5384,7 @@ function HtmlViewer({
       setSource(latest.afterSource);
       sourceRef.current = latest.afterSource;
       setInlinedSource(null);
+      setManualEditFrozenSource(latest.afterSource);
       setManualEditUndone(rest);
       setManualEditHistory((current) => [latest, ...current]);
       setManualEditDraft((current) => ({ ...current, fullSource: latest.afterSource }));
@@ -4986,23 +5576,6 @@ function HtmlViewer({
   }, [presentMenuOpen]);
 
   useEffect(() => {
-    if (!modeMenuOpen) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!modeMenuRef.current) return;
-      if (!modeMenuRef.current.contains(e.target as Node)) setModeMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setModeMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [modeMenuOpen]);
-
-  useEffect(() => {
     if (!zoomMenuOpen) return;
     const onDocClick = (e: MouseEvent) => {
       if (!zoomMenuRef.current) return;
@@ -5018,6 +5591,24 @@ function HtmlViewer({
       document.removeEventListener('keydown', onKey);
     };
   }, [zoomMenuOpen]);
+
+  useEffect(() => {
+    if (!agentToolsOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.artifact-tool-menu-anchor')) return;
+      closeArtifactToolMenus();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeArtifactToolMenus();
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [agentToolsOpen]);
 
   useEffect(() => {
     if (!shareMenuOpen) return;
@@ -5203,6 +5794,15 @@ function HtmlViewer({
       }));
       setDeployment(next);
       setDeployResult(next);
+      if (deployResultState(next.status) !== 'failed') {
+        setDeploySavedToast({
+          message: t('fileViewer.deploySuccessToast'),
+          details: t('fileViewer.deploySuccessToastDetails', {
+            provider: deployProviderLabel,
+            url: next.url,
+          }),
+        });
+      }
     } catch (err) {
       const option = getDeployProviderOption(deployProviderId);
       setDeployError(
@@ -5279,13 +5879,21 @@ function HtmlViewer({
   function selectMode(nextMode: 'preview' | 'source') {
     if (nextMode === 'source') setDrawOverlayOpen(false);
     setMode(nextMode);
-    setModeMenuOpen(false);
   }
 
   function activateBoard(nextTool?: BoardTool) {
     setMode('preview');
     setBoardMode(true);
     if (nextTool) setBoardTool(nextTool);
+  }
+
+  function activateBoardPicker(nextTool: BoardTool) {
+    clearBoardComposer();
+    fireArtifactToolbarClick(nextTool === 'pod' ? 'pods' : 'comment');
+    setCommentPanelOpen(false);
+    setCommentCreateMode(false);
+    activateBoard(nextTool);
+    setAgentToolsOpen(false);
   }
 
   function clearBoardComposer() {
@@ -5296,6 +5904,167 @@ function HtmlViewer({
     setCommentDraft('');
     setQueuedBoardNotes([]);
     setStrokePoints([]);
+  }
+
+  function closeArtifactToolMenus() {
+    setAgentToolsOpen(false);
+  }
+
+  function activateDrawTool() {
+    fireArtifactToolbarClick('draw');
+    const next = !(drawOverlayOpen && drawOverlayIntent === 'draw');
+    if (!next) {
+      setDrawOverlayOpen(false);
+      setAgentToolsOpen(false);
+      return;
+    }
+    const activateDraw = () => {
+      setCommentPanelOpen(false);
+      setCommentCreateMode(false);
+      setBoardMode(false);
+      clearBoardComposer();
+      setInspectMode(false);
+      setDrawOverlayIntent('draw');
+      setMode('preview');
+      setDrawOverlayOpen(true);
+      closeArtifactToolMenus();
+    };
+    if (manualEditMode) {
+      void exitManualEditModeAfterFlush().then((ok) => {
+        if (ok) activateDraw();
+      });
+      return;
+    }
+    activateDraw();
+  }
+
+  function activateScreenshotTool() {
+    fireArtifactToolbarClick('draw');
+    const activateScreenshot = async () => {
+      setCommentPanelOpen(false);
+      setCommentCreateMode(false);
+      setBoardMode(false);
+      clearBoardComposer();
+      setInspectMode(false);
+      setDrawOverlayIntent('screenshot');
+      setMode('preview');
+      setScreenshotToast(t('fileViewer.screenshotCopying'));
+      setDrawOverlayOpen(false);
+      closeArtifactToolMenus();
+      setScreenshotCaptureActive(true);
+      try {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        const srcDocIframe = srcDocPreviewIframeRef.current;
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+          setScreenshotToast(t('fileViewer.screenshotClipboardDenied'));
+          return;
+        }
+        const activeIframe = iframeRef.current;
+        const { blob } = await previewSnapshotBlobFromIframes([
+          srcDocIframe,
+          activeIframe === srcDocIframe ? null : activeIframe,
+        ], t);
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob }),
+        ]);
+        setScreenshotToast(t('fileViewer.screenshotCopied'));
+      } catch (err) {
+        console.warn('[screenshot] failed to copy preview snapshot:', err);
+        setScreenshotToast(clipboardFailureMessage(err, t));
+      } finally {
+        setScreenshotCaptureActive(false);
+      }
+    };
+    if (manualEditMode) {
+      void exitManualEditModeAfterFlush().then((ok) => {
+        if (ok) void activateScreenshot();
+      });
+      return;
+    }
+    void activateScreenshot();
+  }
+
+  function activateCommentTool() {
+    fireArtifactToolbarClick('comment');
+    capturePreviewScrollPosition();
+    if (boardMode && !commentCreateMode && boardTool === 'inspect') {
+      setBoardMode(false);
+      setCommentCreateMode(false);
+      clearBoardComposer();
+      setAgentToolsOpen(false);
+      return;
+    }
+    const activateComment = () => {
+      setCommentPanelOpen(false);
+      setCommentCreateMode(false);
+      clearBoardComposer();
+      setInspectMode(false);
+      setDrawOverlayIntent('draw');
+      setDrawOverlayOpen(false);
+      setMode('preview');
+      activateBoard('inspect');
+      closeArtifactToolMenus();
+    };
+    if (manualEditMode) {
+      void exitManualEditModeAfterFlush().then((ok) => {
+        if (ok) activateComment();
+      });
+      return;
+    }
+    activateComment();
+  }
+
+  function activateCommentCreateTool() {
+    fireArtifactToolbarClick('comment');
+    capturePreviewScrollPosition();
+    if (boardMode && commentCreateMode) {
+      setBoardMode(false);
+      setCommentCreateMode(false);
+      setCommentPanelOpen(false);
+      clearBoardComposer();
+      closeArtifactToolMenus();
+      return;
+    }
+    const activateCommentCreate = () => {
+      setCommentPanelOpen(true);
+      setCommentSidePanelCollapsed(false);
+      setCommentCreateMode(true);
+      clearBoardComposer();
+      setInspectMode(false);
+      setDrawOverlayIntent('draw');
+      setDrawOverlayOpen(false);
+      setMode('preview');
+      activateBoard('inspect');
+      closeArtifactToolMenus();
+    };
+    if (manualEditMode) {
+      void exitManualEditModeAfterFlush().then((ok) => {
+        if (ok) activateCommentCreate();
+      });
+      return;
+    }
+    activateCommentCreate();
+  }
+
+  function activateManualEditTool() {
+    fireArtifactToolbarClick('edit');
+    capturePreviewScrollPosition();
+    if (!manualEditMode) {
+      setCommentPanelOpen(false);
+      setCommentCreateMode(false);
+      setBoardMode(false);
+      clearBoardComposer();
+      setInspectMode(false);
+      setDrawOverlayIntent('draw');
+      setDrawOverlayOpen(false);
+      setMode('preview');
+      setManualEditViewportWidth(previewBodyRef.current?.clientWidth ?? null);
+      setManualEditMode(true);
+      closeArtifactToolMenus();
+      return;
+    }
+    closeArtifactToolMenus();
+    void exitManualEditModeAfterFlush();
   }
 
   function queueCurrentDraft() {
@@ -5327,26 +6096,94 @@ function HtmlViewer({
   async function savePersistentComment() {
     if (!activeCommentTarget || !commentDraft.trim() || !onSavePreviewComment) return;
     const isFreePin = activeCommentTarget.elementId.startsWith('pin-');
-    const saved = await onSavePreviewComment(
-      targetFromSnapshot(activeCommentTarget),
-      commentDraft.trim(),
-      false,
-    );
-    if (saved) {
-      clearBoardComposer();
-      setCommentSavedToast(isFreePin ? t('chat.comments.pinSavedToast') : t('chat.comments.savedToast'));
+    setSendingBoardBatch(true);
+    try {
+      const saved = await onSavePreviewComment(
+        targetFromSnapshot(activeCommentTarget),
+        commentDraft.trim(),
+        false,
+      );
+      if (saved) {
+        clearBoardComposer();
+        setBoardMode(true);
+        setCommentCreateMode(true);
+        setCommentPanelOpen(true);
+        setCommentSidePanelCollapsed(false);
+        setActivePreviewCommentId(saved.id);
+        setCommentSavedToast(isFreePin ? t('chat.comments.pinSavedToast') : t('chat.comments.savedToast'));
+      }
+    } finally {
+      setSendingBoardBatch(false);
     }
   }
+
+  async function savePanelComment(note: string) {
+    if (!onSavePreviewComment) return false;
+    const cleanNote = note.trim();
+    if (!cleanNote) return false;
+    const idSeed = Date.now().toString(36);
+    const target: PreviewCommentTarget = activeCommentTarget
+      ? targetFromSnapshot(activeCommentTarget)
+      : {
+          filePath: file.name,
+          elementId: `file-comment-${idSeed}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+          selector: 'html',
+          label: file.name,
+          text: '',
+          position: { x: 0, y: 0, width: 0, height: 0 },
+          htmlHint: '',
+          selectionKind: 'element',
+        };
+    setSendingBoardBatch(true);
+    try {
+      const saved = await onSavePreviewComment(target, cleanNote, false);
+      if (saved) {
+        setCommentSavedToast(t('chat.comments.savedToast'));
+        if (activeCommentTarget) clearBoardComposer();
+      }
+      return Boolean(saved);
+    } finally {
+      setSendingBoardBatch(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!screenshotToast) return;
+    const id = window.setTimeout(() => setScreenshotToast(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [screenshotToast]);
 
   const showPresent = source !== null;
   const canShare = source !== null;
   const exportTitle = file.name.replace(/\.html?$/i, '') || file.name;
   const canPptx = canShare && Boolean(onExportAsPptx) && !streaming;
+  useEffect(() => {
+    const nudgeKey = `${projectId}\n${file.name}`;
+    if (!canShare || exportReadyNudgeSeenRef.current.has(nudgeKey)) return;
+    exportReadyNudgeSeenRef.current.add(nudgeKey);
+    if (hasSeenExportReadyNudge(projectId, file.name)) return;
+    markExportReadyNudgeSeen(projectId, file.name);
+    setExportReadyNudge(true);
+    const timeout = window.setTimeout(() => setExportReadyNudge(false), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [canShare, file.name, projectId]);
+
+  const openExportMenu = () => {
+    fireArtifactHeaderClick('share_dropdown');
+    setExportReadyNudge(false);
+    markExportReadyNudgeSeen(projectId, file.name);
+    setShareMenuOpen((v) => !v);
+  };
   const visibleSideComments = useMemo(
     () => previewComments
       .filter((comment) => comment.filePath === file.name && comment.status === 'open')
       .sort((a, b) => b.createdAt - a.createdAt),
     [file.name, previewComments],
+  );
+  const activeSideCommentId = activePreviewCommentId ?? (
+    activeCommentTarget
+      ? visibleSideComments.find((comment) => comment.elementId === activeCommentTarget.elementId)?.id ?? null
+      : null
   );
   useEffect(() => {
     if (!boardMode || !activePreviewCommentId) return;
@@ -5430,7 +6267,7 @@ function HtmlViewer({
       ? t('fileViewer.deployingToProvider', { provider: deployProviderLabel })
       : deployPhase === 'preparing-link'
         ? t('fileViewer.preparingPublicLink')
-        : t('fileViewer.deployToProvider', { provider: deployProviderLabel });
+        : deployActionLabelFor(deployProviderId);
   const copyDeployLabel = (url: string) =>
     copiedDeployLink === url.trim()
       ? t('fileViewer.copied')
@@ -5438,7 +6275,9 @@ function HtmlViewer({
   const copyDeployMenuLabel = (providerLabel: string, url: string) =>
     copiedDeployLink === url.trim()
       ? t('fileViewer.copied')
-      : `${t('fileViewer.copyDeployLink')} · ${providerLabel}`;
+      : providerLabel.toLowerCase().includes('cloudflare')
+        ? t('fileViewer.copyCloudflareLink')
+        : t('fileViewer.copyProviderLink', { provider: providerLabel });
   const statusLabelFor = (state: ReturnType<typeof deployResultState>) => {
     if (state === 'ready') return t('fileViewer.deployLinkReady');
     if (state === 'protected') return t('fileViewer.deployLinkProtectedLabel');
@@ -5447,56 +6286,210 @@ function HtmlViewer({
   };
   const boardAvailable = mode === 'preview' && source !== null;
   const showPreviewToolbarControls = mode === 'preview';
+  const manualEditPanel = manualEditMode ? (
+    <ManualEditPanel
+      targets={manualEditTargets}
+      selectedTarget={selectedManualEditTarget}
+      draft={manualEditDraft}
+      history={manualEditHistory}
+      error={manualEditError}
+      canUndo={manualEditHistory.length > 0}
+      canRedo={manualEditUndone.length > 0}
+      busy={manualEditSaving}
+      pageStylesEnabled={manualEditPageStylesEnabled}
+      onSelectTarget={selectManualEditTarget}
+      onDraftChange={setManualEditDraft}
+      onStyleChange={(id, styles, label) => {
+        void handleManualEditStyleChange(id, styles, label);
+      }}
+      onInvalidStyle={cancelManualEditPendingStyles}
+      onApplyPatch={(patch, label) => {
+        void applyManualEdit(patch, label);
+      }}
+      onError={setManualEditError}
+      onClearSelection={() => {
+        void clearManualEditTargetSelection();
+      }}
+      onExit={() => {
+        void exitManualEditModeAfterFlush();
+      }}
+      onCancelDraft={() => {
+        cancelManualEditModeAndExit();
+      }}
+      onSaveDraft={() => {
+        void exitManualEditModeAfterFlush();
+      }}
+      onUndo={() => {
+        void undoManualEdit();
+      }}
+      onRedo={() => {
+        void redoManualEdit();
+      }}
+      floatingStyle={selectedManualEditTarget
+        ? {
+            ...manualEditFloatingPanelStyle(
+              selectedManualEditTarget,
+              overlayPreviewScale,
+              previewBodySize,
+            ),
+            ...(manualEditPanelPosition ?? {}),
+          }
+        : undefined}
+      onFloatingPositionChange={setManualEditPanelPosition}
+      onPickImage={async (pickedFile) => {
+        const result = await uploadProjectFiles(projectId, [pickedFile]);
+        const uploaded = result.uploaded[0];
+        if (!uploaded?.path) {
+          setManualEditError(result.error ?? t('manualEdit.uploadImageFailed'));
+          return null;
+        }
+        setManualEditError(null);
+        return toOwnerRelativePath(file.name, uploaded.path);
+      }}
+    />
+  ) : null;
+  const commentComposer = boardMode && activeCommentTarget ? (
+    <BoardComposerPopover
+      target={activeCommentTarget}
+      existing={visibleSideComments.find((comment) => comment.elementId === activeCommentTarget.elementId) ?? null}
+      draft={commentDraft}
+      notes={queuedBoardNotes}
+      onDraft={setCommentDraft}
+      onAddDraft={queueCurrentDraft}
+      onRemoveQueuedNote={(index) =>
+        setQueuedBoardNotes((current) => current.filter((_, currentIndex) => currentIndex !== index))
+      }
+      onClose={clearBoardComposer}
+      onSaveComment={() => { fireCommentPopoverClick('save_comment'); return savePersistentComment(); }}
+      onSendBatch={() => { fireCommentPopoverClick('send_to_chat'); return sendBoardBatch(); }}
+      onRemoveMember={(elementId) => {
+        setActiveCommentTarget((current) => {
+          const { next, shouldClose } = applyPodMemberRemoval(current, elementId);
+          if (shouldClose) clearBoardComposer();
+          return next;
+        });
+        setHoveredPodMemberId((current) => (current === elementId ? null : current));
+      }}
+      onHoverMember={setHoveredPodMemberId}
+      sending={sendingBoardBatch || streaming}
+      t={t}
+      scale={overlayPreviewScale}
+      docked={false}
+    />
+  ) : null;
+  const commentSidePanel = commentPanelOpen ? (
+    <CommentSidePanel
+      comments={visibleSideComments}
+      selectedIds={selectedSideCommentIds}
+      activeCommentId={activeSideCommentId}
+      collapsed={commentPortalHost ? false : commentSidePanelCollapsed}
+      onCollapsedChange={setCommentSidePanelCollapsed}
+      onClose={() => {
+        setCommentPanelOpen(false);
+        setCommentSidePanelCollapsed(false);
+        clearBoardComposer();
+      }}
+      onToggleSelect={(commentId) => {
+        setSelectedSideCommentIds((current) => {
+          const next = new Set(current);
+          if (next.has(commentId)) next.delete(commentId);
+          else next.add(commentId);
+          return next;
+        });
+      }}
+      onClearSelection={() => {
+        if (selectedSideCommentIds.size === 0) return;
+        if (!onRemovePreviewComment) {
+          setSelectedSideCommentIds(new Set());
+          return;
+        }
+        const selectedIds = new Set(selectedSideCommentIds);
+        const targets = visibleSideComments
+          .filter((comment) => selectedIds.has(comment.id))
+          .map((comment) => comment.id);
+        if (targets.length === 0) {
+          setSelectedSideCommentIds(new Set());
+          return;
+        }
+        void (async () => {
+          await Promise.allSettled(targets.map((id) => onRemovePreviewComment(id)));
+          setSelectedSideCommentIds(new Set());
+        })();
+      }}
+      onReply={(comment) => {
+        // Reply == edit on a flat-thread model: prefill the
+        // popover with the existing note so the user sees and
+        // mutates the current text. Save runs through the
+        // same upsert path; matching project/conv/file/element
+        // updates note in place rather than creating a new row.
+        const snapshot = liveSnapshotForComment(comment, liveCommentTargets) ?? {
+          filePath: comment.filePath,
+          elementId: comment.elementId,
+          selector: comment.selector,
+          label: comment.label,
+          text: comment.text,
+          position: comment.position,
+          htmlHint: comment.htmlHint,
+          style: comment.style,
+          selectionKind: comment.selectionKind ?? 'element',
+          memberCount: comment.memberCount,
+          podMembers: comment.podMembers,
+        };
+        setActiveCommentTarget(snapshot);
+        setHoveredCommentTarget(snapshot);
+        setActivePreviewCommentId(comment.id);
+        setCommentDraft(comment.note);
+        setQueuedBoardNotes([]);
+        setBoardMode(true);
+        setCommentCreateMode(true);
+        setCommentPanelOpen(true);
+        setCommentSidePanelCollapsed(false);
+      }}
+      onSendSelected={async () => {
+        if (!onSendBoardCommentAttachments) return;
+        const selected = visibleSideComments.filter(
+          (comment) => selectedSideCommentIds.has(comment.id),
+        );
+        if (selected.length === 0) return;
+        fireCommentPopoverClick('send_to_chat');
+        setSendingBoardBatch(true);
+        try {
+          await onSendBoardCommentAttachments(commentsToAttachments(selected));
+          setSelectedSideCommentIds(new Set());
+        } finally {
+          setSendingBoardBatch(false);
+        }
+      }}
+      onCreateComment={savePanelComment}
+      sending={sendingBoardBatch || streaming}
+      t={t}
+      composer={null}
+    />
+  ) : null;
 
   return (
     <div className="viewer html-viewer">
       <div className="viewer-toolbar">
         <div className="viewer-toolbar-left">
-          <button
-            type="button"
-            className="icon-only"
-            onClick={() => {
-              fireArtifactToolbarClick('reload');
-              setReloadKey((n) => n + 1);
-            }}
-            title={t('fileViewer.reload')}
-            aria-label={t('fileViewer.reloadAria')}
-          >
-            <Icon name="reload" size={14} />
-          </button>
-          <div className="viewer-mode-menu" ref={modeMenuRef}>
-            <button
-              type="button"
-              className="viewer-action viewer-mode-trigger"
-              aria-haspopup="menu"
-              aria-expanded={modeMenuOpen}
-              onClick={() => setModeMenuOpen((v) => !v)}
-            >
-              <span>{mode === 'preview' ? t('fileViewer.preview') : t('fileViewer.source')}</span>
-              <Icon name="chevron-down" size={11} />
-            </button>
-            {modeMenuOpen ? (
-              <div className="viewer-mode-popover" role="menu">
-                {([
-                  ['preview', t('fileViewer.preview')],
-                  ['source', t('fileViewer.source')],
-                ] as const).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`viewer-mode-menu-item${mode === id ? ' active' : ''}`}
-                    role="menuitem"
-                    onClick={() => {
-                      fireArtifactToolbarClick(id);
-                      selectMode(id);
-                    }}
-                  >
-                    <span>{label}</span>
-                    {mode === id ? <Icon name="check" size={13} /> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+          <div className="viewer-tabs" role="tablist" aria-label="View mode">
+            {([
+              ['preview', t('fileViewer.preview')],
+              ['source', t('fileViewer.source')],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                className={`viewer-tab ${mode === id ? 'active' : ''}`}
+                aria-selected={mode === id}
+                onClick={() => {
+                  fireArtifactToolbarClick(id);
+                  selectMode(id);
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
           {showPreviewToolbarControls ? (
             <>
@@ -5506,44 +6499,6 @@ function HtmlViewer({
                 onViewport={setPreviewViewport}
                 t={t}
               />
-              <span className="viewer-divider" aria-hidden />
-              <div className="zoom-menu" ref={zoomMenuRef}>
-                <button
-                  type="button"
-                  className="viewer-action zoom-trigger"
-                  aria-haspopup="menu"
-                  aria-expanded={zoomMenuOpen}
-                  onClick={() => {
-                    fireArtifactToolbarClick('zoom_level_dropdown');
-                    setZoomMenuOpen((v) => !v);
-                  }}
-                  style={{ minWidth: 64 }}
-                >
-                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
-                  <Icon name="chevron-down" size={11} />
-                </button>
-                {zoomMenuOpen ? (
-                  <div className="zoom-menu-popover" role="menu">
-                    {[50, 75, 100, 125, 150, 200].map((level) => (
-                      <button
-                        key={level}
-                        type="button"
-                        className={`zoom-menu-item${zoom === level ? ' active' : ''}`}
-                        role="menuitem"
-                        onClick={() => {
-                          setZoom(level);
-                          setZoomMenuOpen(false);
-                        }}
-                      >
-                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{level}%</span>
-                        {zoom === level ? (
-                          <Icon name="check" size={13} />
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
             </>
           ) : null}
           {showPreviewToolbarControls && effectiveDeck ? (
@@ -5586,214 +6541,138 @@ function HtmlViewer({
         <div className="viewer-toolbar-actions">
           {showPreviewToolbarControls ? (
             <>
-              <div className="palette-tweaks-anchor">
+              <div className="artifact-tool-menu-anchor">
                 <button
                   type="button"
-                  className={`viewer-action${selectedPalette || palettePopoverOpen ? ' active' : ''}`}
-                  data-testid="palette-tweaks-toggle"
-                  title="Tweaks"
-                  aria-haspopup="dialog"
-                  aria-expanded={palettePopoverOpen}
-                  onClick={() => {
-                    fireArtifactToolbarClick('tweaks');
-                    setPalettePopoverOpen((v) => !v);
-                  }}
+                  className={`viewer-action viewer-action-icon viewer-comment-toggle${boardMode && !commentCreateMode && boardTool === 'inspect' ? ' active' : ''}`}
+                  data-testid="board-mode-toggle"
+                  data-tooltip={t('fileViewer.comment')}
+                  title={t('fileViewer.comment')}
+                  aria-label={t('fileViewer.comment')}
+                  aria-pressed={boardMode && !commentCreateMode && boardTool === 'inspect'}
+                  onClick={activateCommentTool}
                 >
-                  <Icon name="tweaks" size={13} />
-                  <span>Tweaks</span>
-                  {selectedPalette ? (
-                    <span
-                      className="palette-tweaks-badge"
-                      aria-hidden
-                      style={{
-                        backgroundColor:
-                          selectedPalette === 'coral' ? '#ff5a3c' :
-                          selectedPalette === 'electric' ? '#7c3aed' :
-                          selectedPalette === 'acid-forest' ? '#16a34a' :
-                          selectedPalette === 'risograph' ? '#e11d48' :
-                          '#0a0a0a',
-                      }}
-                    />
-                  ) : null}
+                  <RemixIcon name="chat-new-line" size={15} />
+                  {boardMode && !commentCreateMode && boardTool === 'inspect' ? <span className="viewer-action-active-dot" aria-hidden /> : null}
                 </button>
-                <PaletteTweaks
-                  open={palettePopoverOpen}
-                  selected={selectedPalette}
-                  onChange={(nextPalette) => {
-                    // P0 ui_click area=tweaks_popover. status_before/after
-                    // reflect whether THIS variant was selected. Picking
-                    // "Original" (nextPalette === null) reads as turning
-                    // off the previously selected variant — record that
-                    // by passing the prior selection as variant_name.
-                    const targetVariant = nextPalette ?? selectedPalette;
-                    if (targetVariant) {
-                      const wasSelected = selectedPalette === targetVariant;
-                      const willBeSelected = nextPalette === targetVariant;
-                      trackTweaksPopoverClick(analytics.track, {
-                        page_name: 'artifact',
-                        area: 'tweaks_popover',
-                        element: 'variant_option',
-                        variant_name: targetVariant,
-                        artifact_id: anonymizeArtifactId({ projectId, fileName: file.name }),
-                        artifact_kind: artifactKindToTracking({ fileKind: file.kind ?? null }),
-                        status_before: wasSelected ? 'on' : 'off',
-                        status_after: willBeSelected ? 'on' : 'off',
-                      });
-                    }
-                    setSelectedPalette(nextPalette);
-                  }}
-                  onPreview={setPreviewPalette}
-                  onClose={() => setPalettePopoverOpen(false)}
-                />
               </div>
               <button
-                className={`viewer-action${drawOverlayOpen ? ' active' : ''}`}
+                className={`viewer-action viewer-action-icon${manualEditMode ? ' active' : ''}`}
+                type="button"
+                data-testid="manual-edit-mode-toggle"
+                data-tooltip="Edit"
+                title="Edit"
+                aria-label="Edit"
+                aria-pressed={manualEditMode}
+                onClick={activateManualEditTool}
+              >
+                <RemixIcon name="edit-line" size={15} />
+              </button>
+              <button
+                className={`viewer-action viewer-action-icon${drawOverlayOpen && drawOverlayIntent === 'draw' ? ' active' : ''}`}
                 type="button"
                 data-testid="draw-overlay-toggle"
-                title={t('fileViewer.draw')}
-                aria-pressed={drawOverlayOpen}
-                onClick={() => {
-                  fireArtifactToolbarClick('draw');
-                  const next = !drawOverlayOpen;
-                  if (!next) {
-                    setDrawOverlayOpen(false);
-                    return;
-                  }
-                  const activateDraw = () => {
-                    setBoardMode(false);
-                    clearBoardComposer();
-                    setInspectMode(false);
-                    setDrawOverlayMode('draw');
-                    setMode('preview');
-                    setDrawOverlayOpen(true);
-                  };
-                  if (manualEditMode) {
-                    void exitManualEditModeAfterFlush().then((ok) => {
-                      if (ok) activateDraw();
-                    });
-                    return;
-                  }
-                  activateDraw();
-                }}
+                data-tooltip="Draw"
+                title="Draw"
+                aria-label="Draw"
+                aria-pressed={drawOverlayOpen && drawOverlayIntent === 'draw'}
+                onClick={activateDrawTool}
               >
-                <Icon name="draw" size={13} />
-                <span>{t('fileViewer.draw')}</span>
+                <RemixIcon name="mark-pen-line" size={15} />
               </button>
+              <button
+                className={`viewer-action viewer-action-icon${drawOverlayOpen && drawOverlayIntent === 'screenshot' ? ' active' : ''}`}
+                type="button"
+                data-testid="screenshot-capture-toggle"
+                data-tooltip="Screenshot"
+                title="Screenshot"
+                aria-label="Screenshot"
+                aria-pressed={drawOverlayOpen && drawOverlayIntent === 'screenshot'}
+                onClick={activateScreenshotTool}
+              >
+                <RemixIcon name="screenshot-2-line" size={15} />
+              </button>
+              <span className="viewer-toolbar-tool-divider" aria-hidden />
+              <button
+                type="button"
+                className={`viewer-action viewer-comment-count-trigger viewer-comment-toggle${boardMode && commentCreateMode ? ' active' : ''}`}
+                data-testid="comment-panel-toggle"
+                data-tooltip={t('chat.tabComments')}
+                title={t('chat.tabComments')}
+                aria-label={`${t('chat.tabComments')} (${visibleSideComments.length})`}
+                aria-pressed={boardMode && commentCreateMode}
+                onClick={activateCommentCreateTool}
+              >
+                <RemixIcon name="message-3-line" size={15} />
+                <span className="viewer-comment-count" aria-hidden>{visibleSideComments.length}</span>
+                {boardMode && commentCreateMode ? <span className="viewer-action-active-dot" aria-hidden /> : null}
+              </button>
+              {source !== null && mode === 'preview' ? (
+                <div className="zoom-menu viewer-toolbar-zoom" ref={zoomMenuRef}>
+                  <button
+                    type="button"
+                    className="viewer-action zoom-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded={zoomMenuOpen}
+                    onClick={() => {
+                      fireArtifactToolbarClick('zoom_level_dropdown');
+                      setZoomMenuOpen((v) => !v);
+                    }}
+                  >
+                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>{zoom}%</span>
+                  </button>
+                  {zoomMenuOpen ? (
+                    <div className="zoom-menu-popover" role="menu">
+                      {[50, 75, 100, 125, 150, 200].map((level) => (
+                        <button
+                          key={level}
+                          type="button"
+                          className={`zoom-menu-item${zoom === level ? ' active' : ''}`}
+                          role="menuitem"
+                          onClick={() => {
+                            setZoom(level);
+                            setZoomMenuOpen(false);
+                          }}
+                        >
+                          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{level}%</span>
+                          {zoom === level ? (
+                            <Icon name="check" size={13} />
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           ) : null}
-          <button
-            type="button"
-            className={`viewer-action viewer-comment-toggle${boardMode ? ' active' : ''}`}
-            data-testid="board-mode-toggle"
-            title={t('fileViewer.comment')}
-            aria-pressed={boardMode}
-            onClick={() => {
-              fireArtifactToolbarClick('comment');
-              capturePreviewScrollPosition();
-              if (boardMode) {
-                setBoardMode(false);
-                clearBoardComposer();
-                return;
-              }
-              const activateComment = () => {
-                clearBoardComposer();
-                setInspectMode(false);
-                setDrawOverlayOpen(false);
-                setMode('preview');
-                activateBoard(boardTool);
-              };
-              if (manualEditMode) {
-                void exitManualEditModeAfterFlush().then((ok) => {
-                  if (ok) activateComment();
-                });
-                return;
-              }
-              activateComment();
-            }}
-          >
-            <Icon name="comment" size={13} />
-            <span>{t('fileViewer.comment')}</span>
-          </button>
-          {boardMode ? (
+          {!showPreviewToolbarControls ? (
             <>
               <button
-                className={`viewer-action${boardTool === 'inspect' ? ' active' : ''}`}
                 type="button"
-                data-testid="comment-mode-toggle"
-                title="Pick one element"
-                aria-label="Picker"
-                aria-pressed={boardTool === 'inspect'}
-                onClick={() => activateBoard('inspect')}
+                className={`viewer-action viewer-comment-toggle${boardMode && !commentCreateMode && boardTool === 'inspect' ? ' active' : ''}`}
+                data-testid="board-mode-toggle"
+                title={t('fileViewer.comment')}
+                aria-label={t('fileViewer.comment')}
+                aria-pressed={boardMode && !commentCreateMode && boardTool === 'inspect'}
+                onClick={activateCommentTool}
               >
-                <Icon name="edit" size={13} />
-                <span>Picker</span>
+                <RemixIcon name="chat-new-line" size={14} />
+                <span>{t('fileViewer.comment')}</span>
               </button>
               <button
-                className={`viewer-action${boardTool === 'pod' ? ' active' : ''}`}
                 type="button"
-                title="Draw a pod selection"
-                aria-label="Pods"
-                aria-pressed={boardTool === 'pod'}
-                onClick={() => {
-                  fireArtifactToolbarClick('pods');
-                  activateBoard('pod');
-                }}
+                className={`viewer-action viewer-comment-toggle${boardMode && commentCreateMode ? ' active' : ''}`}
+                data-testid="comment-panel-toggle"
+                title={t('chat.tabComments')}
+                aria-pressed={boardMode && commentCreateMode}
+                onClick={activateCommentCreateTool}
               >
-                <Icon name="draw" size={13} />
-                <span>Pods</span>
+                <RemixIcon name="message-3-line" size={14} />
+                <span>{t('chat.tabComments')}</span>
               </button>
             </>
           ) : null}
-          <button
-            className={`viewer-action${inspectMode ? ' active' : ''}`}
-            type="button"
-            data-testid="inspect-mode-toggle"
-            title="Inspect"
-            aria-pressed={inspectMode}
-            onClick={() => {
-              fireArtifactToolbarClick('inspect');
-              setInspectMode((v) => {
-                const next = !v;
-                if (next) {
-                  setBoardMode(false);
-                  clearBoardComposer();
-                  setManualEditMode(false);
-                  setDrawOverlayOpen(false);
-                  setOpenHintBox(true);
-                  setMode('preview');
-                }
-                return next;
-              });
-            }}
-          >
-            <Icon name="tweaks" size={13} />
-            <span>Inspect</span>
-          </button>
-          <button
-            className={`viewer-action${manualEditMode ? ' active' : ''}`}
-            type="button"
-            data-testid="manual-edit-mode-toggle"
-            title={t('fileViewer.edit')}
-            aria-pressed={manualEditMode}
-            onClick={() => {
-              fireArtifactToolbarClick('edit');
-              capturePreviewScrollPosition();
-              if (!manualEditMode) {
-                setBoardMode(false);
-                clearBoardComposer();
-                setInspectMode(false);
-                setDrawOverlayOpen(false);
-                setMode('preview');
-                setManualEditViewportWidth(previewBodyRef.current?.clientWidth ?? null);
-                setManualEditMode(true);
-                return;
-              }
-              void exitManualEditModeAfterFlush();
-            }}
-          >
-            <Icon name="edit" size={13} />
-            <span>{t('fileViewer.edit')}</span>
-          </button>
         </div>
       </div>
       {((filePrimaryActions: ReactNode) => (
@@ -5802,30 +6681,31 @@ function HtmlViewer({
           {showPresent ? (
             <div className="present-wrap chrome-present-wrap">
               <button
-                className="chrome-action chrome-action-secondary present-trigger"
+                className="chrome-action chrome-action-secondary chrome-action-icon present-trigger"
                 aria-haspopup="menu"
                 aria-expanded={presentMenuOpen}
+                aria-label={t('fileViewer.present')}
+                data-tooltip={t('fileViewer.present')}
+                title={t('fileViewer.present')}
                 onClick={() => {
                   fireArtifactHeaderClick('present_dropdown');
                   setPresentMenuOpen((v) => !v);
                 }}
               >
-                <Icon name="present" size={13} />
-                <span>{t('fileViewer.present')}</span>
-                <Icon name="chevron-down" size={11} />
+                <RemixIcon name="slideshow-3-line" size={15} />
               </button>
               {presentMenuOpen ? (
                 <div className="present-menu" role="menu">
                   <button role="menuitem" onClick={() => { firePresentPopoverClick('in_this_tab'); presentInThisTab(); }}>
-                    <span className="present-icon"><Icon name="eye" size={13} /></span>{' '}
+                    <span className="present-icon"><RemixIcon name="eye-line" size={14} /></span>{' '}
                     {t('fileViewer.presentInTab')}
                   </button>
                   <button role="menuitem" onClick={() => { firePresentPopoverClick('fullscreen'); presentFullscreen(); }}>
-                    <span className="present-icon"><Icon name="play" size={13} /></span>{' '}
+                    <span className="present-icon"><RemixIcon name="play-line" size={14} /></span>{' '}
                     {t('fileViewer.presentFullscreen')}
                   </button>
                   <button role="menuitem" onClick={() => { firePresentPopoverClick('new_tab'); presentNewTab(); }}>
-                    <span className="present-icon"><Icon name="share" size={13} /></span>{' '}
+                    <span className="present-icon"><RemixIcon name="share-forward-line" size={14} /></span>{' '}
                     {t('fileViewer.presentNewTab')}
                   </button>
                 </div>
@@ -5835,23 +6715,77 @@ function HtmlViewer({
           {canShare ? (
             <div className="share-menu chrome-share-menu" ref={shareRef}>
               <button
-                className="chrome-action chrome-action-primary"
+                type="button"
+                className={
+                  'chrome-action chrome-action-primary chrome-action-export' +
+                  (exportReadyNudge ? ' export-ready-nudge' : '')
+                }
                 aria-haspopup="menu"
                 aria-expanded={shareMenuOpen}
-                onClick={() => {
-                  fireArtifactHeaderClick('share_dropdown');
-                  setShareMenuOpen((v) => !v);
-                }}
+                onClick={openExportMenu}
               >
-                <Icon name="share" size={13} />
+                <Icon name="download" size={13} />
                 <span>{t('fileViewer.shareLabel')}</span>
                 <Icon name="chevron-down" size={11} />
               </button>
               {shareMenuOpen ? (
                 <div className="share-menu-popover" role="menu">
+                  {deployCopyLinks.length > 0 ? (
+                    <>
+                      <div className="share-menu-section-label" role="presentation">
+                        {t('fileViewer.shareMenuShareLink')}
+                      </div>
+                      {deployCopyLinks.map((item) => (
+                        <button
+                          key={`copy-${item.providerId}`}
+                          type="button"
+                          className="share-menu-item"
+                          role="menuitem"
+                          onClick={() => {
+                            setShareMenuOpen(false);
+                            void copyDeployLink(item.url);
+                          }}
+                        >
+                          <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
+                          <span>{copyDeployMenuLabel(item.providerLabel, item.url)}</span>
+                        </button>
+                      ))}
+                      <div className="share-menu-divider" />
+                    </>
+                  ) : null}
+                  <div className="share-menu-section-label" role="presentation">
+                    {t('fileViewer.shareMenuPublishOnline')}
+                  </div>
+                  {DEPLOY_PROVIDER_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className="share-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        const format =
+                          option.id === 'cloudflare-pages'
+                            ? 'cloudflare_pages'
+                            : option.id === 'vercel-self'
+                              ? 'vercel'
+                              : 'vercel';
+                        fireShareExport(format, () => openDeployModal(option.id));
+                      }}
+                    >
+                      <span className="share-menu-icon"><RemixIcon name="upload-cloud-line" size={15} /></span>
+                      <span>{deployActionLabelFor(option.id)}</span>
+                    </button>
+                  ))}
+                  <div className="share-menu-divider" />
+                  <div className="share-menu-section-label" role="presentation">
+                    {t('fileViewer.shareMenuDownload')}
+                  </div>
+                  <div className="share-menu-subsection-label" role="presentation">
+                    {t('fileViewer.shareMenuPresentation')}
+                  </div>
                   <button
                     type="button"
-                    className="share-menu-item"
+                    className="share-menu-item share-menu-subitem"
                     role="menuitem"
                     onClick={() => {
                       setShareMenuOpen(false);
@@ -5864,7 +6798,7 @@ function HtmlViewer({
                       }));
                     }}
                   >
-                    <span className="share-menu-icon"><Icon name="file" size={14} /></span>
+                    <span className="share-menu-icon"><RemixIcon name="file-line" size={15} /></span>
                     <span>
                       {effectiveDeck
                         ? t('fileViewer.exportPdfAllSlides')
@@ -5873,7 +6807,7 @@ function HtmlViewer({
                   </button>
                   <button
                     type="button"
-                    className="share-menu-item"
+                    className="share-menu-item share-menu-subitem"
                     role="menuitem"
                     disabled={!canPptx}
                     title={
@@ -5890,61 +6824,13 @@ function HtmlViewer({
                       });
                     }}
                   >
-                    <span className="share-menu-icon"><Icon name="present" size={14} /></span>
+                    <span className="share-menu-icon"><RemixIcon name="file-ppt-line" size={15} /></span>
                     <span>{t('fileViewer.exportPptx') + '…'}</span>
-                  </button>
-                  <div className="share-menu-divider" />
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setShareMenuOpen(false);
-                      fireShareExport('zip', () => exportProjectAsZip({
-                        projectId,
-                        filePath: file.name,
-                        fallbackHtml: source ?? '',
-                        fallbackTitle: exportTitle,
-                      }));
-                    }}
-                  >
-                    <span className="share-menu-icon"><Icon name="download" size={14} /></span>
-                    <span>{t('fileViewer.exportZip')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setShareMenuOpen(false);
-                      fireShareExport('html', () => exportAsHtml(source ?? '', exportTitle));
-                    }}
-                  >
-                    <span className="share-menu-icon"><Icon name="file-code" size={14} /></span>
-                    <span>{t('fileViewer.exportHtml')}</span>
-                  </button>
-                  {/* Export as Markdown — pass-through download of the
-                      artifact source with a `.md` extension. No conversion
-                      runs; the file body is identical to the Source view.
-                      Useful for piping the artifact into markdown-aware
-                      tooling (LLM context windows, vault apps). See
-                      issue #279. */}
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setShareMenuOpen(false);
-                      fireShareExport('markdown', () => exportAsMd(source ?? '', exportTitle));
-                    }}
-                  >
-                    <span className="share-menu-icon"><Icon name="file" size={14} /></span>
-                    <span>{t('fileViewer.exportMd')}</span>
                   </button>
                   {!useUrlLoadPreview ? (
                     <button
                       type="button"
-                      className="share-menu-item"
+                      className="share-menu-item share-menu-subitem"
                       role="menuitem"
                       onClick={async () => {
                         setShareMenuOpen(false);
@@ -5964,11 +6850,64 @@ function HtmlViewer({
                         }
                       }}
                     >
-                      <span className="share-menu-icon"><Icon name="image" size={14} /></span>
+                      <span className="share-menu-icon"><RemixIcon name="image-line" size={15} /></span>
                       <span>{t('fileViewer.exportImage')}</span>
                     </button>
                   ) : null}
+                  <div className="share-menu-subsection-label" role="presentation">
+                    {t('fileViewer.shareMenuSourceFiles')}
+                  </div>
+                  <button
+                    type="button"
+                    className="share-menu-item share-menu-subitem"
+                    role="menuitem"
+                    onClick={() => {
+                      setShareMenuOpen(false);
+                      fireShareExport('zip', () => exportProjectAsZip({
+                        projectId,
+                        filePath: file.name,
+                        fallbackHtml: source ?? '',
+                        fallbackTitle: exportTitle,
+                      }));
+                    }}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-zip-line" size={15} /></span>
+                    <span>{t('fileViewer.exportZip')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="share-menu-item share-menu-subitem"
+                    role="menuitem"
+                    onClick={() => {
+                      setShareMenuOpen(false);
+                      fireShareExport('html', () => exportAsHtml(source ?? '', exportTitle));
+                    }}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-code-line" size={15} /></span>
+                    <span>{t('fileViewer.exportHtml')}</span>
+                  </button>
+                  {/* Export as Markdown — pass-through download of the
+                      artifact source with a `.md` extension. No conversion
+                      runs; the file body is identical to the Source view.
+                      Useful for piping the artifact into markdown-aware
+                      tooling (LLM context windows, vault apps). See
+                      issue #279. */}
+                  <button
+                    type="button"
+                    className="share-menu-item share-menu-subitem"
+                    role="menuitem"
+                    onClick={() => {
+                      setShareMenuOpen(false);
+                      fireShareExport('markdown', () => exportAsMd(source ?? '', exportTitle));
+                    }}
+                  >
+                    <span className="share-menu-icon"><RemixIcon name="file-line" size={15} /></span>
+                    <span>{t('fileViewer.exportMd')}</span>
+                  </button>
                   <div className="share-menu-divider" />
+                  <div className="share-menu-section-label" role="presentation">
+                    {t('fileViewer.shareMenuSave')}
+                  </div>
                   <button
                     type="button"
                     className="share-menu-item"
@@ -5980,7 +6919,7 @@ function HtmlViewer({
                       });
                     }}
                   >
-                    <span className="share-menu-icon"><Icon name="copy" size={14} /></span>
+                    <span className="share-menu-icon"><RemixIcon name="file-copy-line" size={15} /></span>
                     <span>
                       {savingTemplate
                         ? t('fileViewer.savingTemplate')
@@ -5989,45 +6928,6 @@ function HtmlViewer({
                           : t('fileViewer.saveAsTemplate')}
                     </span>
                   </button>
-                  <div className="share-menu-divider" />
-                  {DEPLOY_PROVIDER_OPTIONS.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className="share-menu-item"
-                      role="menuitem"
-                      onClick={() => {
-                        const format =
-                          option.id === 'cloudflare-pages'
-                            ? 'cloudflare_pages'
-                            : option.id === 'vercel-self'
-                              ? 'vercel'
-                              : 'vercel';
-                        fireShareExport(format, () => openDeployModal(option.id));
-                      }}
-                    >
-                      <span className="share-menu-icon"><Icon name="upload" size={14} /></span>
-                      <span>{deployActionLabelFor(option.id)}</span>
-                    </button>
-                  ))}
-                  {deployCopyLinks.length > 0 ? (
-                    <div className="share-menu-divider" />
-                  ) : null}
-                  {deployCopyLinks.map((item) => (
-                    <button
-                      key={`copy-${item.providerId}`}
-                      type="button"
-                      className="share-menu-item"
-                      role="menuitem"
-                      onClick={() => {
-                        setShareMenuOpen(false);
-                        void copyDeployLink(item.url);
-                      }}
-                    >
-                      <span className="share-menu-icon"><Icon name="copy" size={14} /></span>
-                      <span>{copyDeployMenuLabel(item.providerLabel, item.url)}</span>
-                    </button>
-                  ))}
                 </div>
               ) : null}
             </div>
@@ -6038,54 +6938,15 @@ function HtmlViewer({
           <div className="viewer-empty">{t('fileViewer.loading')}</div>
         ) : mode === 'preview' ? (
           <div
-            className={`${manualEditMode ? 'manual-edit-workspace' : 'comment-preview-layer'} preview-viewport preview-viewport-${previewViewport}`}
+            className={manualEditMode
+              ? `manual-edit-workspace preview-viewport preview-viewport-${previewViewport}`
+              : [
+                  'comment-preview-layer',
+                  `preview-viewport preview-viewport-${previewViewport}`,
+                ].filter(Boolean).join(' ')}
             style={previewViewportStyle(previewViewport, previewScale, previewBodySize)}
           >
-            {manualEditMode ? (
-              <ManualEditPanel
-                targets={manualEditTargets}
-                selectedTarget={selectedManualEditTarget}
-                draft={manualEditDraft}
-                history={manualEditHistory}
-                error={manualEditError}
-                canUndo={manualEditHistory.length > 0}
-                canRedo={manualEditUndone.length > 0}
-                busy={manualEditSaving}
-                pageStylesEnabled={manualEditPageStylesEnabled}
-                onSelectTarget={selectManualEditTarget}
-                onDraftChange={setManualEditDraft}
-                onStyleChange={(id, styles, label) => {
-                  void handleManualEditStyleChange(id, styles, label);
-                }}
-                onInvalidStyle={cancelManualEditPendingStyles}
-                onApplyPatch={(patch, label) => {
-                  void applyManualEdit(patch, label);
-                }}
-                onError={setManualEditError}
-                onClearSelection={() => {
-                  void clearManualEditTargetSelection();
-                }}
-                onCancelDraft={() => {
-                  if (selectedManualEditTarget) selectManualEditTarget(selectedManualEditTarget);
-                }}
-                onUndo={() => {
-                  void undoManualEdit();
-                }}
-                onRedo={() => {
-                  void redoManualEdit();
-                }}
-                onPickImage={async (pickedFile) => {
-                  const result = await uploadProjectFiles(projectId, [pickedFile]);
-                  const uploaded = result.uploaded[0];
-                  if (!uploaded?.path) {
-                    setManualEditError(result.error ?? t('manualEdit.uploadImageFailed'));
-                    return null;
-                  }
-                  setManualEditError(null);
-                  return toOwnerRelativePath(file.name, uploaded.path);
-                }}
-              />
-            ) : null}
+            {manualEditPanel}
             <div className={manualEditMode ? 'manual-edit-canvas' : 'comment-frame-clip'}>
               <div
                 style={
@@ -6096,12 +6957,12 @@ function HtmlViewer({
               >
                 <PreviewDrawOverlay
                   active={drawOverlayOpen}
+                  captureViewport={drawOverlayIntent === 'screenshot'}
                   onActiveChange={setDrawOverlayOpen}
-                  onModeChange={setDrawOverlayMode}
-                  captureTarget={drawClickSelectionMode ? activeCommentTarget : null}
+                  captureTarget={null}
                   filePath={file.name}
                   sendDisabled={streaming}
-                  sendDisabledReason="当前正有任务在执行"
+                  sendDisabledReason={t('chat.annotationSendDisabledReason')}
                 >
                   <div className="artifact-preview-transport-stack">
                     <iframe
@@ -6140,12 +7001,42 @@ function HtmlViewer({
                       onLoad={() => {
                         const frame = srcDocPreviewIframeRef.current;
                         if (!useUrlLoadPreview) iframeRef.current = frame;
-                        // Belt-and-suspenders for the ready handshake: if the
-                        // postMessage racing the parent's listener registration
-                        // ever loses, the load event still tells us the shell
-                        // script ran to completion.
+                        // Reset the activation dedupe exactly ONCE per
+                        // freshly mounted iframe DOM node, never on the
+                        // subsequent load events that the same node
+                        // emits during normal srcDoc rendering.
+                        //
+                        // The iframe's load event fires twice for one
+                        // successful activation: once when the lazy
+                        // transport shell HTML loads, and again when
+                        // our own document.open/write/close inside the
+                        // shell finishes. PR #2699 reset the dedupe on
+                        // every load so that switching
+                        // preview -> source -> preview (which remounts
+                        // this iframe as a fresh DOM node) would
+                        // re-activate the new shell. But resetting on
+                        // every load also re-activated on the SECOND
+                        // load of a non-remounted frame, which
+                        // re-triggered document.open/write/close, which
+                        // re-fired the load event, ad infinitum. The
+                        // dedupe ref oscillated between null and the
+                        // current srcDoc thousands of times per render
+                        // and each iteration restarted every CSS
+                        // animation from its `from` keyframe. Designs
+                        // using `animation-fill-mode: both` with
+                        // `from { opacity: 0 }` stayed at opacity 0
+                        // forever and the preview read as blank.
+                        // That is issue #2361.
+                        //
+                        // Tracking the last frame we reset for lets us
+                        // keep PR #2699's "remount after Source toggle"
+                        // fix while breaking the loop on plain renders.
+                        if (frame && srcDocFrameDedupeResetForRef.current !== frame) {
+                          srcDocFrameDedupeResetForRef.current = frame;
+                          activatedSrcDocTransportHtmlRef.current = null;
+                        }
                         if (useLazySrcDocTransport) setSrcDocShellReady(true);
-                        activateSrcDocTransport(frame);
+                        activateLoadedSrcDocTransport(frame);
                         dcViewportRestoreAtRef.current = Date.now();
                         frame?.contentWindow?.postMessage({
                           type: '__dc_set_viewport',
@@ -6160,17 +7051,22 @@ function HtmlViewer({
                 </PreviewDrawOverlay>
               </div>
             </div>
-            {(boardMode || drawClickSelectionMode) ? (
+            {boardMode ? (
               <CommentPreviewOverlays
-                comments={boardMode ? visibleSideComments : []}
+                comments={commentCreateMode ? visibleSideComments : []}
                 liveTargets={liveCommentTargets}
                 hoveredTarget={hoveredCommentTarget}
                 hoveredPodMemberId={hoveredPodMemberId}
                 activeTarget={activeCommentTarget}
                 boardTool={boardTool}
+                showActivePin={commentCreateMode}
                 scale={overlayPreviewScale}
                 strokePoints={strokePoints}
                 onOpenComment={(comment, snapshot) => {
+                  setCommentPanelOpen(true);
+                  setCommentSidePanelCollapsed(false);
+                  setCommentCreateMode(true);
+                  setBoardMode(true);
                   setActiveCommentTarget(snapshot);
                   setHoveredCommentTarget(snapshot);
                   setActivePreviewCommentId(comment.id);
@@ -6178,6 +7074,15 @@ function HtmlViewer({
                   setQueuedBoardNotes([]);
                 }}
               />
+            ) : null}
+            {exportToast ? (
+              <div className="comment-toast-anchor">
+                <Toast
+                  message={exportToast}
+                  ttlMs={2200}
+                  onDismiss={() => setExportToast(null)}
+                />
+              </div>
             ) : null}
             {commentSavedToast ? (
               <div className="comment-toast-anchor">
@@ -6197,100 +7102,28 @@ function HtmlViewer({
                 />
               </div>
             ) : null}
-            {boardMode && activeCommentTarget ? (
-              <BoardComposerPopover
-                target={activeCommentTarget}
-                existing={visibleSideComments.find((comment) => comment.elementId === activeCommentTarget.elementId) ?? null}
-                draft={commentDraft}
-                notes={queuedBoardNotes}
-                onDraft={setCommentDraft}
-                onAddDraft={queueCurrentDraft}
-                onRemoveQueuedNote={(index) =>
-                  setQueuedBoardNotes((current) => current.filter((_, currentIndex) => currentIndex !== index))
-                }
-                onClose={clearBoardComposer}
-                onSaveComment={savePersistentComment}
-                onSendBatch={sendBoardBatch}
-                onRemove={async (commentId) => {
-                  if (!onRemovePreviewComment) return;
-                  await onRemovePreviewComment(commentId);
-                  clearBoardComposer();
-                }}
-                onRemoveMember={(elementId) => {
-                  setActiveCommentTarget((current) => {
-                    const { next, shouldClose } = applyPodMemberRemoval(current, elementId);
-                    if (shouldClose) clearBoardComposer();
-                    return next;
-                  });
-                  setHoveredPodMemberId((current) => (current === elementId ? null : current));
-                }}
-                onHoverMember={setHoveredPodMemberId}
-                sending={sendingBoardBatch || streaming}
-                t={t}
-              />
+            {screenshotToast ? (
+              <div className="screenshot-toast-anchor">
+                <div className="screenshot-toast" role="status" aria-live="polite">
+                  <RemixIcon name="checkbox-circle-line" size={16} />
+                  <span>{screenshotToast}</span>
+                  <button
+                    type="button"
+                    aria-label={t('common.close')}
+                    onClick={() => setScreenshotToast(null)}
+                  >
+                    <RemixIcon name="close-line" size={16} />
+                  </button>
+                </div>
+              </div>
             ) : null}
-            {boardMode ? (
-              <CommentSidePanel
-                comments={visibleSideComments}
-                selectedIds={selectedSideCommentIds}
-                collapsed={commentSidePanelCollapsed}
-                onCollapsedChange={setCommentSidePanelCollapsed}
-                onClose={() => {
-                  setBoardMode(false);
-                  setCommentSidePanelCollapsed(false);
-                  clearBoardComposer();
-                }}
-                onToggleSelect={(commentId) => {
-                  setSelectedSideCommentIds((current) => {
-                    const next = new Set(current);
-                    if (next.has(commentId)) next.delete(commentId);
-                    else next.add(commentId);
-                    return next;
-                  });
-                }}
-                onClearSelection={() => setSelectedSideCommentIds(new Set())}
-                onReply={(comment) => {
-                  // Reply == edit on a flat-thread model: prefill the
-                  // popover with the existing note so the user sees and
-                  // mutates the current text. Save runs through the
-                  // same upsert path; matching project/conv/file/element
-                  // updates note in place rather than creating a new row.
-                  const snapshot = liveSnapshotForComment(comment, liveCommentTargets) ?? {
-                    filePath: comment.filePath,
-                    elementId: comment.elementId,
-                    selector: comment.selector,
-                    label: comment.label,
-                    text: comment.text,
-                    position: comment.position,
-                    htmlHint: comment.htmlHint,
-                    selectionKind: comment.selectionKind ?? 'element',
-                    memberCount: comment.memberCount,
-                    podMembers: comment.podMembers,
-                  };
-                  setActiveCommentTarget(snapshot);
-                  setHoveredCommentTarget(snapshot);
-                  setActivePreviewCommentId(comment.id);
-                  setCommentDraft(comment.note);
-                  setQueuedBoardNotes([]);
-                }}
-                onSendSelected={async () => {
-                  if (!onSendBoardCommentAttachments) return;
-                  const selected = visibleSideComments.filter(
-                    (comment) => selectedSideCommentIds.has(comment.id),
-                  );
-                  if (selected.length === 0) return;
-                  setSendingBoardBatch(true);
-                  try {
-                    await onSendBoardCommentAttachments(commentsToAttachments(selected));
-                    setSelectedSideCommentIds(new Set());
-                  } finally {
-                    setSendingBoardBatch(false);
-                  }
-                }}
-                sending={sendingBoardBatch || streaming}
-                t={t}
-              />
+            {commentComposer}
+            {boardMode && !commentCreateMode && hoveredCommentTarget && (!activeCommentTarget || commentPortalHost) ? (
+              <AnnotationHoverPopover target={hoveredCommentTarget} scale={overlayPreviewScale} />
             ) : null}
+            {commentPortalHost && commentSidePanel
+              ? createPortal(commentSidePanel, commentPortalHost)
+              : commentSidePanel}
             {inspectMode && activeInspectTarget ? (
               <InspectPanel
                 target={activeInspectTarget}
@@ -6316,7 +7149,13 @@ function HtmlViewer({
                 onSaveToSource={() => {
                   void saveInspectToSource();
                 }}
-                onClose={() => setActiveInspectTarget(null)}
+                onClose={() => {
+                  setActiveInspectTarget(null);
+                  if (boardMode && boardTool === 'inspect') {
+                    setActiveCommentTarget(null);
+                    setHoveredCommentTarget(null);
+                  }
+                }}
                 saving={savingInspect}
                 savedAt={inspectSavedAt}
                 error={inspectError}
@@ -6340,15 +7179,15 @@ function HtmlViewer({
                 and bails — clicks no-op silently. The static copy made
                 this look broken; the empty-state copy explains what's
                 missing and how to fix it. Mirrored across Inspect and
-                Picker because the failure surface is identical.
+                element-pick annotation mode because the failure surface is identical.
             */}
-            {(inspectMode || (boardMode && boardTool === 'inspect'))
+            {inspectMode
               && openHintBox
               && !activeInspectTarget
               && !activeCommentTarget ? (
               <div
                 className={`inspect-empty-hint-container${
-                  boardMode && !commentSidePanelCollapsed ? ' comment-side-panel-open' : ''
+                  commentPanelOpen && !commentSidePanelCollapsed ? ' comment-side-panel-open' : ''
                 }`}
                 data-testid="inspect-empty-hint-container"
               >
@@ -6357,18 +7196,16 @@ function HtmlViewer({
                     className="inspect-empty-hint"
                     data-testid="inspect-empty-hint-no-targets"
                   >
-                    This artifact has no <code>data-od-id</code>{' '}
-                    annotations yet — ask the agent to add them to the
-                    sections you want to{' '}
-                    {inspectMode ? 'inspect' : 'comment on'}.
+                    {inspectMode
+                      ? t('chat.inspect.noEditableTargets')
+                      : t('chat.inspect.noCommentTargets')}
                   </div>
                 ) : (
                   <div
                     className="inspect-empty-hint"
                     data-testid="inspect-empty-hint"
                   >
-                    Click any element with <code>data-od-id</code> to{' '}
-                    {inspectMode ? 'tune its style' : 'leave a comment'}.
+                    {inspectMode ? t('chat.inspect.editHint') : t('chat.inspect.commentHint')}
                   </div>
                 )}
                 <button
@@ -6626,6 +7463,14 @@ function HtmlViewer({
               )}
               <p className="hint">{t(deployProvider.previewHintKey)}</p>
               {deployError ? <p className="deploy-error">{deployError}</p> : null}
+              {!deployError
+                && deployPhase === 'idle'
+                && deployResultCards.length > 0
+                && deployResultState(activeDeployment?.status) === 'ready' ? (
+                <p className="hint" role="status">
+                  {t('fileViewer.deployLinkReady')} · {t('fileViewer.deployResultLabel')}
+                </p>
+              ) : null}
               {deployResultCards.length > 0 ? (
                 <div className={`deploy-result-block ${deployResultState(activeDeployment?.status)}`}>
                   <div className="deploy-result-summary">
@@ -6727,6 +7572,16 @@ function HtmlViewer({
             </div>
           </div>
         </div>
+      ) : null}
+      {deploySavedToast ? (
+        <Toast
+          message={deploySavedToast.message}
+          details={deploySavedToast.details}
+          tone="success"
+          placement="top"
+          ttlMs={3600}
+          onDismiss={() => setDeploySavedToast(null)}
+        />
       ) : null}
     </div>
   );

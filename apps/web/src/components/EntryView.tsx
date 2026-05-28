@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import type { DesignSystemGenerateSnapshot } from './DesignSystemFlow';
 import type {
   ConnectorDetail,
   ConnectorStatusResponse,
@@ -29,7 +30,7 @@ import type {
 // connector lifecycle, exported helpers) stay close to a no-op here.
 import { EntryShell } from './EntryShell';
 import type { IntegrationTab } from './IntegrationsView';
-import type { CreateInput } from './NewProjectPanel';
+import type { CreateInput, ImportClaudeDesignOutcome } from './NewProjectPanel';
 import {
   fetchConnectors,
   fetchConnectorStatuses,
@@ -94,13 +95,15 @@ interface Props {
       autoSendFirstMessage?: boolean;
       pendingFiles?: File[];
     },
-  ) => void;
+  ) => Promise<boolean> | boolean | void;
   onCreatePluginShareProject: (
     pluginId: string,
     action: PluginShareAction,
     locale?: string,
   ) => Promise<PluginShareProjectOutcome>;
-  onImportClaudeDesign: (file: File) => Promise<void> | void;
+  onImportClaudeDesign: (
+    file: File,
+  ) => Promise<ImportClaudeDesignOutcome | void> | ImportClaudeDesignOutcome | void;
   onImportFolder?: (baseDir: string) => Promise<void> | void;
   onImportFolderResponse?: (response: OpenDesignHostProjectImportSuccess) => Promise<void> | void;
   onOpenProject: (id: string) => void;
@@ -109,7 +112,18 @@ interface Props {
   onRenameProject: (id: string, name: string) => void;
   onChangeDefaultDesignSystem: (id: string) => void;
   onCreateDesignSystem?: () => void;
-  renderDesignSystemCreation?: (onBack: () => void) => ReactNode;
+  renderDesignSystemCreation?: (
+    onBack: () => void,
+    hooks?: {
+      onBeforeGenerate?: (snapshot: DesignSystemGenerateSnapshot) => void;
+      onGenerateSettled?: (
+        snapshot: DesignSystemGenerateSnapshot,
+        outcome:
+          | { result: 'success' }
+          | { result: 'failed'; errorCode: string },
+      ) => void;
+    },
+  ) => ReactNode;
   onOpenDesignSystem?: (id: string) => void;
   onDesignSystemsRefresh?: () => Promise<void> | void;
   onPersistComposioKey: (composio: AppConfig['composio']) => Promise<void> | void;
@@ -330,6 +344,7 @@ export function EntryView({
       designSystems={designSystems}
       projects={projects}
       templates={templates}
+      onDeleteTemplate={onDeleteTemplate}
       promptTemplates={promptTemplates}
       defaultDesignSystemId={defaultDesignSystemId}
       connectors={connectors}

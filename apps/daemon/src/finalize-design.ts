@@ -41,6 +41,7 @@ import {
   validateProjectPath,
 } from './projects.js';
 import { exportProjectTranscript } from './transcript-export.js';
+import { googleGenerateContentUrl } from './google-models.js';
 
 // Re-export the request/response types so existing daemon-internal
 // imports (and the route handler) keep their referenced names. The
@@ -65,7 +66,7 @@ const DEFAULT_MAX_TOKENS = 16000;
 const INPUT_BODY_CAP_BYTES = 384 * 1024;
 const LOCK_FILENAME = '.finalize.lock';
 const OUTPUT_FILENAME = 'DESIGN.md';
-const DEFAULT_TIMEOUT_MS = 120_000;
+export const DEFAULT_TIMEOUT_MS = 120_000;
 const FINALIZE_PROVIDER_PROTOCOLS = new Set<FinalizeProviderProtocol>([
   'anthropic',
   'openai',
@@ -595,9 +596,8 @@ function buildFinalizeProviderRequest(params: FinalizeProviderCallParams): Final
   }
 
   if (params.protocol === 'google') {
-    const clean = params.baseUrl.replace(/\/+$/, '');
     return {
-      url: `${clean}/v1beta/models/${encodeURIComponent(params.model)}:generateContent`,
+      url: googleGenerateContentUrl(params.baseUrl, params.model),
       headers: {
         'content-type': 'application/json',
         'x-goog-api-key': params.apiKey,

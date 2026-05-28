@@ -11,6 +11,7 @@
  */
 import type { AgentEvent, ChatCommentAttachment, ChatMessage } from '../types';
 import type {
+  ChatAnalyticsHints,
   ChatRunCreateResponse,
   ChatRunListResponse,
   ChatRunStatus,
@@ -42,6 +43,7 @@ function detectClientType(): 'desktop' | 'web' | 'unknown' {
   return 'unknown';
 }
 import { parseSseFrame } from './sse';
+import { trackRunProgress, trackRunStart, trackRunTerminal } from '../observability/stuck-run';
 
 const MAX_TRANSCRIPT_MESSAGE_CHARS = 12_000;
 const LARGE_TOOL_RESULT_CHARS = 8_000;
@@ -181,10 +183,16 @@ export interface DaemonStreamOptions {
   reasoning?: string | null;
   research?: ResearchOptions;
   context?: RunContextSelection;
+  locale?: string;
   initialLastEventId?: string | null;
   onRunCreated?: (runId: string) => void;
   onRunStatus?: (status: ChatRunStatus) => void;
   onRunEventId?: (eventId: string) => void;
+  // v2 analytics context propagated to run_created / run_finished.
+  // Optional; the daemon only consumes these to shape PostHog props
+  // (page_name / area / entry_from / DS context). Behavior never
+  // depends on them.
+  analyticsHints?: ChatAnalyticsHints;
 }
 
 export interface DaemonReattachOptions {
@@ -217,6 +225,31 @@ function daemonSseErrorMessage(data: SseErrorPayload): string {
   return `${message}\n${detail}`;
 }
 
+function daemonSseError(data: SseErrorPayload): Error {
+  const error = new Error(daemonSseErrorMessage(data)) as Error & {
+    code?: string;
+    details?: unknown;
+  };
+  if (data.error?.code) error.code = data.error.code;
+  if (data.error?.details !== undefined) error.details = data.error.details;
+  return error;
+}
+
+function shouldSuppressLifecycleExitFallback(
+  agentId: string | undefined,
+  exitCode: number | null,
+  exitSignal: string | null,
+  stderrTail: string,
+): boolean {
+  if (exitCode !== 130 || exitSignal) return false;
+  if (agentId === 'amr') return true;
+  const normalizedStderr = stderrTail.toLowerCase();
+  return (
+    normalizedStderr.includes('opencode server listening') ||
+    normalizedStderr.includes('opencode_server_password')
+  );
+}
+
 export async function streamViaDaemon({
   agentId,
   history,
@@ -236,10 +269,12 @@ export async function streamViaDaemon({
   reasoning,
   research,
   context,
+  locale,
   initialLastEventId,
   onRunCreated,
   onRunStatus,
   onRunEventId,
+  analyticsHints,
 }: DaemonStreamOptions): Promise<void> {
   const emitRunStatus = (status: ChatRunStatus) => {
     onRunStatus?.(status);
@@ -264,8 +299,10 @@ export async function streamViaDaemon({
     commentAttachments: commentAttachments ?? [],
     model: model ?? null,
     reasoning: reasoning ?? null,
+    locale,
     ...(context ? { context } : {}),
     ...(research ? { research } : {}),
+    ...(analyticsHints ? { analyticsHints } : {}),
   };
   const body = JSON.stringify(request);
 
@@ -293,9 +330,19 @@ export async function streamViaDaemon({
     const created = (await createResp.json()) as ChatRunCreateResponse;
     const runId = created.runId;
     onRunCreated?.(runId);
+    // Start the stuck-run watchdog. trackRunProgress is called inside the
+    // SSE consumer below on every event; trackRunTerminal fires when the
+    // stream resolves to a terminal state (or errors out).
+    trackRunStart(runId, {
+      agent_id: agentId,
+      project_id: projectId ?? undefined,
+      conversation_id: conversationId ?? undefined,
+      client_type: detectClientType(),
+    });
     notifyRunsChanged();
     emitRunStatus('queued');
     await consumeDaemonRun({
+      agentId,
       runId,
       signal,
       cancelSignal,
@@ -355,6 +402,110 @@ export async function submitChatRunToolResult(
   }
 }
 
+export interface VelaUser {
+  id: string;
+  email: string;
+  name?: string;
+  image?: string | null;
+  plan?: string;
+}
+
+export interface VelaLoginStatus {
+  loggedIn: boolean;
+  loginInFlight?: boolean;
+  profile: string;
+  user: VelaUser | null;
+  configPath: string;
+}
+
+// AMR (vela) login surfaces three thin endpoints on the daemon:
+//   GET  /api/integrations/vela/status   — read ~/.amr/config.json projection
+//   POST /api/integrations/vela/login    — spawn `vela login` (vela opens browser itself)
+//   POST /api/integrations/vela/login/cancel — terminate a still-pending login
+//   POST /api/integrations/vela/logout   — clear ~/.amr auth and Settings-backed AMR auth env
+// The Settings UI polls /status after kicking off /login to detect completion.
+export async function fetchVelaLoginStatus(): Promise<VelaLoginStatus | null> {
+  try {
+    const resp = await fetch('/api/integrations/vela/status');
+    if (!resp.ok) return null;
+    return (await resp.json()) as VelaLoginStatus;
+  } catch {
+    return null;
+  }
+}
+
+export interface StartVelaLoginResult {
+  ok: boolean;
+  status: number;
+  pid?: number;
+  alreadyRunning?: boolean;
+  error?: string;
+}
+
+export async function startVelaLogin(): Promise<StartVelaLoginResult> {
+  try {
+    const resp = await fetch('/api/integrations/vela/login', { method: 'POST' });
+    if (resp.ok) {
+      const body = (await resp.json()) as { pid?: number };
+      return { ok: true, status: resp.status, pid: body.pid };
+    }
+    const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+    return {
+      ok: false,
+      status: resp.status,
+      alreadyRunning: resp.status === 409,
+      error: body?.error ?? '',
+    };
+  } catch (err) {
+    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function cancelVelaLogin(): Promise<{ ok: boolean; canceled?: boolean }> {
+  try {
+    const resp = await fetch('/api/integrations/vela/login/cancel', { method: 'POST' });
+    if (!resp.ok) return { ok: false };
+    const body = (await resp.json().catch(() => null)) as { canceled?: boolean } | null;
+    return { ok: true, canceled: body?.canceled };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function velaLogout(): Promise<{ ok: boolean }> {
+  try {
+    const resp = await fetch('/api/integrations/vela/logout', { method: 'POST' });
+    return { ok: resp.ok };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// Forwards the user's assistant-turn rating to the daemon so it can emit
+// a Langfuse `score-create`. Fire-and-forget — failures are not surfaced
+// to the UI (the rating is already persisted on the message itself via
+// the PUT /messages/:id round-trip).
+export async function reportChatRunFeedback(req: {
+  runId: string;
+  projectId: string;
+  conversationId: string;
+  assistantMessageId: string;
+  rating: 'positive' | 'negative';
+  reasonCodes: string[];
+  hasCustomReason: boolean;
+  customReason: string;
+}): Promise<void> {
+  try {
+    await fetch(`/api/runs/${encodeURIComponent(req.runId)}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
 export async function listActiveChatRuns(
   projectId: string,
   conversationId: string,
@@ -382,6 +533,7 @@ export async function listProjectRuns(): Promise<ChatRunStatusResponse[]> {
 }
 
 async function consumeDaemonRun({
+  agentId,
   runId,
   signal,
   cancelSignal,
@@ -389,7 +541,7 @@ async function consumeDaemonRun({
   initialLastEventId,
   onRunStatus,
   onRunEventId,
-}: DaemonReattachOptions): Promise<void> {
+}: DaemonReattachOptions & { agentId?: string }): Promise<void> {
   let acc = '';
   let stderrBuf = '';
   let exitCode: number | null = null;
@@ -456,10 +608,12 @@ async function consumeDaemonRun({
           if (!parsed) continue;
           if (parsed.kind === 'comment') {
             sawStreamProgress = true;
+            trackRunProgress(runId);
             continue;
           }
           if (parsed.kind !== 'event') continue;
           sawStreamProgress = true;
+          trackRunProgress(runId);
           if (parsed.id) {
             lastEventId = parsed.id;
             onRunEventId?.(parsed.id);
@@ -505,7 +659,7 @@ async function consumeDaemonRun({
           if (event.event === 'error') {
             onRunStatus?.('failed');
             const data = event.data as SseErrorPayload;
-            handlers.onError(new Error(daemonSseErrorMessage(data)));
+            handlers.onError(daemonSseError(data));
             return;
           }
 
@@ -564,6 +718,10 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
+      if (shouldSuppressLifecycleExitFallback(agentId, exitCode, exitSignal, stderrBuf)) {
+        handlers.onDone(acc);
+        return;
+      }
       const tail = stderrBuf.trim().slice(-400);
       handlers.onError(
         new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}${tail ? `\n${tail}` : ''}`),
@@ -573,6 +731,11 @@ async function consumeDaemonRun({
     handlers.onDone(acc);
   } finally {
     cancelSignal?.removeEventListener('abort', cancelRun);
+    // Settle the stuck-run watchdog with whatever terminal state we
+    // resolved. If the watchdog was never armed (reattach paths that
+    // hit the daemon for an already-finished run), trackRunTerminal
+    // is a no-op for unknown runIds.
+    trackRunTerminal(runId, endStatus ?? (canceled ? 'canceled' : 'unknown'));
   }
 }
 
