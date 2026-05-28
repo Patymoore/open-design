@@ -33,25 +33,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6.0.2
         with:
+          fetch-depth: 0
           lfs: true
 
-      - name: Verify preinstalled toolchain
+      - name: Build beta candidate
         shell: cmd
         run: |
           @echo on
-          where.exe git || exit /b 1
-          where.exe git-lfs || exit /b 1
-          if not exist "C:\Users\runner\.cargo\bin\fnm.exe" exit /b 1
-          if not exist "C:\Users\runner\.cargo\bin\cargo.exe" exit /b 1
-          if not exist "C:\Program Files (x86)\NSIS\makensis.exe" exit /b 1
-          git --version
-          git lfs version
-          "C:\Users\runner\.cargo\bin\fnm.exe" exec --using=24 -- node --version
-          "C:\Users\runner\.cargo\bin\fnm.exe" exec --using=24 -- pnpm.cmd --version
-          "C:\Users\runner\.cargo\bin\cargo.exe" --version
-          "C:\Program Files (x86)\NSIS\makensis.exe" /VERSION
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\build-beta.ps1 -Platform win -Lane self-hosted -Namespace release-beta-win
 
-      - name: Confirm workflow boundary
+      - name: Publish local summary
+        if: ${{ always() }}
         shell: cmd
         run: |
           @echo on
@@ -59,3 +51,4 @@ jobs:
           echo runner_temp=%RUNNER_TEMP%
           echo runner_tool_cache=%RUNNER_TOOL_CACHE%
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "if ($env:GITHUB_WORKSPACE -like 'C:\Users\runner\Projects\*') { throw 'GITHUB_WORKSPACE must not point at the operator Projects directory' }"
+          if exist "C:\.tmp\runner\od-beta\win\summary.md" type "C:\.tmp\runner\od-beta\win\summary.md" >> "%GITHUB_STEP_SUMMARY%"
