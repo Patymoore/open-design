@@ -1035,9 +1035,14 @@ body.sub-page {
 }
 .sub-footer-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1fr 1fr 1fr;
-  gap: 48px;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr;
+  gap: 40px;
   margin-bottom: 36px;
+}
+@media (max-width: 1080px) {
+  /* At medium widths, drop to brand + 2x2 grid of columns so neither
+     column collapses to a single line of unrecognizable text. */
+  .sub-footer-grid { grid-template-columns: 1.6fr repeat(2, 1fr); }
 }
 .sub-footer-brand .brand {
   text-decoration: none;
