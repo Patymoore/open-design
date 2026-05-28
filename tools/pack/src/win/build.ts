@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { ToolPackCache } from "../cache.js";
@@ -55,6 +55,8 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   const cache = new ToolPackCache(config.roots.cacheRoot);
   const timings: WinPackTiming[] = [];
   const segments: WinPackTiming[] = [];
+  const hasNsisTarget = shouldBuildWinNsisInstaller(config.to);
+  const hasZipTarget = shouldBuildWinPortableZip(config.to);
   const runPhase = async <T>(phase: string, task: () => Promise<T>): Promise<T> => {
     const startedAt = Date.now();
     try {
@@ -64,6 +66,16 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
     }
   };
 
+  await runPhase("target-artifact-cleanup", async () => {
+    if (!hasNsisTarget) {
+      await rm(paths.setupPath, { force: true });
+      await rm(paths.installerPayloadPath, { force: true });
+      await rm(paths.latestYmlPath, { force: true });
+    }
+    if (!hasZipTarget) {
+      await rm(paths.setupZipPath, { force: true });
+    }
+  });
   await runPhase("workspace-build", async () => {
     await ensureWinWorkspaceBuild(config, cache);
   });
@@ -90,8 +102,6 @@ export async function packWin(config: ToolPackConfig): Promise<WinPackResult> {
   });
   const builtApp = await readBuiltAppManifest(paths);
   const sizeReport = await runPhase("size-report", async () => collectWinSizeReport(config, paths, builtApp));
-  const hasNsisTarget = shouldBuildWinNsisInstaller(config.to);
-  const hasZipTarget = shouldBuildWinPortableZip(config.to);
   return {
     blockmapPath: (await pathExists(paths.blockmapPath)) ? paths.blockmapPath : null,
     installerPath: hasNsisTarget && await pathExists(paths.setupPath) ? paths.setupPath : null,
