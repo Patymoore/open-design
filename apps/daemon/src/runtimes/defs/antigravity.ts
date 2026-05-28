@@ -109,7 +109,10 @@ export const antigravityAgentDef = {
     runtimeContext = {},
   ) => {
     if (options.model && options.model !== DEFAULT_MODEL_OPTION.id) {
-      writeAntigravityModelSelection(options.model);
+      writeAntigravityModelSelection(
+        options.model,
+        runtimeContext.antigravitySettingsPath,
+      );
     }
     const args: string[] = ['chat'];
     // Always opt into `--log-file` when the daemon supplied a path so

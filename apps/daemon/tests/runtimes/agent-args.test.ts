@@ -464,11 +464,18 @@ test('antigravity pipes prompt via stdin via chat subcommand', () => {
 
   // No `--model` flag exists upstream, so buildArgs argv must stay the
   // same regardless of which label the user picks.
-  const withModel = antigravity.buildArgs('hi', [], [], {
-    model: 'Gemini 3.1 Pro (High)',
-  }, {});
-  assert.equal(withModel.includes('--model'), false);
-  assert.deepEqual(withModel, ['chat', '-']);
+  // Pass a temp antigravitySettingsPath so buildArgs does not touch the
+  // real ~/.gemini/antigravity-cli/settings.json during a unit test run.
+  const settingsDir = mkdtempSync(join(tmpdir(), 'od-agy-argv-'));
+  try {
+    const withModel = antigravity.buildArgs('hi', [], [], {
+      model: 'Gemini 3.1 Pro (High)',
+    }, { antigravitySettingsPath: join(settingsDir, 'settings.json') });
+    assert.equal(withModel.includes('--model'), false);
+    assert.deepEqual(withModel, ['chat', '-']);
+  } finally {
+    rmSync(settingsDir, { recursive: true, force: true });
+  }
 
   // Argv must NOT carry `-c` even on follow-up turns. We tested resume
   // mode and found agy's `-c` activates an internal agentic loop (tool
