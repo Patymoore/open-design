@@ -677,9 +677,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     }
 
     const sse = createSseResponse(res);
-    sse.send('start', { model });
-    const proxyDispatcher = proxyDispatcherRequestInit();
+    let proxyDispatcher: ReturnType<typeof proxyDispatcherRequestInit> | null = null;
     try {
+      proxyDispatcher = proxyDispatcherRequestInit();
+      sse.send('start', { model });
       const response = await fetch(url, {
         ...proxyDispatcher.requestInit,
         method: 'POST',
@@ -731,7 +732,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     } finally {
-      await proxyDispatcher.close();
+      await proxyDispatcher?.close();
     }
   });
 
@@ -781,9 +782,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     };
 
     const sse = createSseResponse(res);
-    sse.send('start', { model });
-    const proxyDispatcher = proxyDispatcherRequestInit();
+    let proxyDispatcher: ReturnType<typeof proxyDispatcherRequestInit> | null = null;
     try {
+      proxyDispatcher = proxyDispatcherRequestInit();
+      sse.send('start', { model });
       const response = await fetch(url, {
         ...proxyDispatcher.requestInit,
         method: 'POST',
@@ -833,7 +835,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     } finally {
-      await proxyDispatcher.close();
+      await proxyDispatcher?.close();
     }
   });
 
@@ -905,9 +907,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     };
 
     const sse = createSseResponse(res);
-    sse.send('start', { model });
-    const proxyDispatcher = proxyDispatcherRequestInit();
+    let proxyDispatcher: ReturnType<typeof proxyDispatcherRequestInit> | null = null;
     try {
+      proxyDispatcher = proxyDispatcherRequestInit();
+      sse.send('start', { model });
       const requestInit = {
         ...proxyDispatcher.requestInit,
         method: 'POST',
@@ -979,7 +982,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     } finally {
-      await proxyDispatcher.close();
+      await proxyDispatcher?.close();
     }
   });
 
@@ -1029,9 +1032,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     }
 
     const sse = createSseResponse(res);
-    sse.send('start', { model });
-    const proxyDispatcher = proxyDispatcherRequestInit();
+    let proxyDispatcher: ReturnType<typeof proxyDispatcherRequestInit> | null = null;
     try {
+      proxyDispatcher = proxyDispatcherRequestInit();
+      sse.send('start', { model });
       const response = await fetch(url, {
         ...proxyDispatcher.requestInit,
         method: 'POST',
@@ -1082,7 +1086,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     } finally {
-      await proxyDispatcher.close();
+      await proxyDispatcher?.close();
     }
   });
 
@@ -1120,9 +1124,10 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     }
 
     const sse = createSseResponse(res);
-    sse.send('start', { model });
-    const proxyDispatcher = proxyDispatcherRequestInit();
+    let proxyDispatcher: ReturnType<typeof proxyDispatcherRequestInit> | null = null;
     try {
+      proxyDispatcher = proxyDispatcherRequestInit();
+      sse.send('start', { model });
       const response = await fetch(url, {
         ...proxyDispatcher.requestInit,
         method: 'POST',
@@ -1161,7 +1166,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     } finally {
-      await proxyDispatcher.close();
+      await proxyDispatcher?.close();
     }
   });
 
@@ -1257,7 +1262,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       ? byokImageModel
       : undefined;
 
-    const proxyDispatcher = proxyDispatcherRequestInit();
+    let proxyDispatcher: ReturnType<typeof proxyDispatcherRequestInit> | null = null;
 
     const toolCtx: BYOKToolContext = {
       projectRoot: ctx.paths.PROJECT_ROOT,
@@ -1265,7 +1270,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       projectId,
       upstreamApiKey: apiKey,
       upstreamBaseUrl: effectiveBaseUrl,
-      requestInit: proxyDispatcher.requestInit,
+      requestInit: {},
       // Spread-conditional because tsconfig's exactOptionalPropertyTypes
       // forbids `field: undefined` on an optional slot. The byok-tools
       // executor reads `ctx.defaultImageModel` with `isSenseAudioImageModel`
@@ -1294,7 +1299,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
         tool_choice: 'auto',
       };
       const response = await fetch(url, {
-        ...proxyDispatcher.requestInit,
+        ...toolCtx.requestInit,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1438,7 +1443,6 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     };
 
     const sse = createSseResponse(res);
-    sse.send('start', { model });
     // SenseAudio's gateway issues one API key that works for both
     // /v1/chat/completions and the image / TTS surfaces. Mirror the
     // BYOK key into media-config so the CLI agent path (`od media
@@ -1465,6 +1469,9 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       });
 
     try {
+      proxyDispatcher = proxyDispatcherRequestInit();
+      toolCtx.requestInit = proxyDispatcher.requestInit;
+      sse.send('start', { model });
       for (let loop = 0; loop < MAX_BYOK_TOOL_LOOPS; loop++) {
         const turn = await runSenseAudioTurn(sse, workingMessages);
         if (turn.kind === 'error') return sse.end();
@@ -1525,7 +1532,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
       sendProxyError(sse, err.message, { code: 'INTERNAL_ERROR' });
       sse.end();
     } finally {
-      await proxyDispatcher.close();
+      await proxyDispatcher?.close();
     }
   });
 
