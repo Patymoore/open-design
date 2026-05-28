@@ -6,9 +6,14 @@ import path from 'node:path';
 
 import {
   closeDatabase,
+  getLocalUserId,
+  getCurrentWorkspaceId,
   getRoutine,
+  insertWorkspace,
   insertProject,
   insertRoutineRun,
+  listWorkspaceActivity,
+  setCurrentWorkspaceId,
   openDatabase,
 } from '../src/db.js';
 import { registerRoutineRoutes } from '../src/routine-routes.js';
@@ -186,6 +191,338 @@ describe('routine routes', () => {
     }
   });
 
+  it('binds create-each-run routines to the current workspace', async () => {
+    const { app, db } = buildApp();
+    const userId = getLocalUserId(db);
+    const workspace = insertWorkspace(db, {
+      name: 'Routine workspace',
+      userId,
+    });
+    if (!workspace) throw new Error('workspace fixture missing');
+    setCurrentWorkspaceId(db, userId, workspace.id);
+
+    const { server, port } = await listen(app);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Team digest',
+          prompt: 'Summarize team activity.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const json = await res.json() as {
+        routine: { id: string; workspaceId: string; createdByUserId?: string; ownedByUserId?: string };
+      };
+      expect(json.routine.workspaceId).toBe(workspace.id);
+      expect(json.routine.createdByUserId).toBe(userId);
+      expect(json.routine.ownedByUserId).toBe(userId);
+      expect(getRoutine(db, json.routine.id)).toMatchObject({
+        workspaceId: workspace.id,
+        createdByUserId: userId,
+        ownedByUserId: userId,
+      });
+      expect(listWorkspaceActivity(db, workspace.id)).toContainEqual(expect.objectContaining({
+        action: 'routine.created',
+        targetId: json.routine.id,
+        metadata: expect.objectContaining({
+          routineName: 'Team digest',
+          createdByUserId: userId,
+          ownedByUserId: userId,
+          targetMode: 'create_each_run',
+        }),
+      }));
+      const ownerTransferUserId = `routine-owner-${Date.now()}`;
+      db.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspace.id, ownerTransferUserId, Date.now());
+      const transferResp = await fetch(`http://127.0.0.1:${port}/api/routines/${json.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ownedByUserId: ownerTransferUserId }),
+      });
+      expect(transferResp.status).toBe(200);
+      const transferJson = await transferResp.json() as { routine: { ownedByUserId?: string } };
+      expect(transferJson.routine.ownedByUserId).toBe(ownerTransferUserId);
+      expect(getRoutine(db, json.routine.id)).toMatchObject({
+        createdByUserId: userId,
+        ownedByUserId: ownerTransferUserId,
+      });
+      expect(listWorkspaceActivity(db, workspace.id)).toContainEqual(expect.objectContaining({
+        action: 'routine.owner_transferred',
+        targetId: json.routine.id,
+        metadata: expect.objectContaining({
+          routineName: 'Team digest',
+          fromUserId: userId,
+          toUserId: ownerTransferUserId,
+        }),
+      }));
+
+      const currentList = await fetch(`http://127.0.0.1:${port}/api/routines`);
+      const currentBody = await currentList.json() as { routines: Array<{ id: string }> };
+      expect(currentBody.routines.some((routine) => routine.id === json.routine.id)).toBe(true);
+
+      const personalList = await fetch(`http://127.0.0.1:${port}/api/routines?workspaceId=local-personal`);
+      const personalBody = await personalList.json() as { routines: Array<{ id: string }> };
+      expect(personalBody.routines.some((routine) => routine.id === json.routine.id)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('falls back from a stale current workspace before creating routines', async () => {
+    const { app, db } = buildApp();
+    const userId = getLocalUserId(db);
+    setCurrentWorkspaceId(db, userId, 'missing-workspace');
+
+    const { server, port } = await listen(app);
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Fallback digest',
+          prompt: 'Summarize fallback activity.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const json = await res.json() as { routine: { id: string; workspaceId: string } };
+      expect(json.routine.workspaceId).toBe('local-personal');
+      expect(getRoutine(db, json.routine.id)?.workspaceId).toBe('local-personal');
+      expect(getCurrentWorkspaceId(db, userId)).toBe('local-personal');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('rejects retargeting a routine to a project outside the current user workspaces', async () => {
+    const { app, db } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const ownedWorkspace = insertWorkspace(db, {
+      name: 'Owned routine workspace',
+      userId: ownerUserId,
+    });
+    const privateWorkspace = insertWorkspace(db, {
+      name: 'Private routine workspace',
+      userId: ownerUserId,
+    });
+    if (!ownedWorkspace || !privateWorkspace) throw new Error('workspace fixture missing');
+    const now = Date.now();
+    insertProject(db, {
+      id: 'private-project',
+      workspaceId: privateWorkspace.id,
+      name: 'Private target',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    db.prepare(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+       VALUES (?, ?, 'admin', ?)`,
+    ).run(ownedWorkspace.id, 'routine-admin', now);
+    db.prepare(
+      `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+    ).run('routine-admin');
+
+    const { server, port } = await listen(app);
+    try {
+      const create = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: ownedWorkspace.id,
+          name: 'Team digest',
+          prompt: 'Summarize activity.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(create.status).toBe(201);
+      const createBody = await create.json() as { routine: { id: string } };
+
+      const patch = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          target: { mode: 'reuse', projectId: 'private-project' },
+        }),
+      });
+      expect(patch.status).toBe(403);
+      const patchBody = await patch.json() as { error?: string };
+      expect(patchBody.error).toMatch(/membership required/);
+      expect(getRoutine(db, createBody.routine.id)?.projectId).toBeNull();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('requires workspace membership before reading a routine by id', async () => {
+    const { app, db } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const workspace = insertWorkspace(db, {
+      name: 'Private routine details workspace',
+      userId: ownerUserId,
+    });
+    if (!workspace) throw new Error('workspace fixture missing');
+    setCurrentWorkspaceId(db, ownerUserId, workspace.id);
+
+    const { server, port } = await listen(app);
+    try {
+      const create = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Private team digest',
+          prompt: 'Summarize private activity.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(create.status).toBe(201);
+      const createBody = await create.json() as { routine: { id: string } };
+
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run('routine-outsider');
+
+      const read = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`);
+      expect(read.status).toBe(403);
+      const readBody = await read.json() as { error?: string };
+      expect(readBody.error).toMatch(/membership required/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('lets workspace members read routines but not mutate workspace automations', async () => {
+    const { app, db, runNow, unschedule } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const workspace = insertWorkspace(db, {
+      name: 'Member readable routines',
+      userId: ownerUserId,
+    });
+    if (!workspace) throw new Error('workspace fixture missing');
+    setCurrentWorkspaceId(db, ownerUserId, workspace.id);
+
+    const { server, port } = await listen(app);
+    try {
+      const create = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Team digest',
+          prompt: 'Summarize team activity.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(create.status).toBe(201);
+      const createBody = await create.json() as { routine: { id: string } };
+
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspace.id, 'routine-member', now);
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run('routine-member');
+
+      const list = await fetch(`http://127.0.0.1:${port}/api/routines?workspaceId=${workspace.id}`);
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { routines: Array<{ id: string }> };
+      expect(listBody.routines.some((routine) => routine.id === createBody.routine.id)).toBe(true);
+
+      const read = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`);
+      expect(read.status).toBe(200);
+
+      const createAsMember = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          name: 'Member digest',
+          prompt: 'Summarize member activity.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(createAsMember.status).toBe(403);
+
+      const invalidCreateAsMember = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: workspace.id,
+          name: 'Invalid member digest',
+          prompt: 'Summarize member activity.',
+          schedule: { kind: 'hourly', minute: 75 },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(invalidCreateAsMember.status).toBe(403);
+
+      const patchAsMember = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(patchAsMember.status).toBe(403);
+
+      const runAsMember = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}/run`, {
+        method: 'POST',
+      });
+      expect(runAsMember.status).toBe(403);
+      expect(runNow).not.toHaveBeenCalled();
+
+      const deleteAsMember = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'DELETE',
+      });
+      expect(deleteAsMember.status).toBe(403);
+      expect(unschedule).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns 403 instead of 500 when listing an inaccessible workspace routines view', async () => {
+    const { app, db } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const privateWorkspace = insertWorkspace(db, {
+      name: 'Private routine list workspace',
+      userId: ownerUserId,
+    });
+    if (!privateWorkspace) throw new Error('workspace fixture missing');
+    db.prepare(
+      `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+    ).run('routine-outsider');
+
+    const { server, port } = await listen(app);
+    try {
+      const read = await fetch(`http://127.0.0.1:${port}/api/routines?workspaceId=${privateWorkspace.id}`);
+      expect(read.status).toBe(403);
+      const readBody = await read.json() as { error?: string };
+      expect(readBody.error).toMatch(/membership required/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('patches enabled state and target mode, then reschedules the routine', async () => {
     const { app, db, rescheduleOne } = buildApp();
     const now = Date.now();
@@ -227,8 +564,212 @@ describe('routine routes', () => {
       expect(patched.routine.enabled).toBe(false);
       expect(patched.routine.target).toEqual({ mode: 'reuse', projectId: 'proj-1' });
       expect(rescheduleOne).toHaveBeenLastCalledWith(created.routine.id);
+      expect(listWorkspaceActivity(db, 'local-personal')).toContainEqual(expect.objectContaining({
+        action: 'routine.updated',
+        targetId: created.routine.id,
+        metadata: expect.objectContaining({
+          routineName: 'Daily digest',
+          enabled: false,
+          targetMode: 'reuse',
+          projectId: 'proj-1',
+        }),
+      }));
     } finally {
       await new Promise<void>((resolve) => createServer.close(() => resolve()));
+    }
+  });
+
+  it('keeps reuse-mode routines in the same workspace as their target project', async () => {
+    const { app, db } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const sourceWorkspace = insertWorkspace(db, {
+      name: 'Source workspace',
+      userId: ownerUserId,
+    });
+    const destinationWorkspace = insertWorkspace(db, {
+      name: 'Destination workspace',
+      userId: ownerUserId,
+    });
+    if (!sourceWorkspace || !destinationWorkspace) throw new Error('workspace fixture missing');
+    const now = Date.now();
+    insertProject(db, {
+      id: 'source-project',
+      workspaceId: sourceWorkspace.id,
+      name: 'Source project',
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const { server, port } = await listen(app);
+    try {
+      const create = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Reuse source project',
+          prompt: 'Summarize source project.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'reuse', projectId: 'source-project' },
+          enabled: true,
+        }),
+      });
+      expect(create.status).toBe(201);
+      const createBody = await create.json() as { routine: { id: string; workspaceId: string } };
+      expect(createBody.routine.workspaceId).toBe(sourceWorkspace.id);
+
+      const patch = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: destinationWorkspace.id,
+        }),
+      });
+
+      expect(patch.status).toBe(400);
+      const patchBody = await patch.json() as { error?: string };
+      expect(patchBody.error).toMatch(/reuse target project belongs to another workspace/);
+      const stored = getRoutine(db, createBody.routine.id);
+      expect(stored?.workspaceId).toBe(sourceWorkspace.id);
+      expect(stored?.projectId).toBe('source-project');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('transfers routine ownership to the mover when the old owner is not in the target workspace', async () => {
+    const { app, db } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const sourceWorkspace = insertWorkspace(db, {
+      name: 'Routine owner source',
+      userId: ownerUserId,
+    });
+    const targetWorkspace = insertWorkspace(db, {
+      name: 'Routine owner target',
+      userId: ownerUserId,
+    });
+    if (!sourceWorkspace || !targetWorkspace) throw new Error('workspace fixture missing');
+    setCurrentWorkspaceId(db, ownerUserId, sourceWorkspace.id);
+    const sourceOnlyOwnerId = `routine-source-owner-${Date.now()}`;
+    db.prepare(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+       VALUES (?, ?, 'member', ?)`,
+    ).run(sourceWorkspace.id, sourceOnlyOwnerId, Date.now());
+
+    const { server, port } = await listen(app);
+    try {
+      const create = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Move routine owner',
+          prompt: 'Summarize ownership movement.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(create.status).toBe(201);
+      const createBody = await create.json() as { routine: { id: string; workspaceId: string } };
+      expect(createBody.routine.workspaceId).toBe(sourceWorkspace.id);
+
+      const transfer = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ownedByUserId: sourceOnlyOwnerId }),
+      });
+      expect(transfer.status).toBe(200);
+      const transferBody = await transfer.json() as { routine: { ownedByUserId?: string } };
+      expect(transferBody.routine.ownedByUserId).toBe(sourceOnlyOwnerId);
+
+      const move = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: targetWorkspace.id }),
+      });
+      expect(move.status).toBe(200);
+      const moveBody = await move.json() as { routine: { workspaceId: string; ownedByUserId?: string } };
+      expect(moveBody.routine.workspaceId).toBe(targetWorkspace.id);
+      expect(moveBody.routine.ownedByUserId).toBe(ownerUserId);
+      expect(getRoutine(db, createBody.routine.id)).toMatchObject({
+        workspaceId: targetWorkspace.id,
+        ownedByUserId: ownerUserId,
+      });
+      expect(listWorkspaceActivity(db, targetWorkspace.id)).toContainEqual(expect.objectContaining({
+        action: 'routine.owner_transferred',
+        targetId: createBody.routine.id,
+        metadata: expect.objectContaining({
+          routineName: 'Move routine owner',
+          fromUserId: sourceOnlyOwnerId,
+          toUserId: ownerUserId,
+        }),
+      }));
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('rejects cross-workspace retargets when the requested routine owner is not in the final workspace', async () => {
+    const { app, db } = buildApp();
+    const ownerUserId = getLocalUserId(db);
+    const sourceWorkspace = insertWorkspace(db, {
+      name: 'Routine explicit owner source',
+      userId: ownerUserId,
+    });
+    const targetWorkspace = insertWorkspace(db, {
+      name: 'Routine explicit owner target',
+      userId: ownerUserId,
+    });
+    if (!sourceWorkspace || !targetWorkspace) throw new Error('workspace fixture missing');
+    setCurrentWorkspaceId(db, ownerUserId, sourceWorkspace.id);
+    const sourceOnlyOwnerId = `routine-source-only-owner-${Date.now()}`;
+    db.prepare(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+       VALUES (?, ?, 'member', ?)`,
+    ).run(sourceWorkspace.id, sourceOnlyOwnerId, Date.now());
+    insertProject(db, {
+      id: 'target-workspace-project',
+      workspaceId: targetWorkspace.id,
+      name: 'Target workspace project',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    const { server, port } = await listen(app);
+    try {
+      const create = await fetch(`http://127.0.0.1:${port}/api/routines`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Retarget explicit owner',
+          prompt: 'Summarize explicit owner movement.',
+          schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+          target: { mode: 'create_each_run' },
+          enabled: true,
+        }),
+      });
+      expect(create.status).toBe(201);
+      const createBody = await create.json() as { routine: { id: string; workspaceId: string } };
+      expect(createBody.routine.workspaceId).toBe(sourceWorkspace.id);
+
+      const patch = await fetch(`http://127.0.0.1:${port}/api/routines/${createBody.routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ownedByUserId: sourceOnlyOwnerId,
+          target: { mode: 'reuse', projectId: 'target-workspace-project' },
+        }),
+      });
+      expect(patch.status).toBe(404);
+      const patchBody = await patch.json() as { error?: string };
+      expect(patchBody.error).toMatch(/asset owner must be a workspace member/);
+      expect(getRoutine(db, createBody.routine.id)).toMatchObject({
+        workspaceId: sourceWorkspace.id,
+        projectMode: 'create_each_run',
+        projectId: null,
+        ownedByUserId: ownerUserId,
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -266,7 +807,7 @@ describe('routine routes', () => {
   });
 
   it('runs a routine now and exposes its run history', async () => {
-    const { app, runNow } = buildApp();
+    const { app, db, runNow } = buildApp();
     const { server, port } = await listen(app);
     try {
       const createRes = await fetch(`http://127.0.0.1:${port}/api/routines`, {
@@ -297,6 +838,16 @@ describe('routine routes', () => {
       expect(runJson.agentRunId).toBe('agent-run-1');
       expect(runJson.run.status).toBe('queued');
       expect(runNow).toHaveBeenCalledWith(created.routine.id);
+      expect(listWorkspaceActivity(db, 'local-personal')).toContainEqual(expect.objectContaining({
+        action: 'routine.run_requested',
+        targetId: created.routine.id,
+        metadata: expect.objectContaining({
+          routineName: 'Daily digest',
+          projectId: 'proj-run',
+          conversationId: 'conv-run',
+          agentRunId: 'agent-run-1',
+        }),
+      }));
 
       const runsRes = await fetch(`http://127.0.0.1:${port}/api/routines/${created.routine.id}/runs?limit=10`);
       expect(runsRes.status).toBe(200);
@@ -564,8 +1115,8 @@ describe('routine routes', () => {
     }
   });
 
-  it('deletes a routine and unschedules it', async () => {
-    const { app, unschedule } = buildApp();
+  it('deletes a routine, unschedules it, and records workspace activity', async () => {
+    const { app, db, unschedule } = buildApp();
     const { server, port } = await listen(app);
     try {
       const createRes = await fetch(`http://127.0.0.1:${port}/api/routines`, {
@@ -586,6 +1137,14 @@ describe('routine routes', () => {
       });
       expect(deleteRes.status).toBe(204);
       expect(unschedule).toHaveBeenCalledWith(created.routine.id);
+      expect(listWorkspaceActivity(db, 'local-personal')).toContainEqual(expect.objectContaining({
+        action: 'routine.deleted',
+        targetId: created.routine.id,
+        metadata: expect.objectContaining({
+          routineName: 'Daily digest',
+          targetMode: 'create_each_run',
+        }),
+      }));
 
       const getRes = await fetch(`http://127.0.0.1:${port}/api/routines/${created.routine.id}`);
       expect(getRes.status).toBe(404);

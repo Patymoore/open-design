@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { flushSync } from 'react-dom';
 import { useAnalytics } from './analytics/provider';
 import {
   trackFileUploadResult,
@@ -18,10 +17,12 @@ import { MarketplaceView } from './components/MarketplaceView';
 import { PluginDetailView } from './components/PluginDetailView';
 import type { CreateInput } from './components/NewProjectPanel';
 import { MemoryToast } from './components/MemoryToast';
+import { LiveArtifactShareView } from './components/LiveArtifactShareView';
 import { PetOverlay, type PetTaskCenter } from './components/pet/PetOverlay';
 import { buildPetTaskCenter } from './components/pet/taskCenter';
 import { migrateCustomPetAtlas } from './components/pet/pets';
 import { ProjectView } from './components/ProjectView';
+import { WorkspaceInviteView } from './components/WorkspaceInviteView';
 import { openWorkspaceTab, WorkspaceTabsBar } from './components/WorkspaceTabsBar';
 import {
   DesignSystemCreationFlow,
@@ -66,7 +67,7 @@ import { isMacPlatform } from './utils/platform';
 import {
   createProject,
   createPluginShareProject,
-  deleteProject as deleteProjectApi,
+  deleteProjectResult,
   getProject,
   importClaudeDesignZip,
   importFolderProject,
@@ -79,9 +80,15 @@ import type {
   PluginShareAction,
   PluginShareProjectOutcome,
 } from './state/projects';
-import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
+import {
+  createWorkspaceInviteResult,
+  listWorkspaces,
+  setCurrentWorkspace,
+} from './state/workspaces';
 import { useI18n } from './i18n';
 import { liveArtifactTabId } from './types';
+import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
+import type { AcceptWorkspaceInviteResponse, ImportFolderResponse, Workspace } from '@open-design/contracts';
 import type {
   AgentInfo,
   ApiProtocol,
@@ -186,6 +193,10 @@ export function App() {
     }
   }, []);
   const [config, setConfig] = useState<AppConfig>(() => loadConfig());
+  const [legacyWorkspaceInviteToken, setLegacyWorkspaceInviteToken] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.search).get('workspaceInvite');
+  });
   const configRef = useRef(config);
   configRef.current = config;
   const latestPersistedConfigRef = useRef(config);
@@ -210,6 +221,13 @@ export function App() {
     queued: [],
     recent: [],
   });
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState('local-personal');
+  const currentWorkspaceIdRef = useRef(currentWorkspaceId);
+  currentWorkspaceIdRef.current = currentWorkspaceId;
+  const workspaceDataRequestRef = useRef(0);
+  const workspaceSelectionRequestRef = useRef(0);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
   const [promptTemplates, setPromptTemplates] = useState<
     PromptTemplateSummary[]
@@ -363,6 +381,24 @@ export function App() {
     });
   }, [activeProjectId, activeFileName]);
 
+  const loadWorkspaceDataFor = useCallback(async (
+    workspaceId: string,
+    isCancelled: () => boolean = () => false,
+  ) => {
+    const requestId = workspaceDataRequestRef.current + 1;
+    workspaceDataRequestRef.current = requestId;
+    setProjectsLoading(true);
+    const [nextProjects, nextTemplates] = await Promise.all([
+      listProjects(workspaceId),
+      listTemplates(workspaceId),
+    ]);
+    if (isCancelled() || requestId !== workspaceDataRequestRef.current) return false;
+    setProjects(nextProjects);
+    setTemplates(nextTemplates);
+    setProjectsLoading(false);
+    return true;
+  }, []);
+
   // Bootstrap — detect daemon, then fan out independent fetches so each
   // entry-view tab can render the moment its own data lands. Earlier this
   // was one Promise.all behind a global "Loading workspace…" placeholder,
@@ -425,15 +461,15 @@ export function App() {
         setDsLoading(false);
       });
 
-      void listProjects().then((list) => {
+      void listWorkspaces().then((result) => {
         if (cancelled) return;
-        setProjects(list);
-        setProjectsLoading(false);
-      });
-
-      void listTemplates().then((list) => {
-        if (cancelled) return;
-        setTemplates(list);
+        const nextWorkspaceId = result.workspaces.some((workspace) => workspace.id === result.currentWorkspaceId)
+          ? result.currentWorkspaceId
+          : result.workspaces[0]?.id ?? 'local-personal';
+        setWorkspaces(result.workspaces);
+        setCurrentUserId(result.currentUserId);
+        setCurrentWorkspaceId(nextWorkspaceId);
+        void loadWorkspaceDataFor(nextWorkspaceId, () => cancelled);
       });
 
       void fetchPromptTemplates().then((list) => {
@@ -531,7 +567,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadWorkspaceDataFor]);
 
   // Auto-pick the first available agent once both the daemon-stored config
   // and the agents listing have landed. Splitting this out of bootstrap
@@ -598,8 +634,64 @@ export function App() {
   }, []);
 
   const refreshProjects = useCallback(async () => {
-    const list = await listProjects();
-    setProjects(list);
+    await loadWorkspaceDataFor(currentWorkspaceId);
+  }, [currentWorkspaceId, loadWorkspaceDataFor]);
+
+  const handleWorkspaceInviteAccepted = useCallback(async (result: AcceptWorkspaceInviteResponse) => {
+    const requestId = workspaceSelectionRequestRef.current + 1;
+    workspaceSelectionRequestRef.current = requestId;
+    const next = await listWorkspaces();
+    if (requestId !== workspaceSelectionRequestRef.current) return;
+    setWorkspaces(next.workspaces);
+    setCurrentUserId(next.currentUserId);
+    const selected = await setCurrentWorkspace(result.workspace.id);
+    if (requestId !== workspaceSelectionRequestRef.current) return;
+    if (!selected) {
+      throw new Error('Could not switch to the invited workspace.');
+    }
+    const nextWorkspaceId = selected.workspaces.some((workspace) => workspace.id === selected.currentWorkspaceId)
+      ? selected.currentWorkspaceId
+      : result.workspace.id;
+    setWorkspaces(selected.workspaces);
+    setCurrentUserId(selected.currentUserId);
+    setCurrentWorkspaceId(nextWorkspaceId);
+    await loadWorkspaceDataFor(nextWorkspaceId);
+  }, [loadWorkspaceDataFor]);
+
+  const handleLegacyWorkspaceInviteAccepted = useCallback(async (result: AcceptWorkspaceInviteResponse) => {
+    await handleWorkspaceInviteAccepted(result);
+    setLegacyWorkspaceInviteToken(null);
+    navigate({ kind: 'home', view: 'workspace' }, { replace: true });
+  }, [handleWorkspaceInviteAccepted]);
+
+  const handleWorkspaceInviteRouteAccepted = useCallback(async (result: AcceptWorkspaceInviteResponse) => {
+    await handleWorkspaceInviteAccepted(result);
+    navigate({ kind: 'home', view: 'workspace' }, { replace: true });
+  }, [handleWorkspaceInviteAccepted]);
+
+  const handleWorkspaceChange = useCallback(async (workspaceId: string) => {
+    const requestId = workspaceSelectionRequestRef.current + 1;
+    workspaceSelectionRequestRef.current = requestId;
+    const selected = await setCurrentWorkspace(workspaceId);
+    if (requestId !== workspaceSelectionRequestRef.current) return;
+    if (!selected) {
+      throw new Error('Could not switch workspace.');
+    }
+    const next = selected;
+    const nextWorkspaceId = next.workspaces.some((workspace) => workspace.id === next.currentWorkspaceId)
+      ? next.currentWorkspaceId
+      : next.workspaces[0]?.id ?? 'local-personal';
+    setWorkspaces(next.workspaces);
+    setCurrentUserId(next.currentUserId);
+    setCurrentWorkspaceId(nextWorkspaceId);
+    await loadWorkspaceDataFor(nextWorkspaceId);
+  }, [loadWorkspaceDataFor]);
+
+  const handleCreateWorkspaceInvite = useCallback(async (
+    workspaceId: string,
+    options?: { role?: 'admin' | 'member'; expiresInDays?: number },
+  ) => {
+    return createWorkspaceInviteResult(workspaceId, options);
   }, []);
 
   const refreshDesignSystems = useCallback(async () => {
@@ -607,10 +699,41 @@ export function App() {
     setDesignSystems(list);
   }, []);
 
-  const refreshTemplates = useCallback(async () => {
-    const list = await listTemplates();
-    setTemplates(list);
+  const handleWorkspaceCreated = useCallback(async (workspace: Workspace) => {
+    const next = await listWorkspaces();
+    setWorkspaces(
+      next.workspaces.some((item) => item.id === workspace.id)
+        ? next.workspaces
+        : [workspace, ...next.workspaces],
+    );
+    setCurrentUserId(next.currentUserId);
+    await handleWorkspaceChange(workspace.id);
+  }, [handleWorkspaceChange]);
+
+  const handleWorkspaceUpdated = useCallback((workspace: Workspace) => {
+    setWorkspaces((current) => current.map((item) => (
+      item.id === workspace.id ? workspace : item
+    )));
   }, []);
+
+  const handleWorkspaceRemoved = useCallback(async (workspaceId: string) => {
+    const next = await listWorkspaces();
+    setWorkspaces(next.workspaces);
+    setCurrentUserId(next.currentUserId);
+    const fallbackWorkspaceId =
+      next.workspaces.some((workspace) => workspace.id === next.currentWorkspaceId && workspace.id !== workspaceId)
+        ? next.currentWorkspaceId
+        : next.workspaces.find((workspace) => workspace.id !== workspaceId)?.id
+      ?? 'local-personal';
+    await handleWorkspaceChange(fallbackWorkspaceId);
+  }, [handleWorkspaceChange]);
+
+  const refreshTemplates = useCallback(async () => {
+    const workspaceId = currentWorkspaceId;
+    const list = await listTemplates(currentWorkspaceId);
+    if (currentWorkspaceIdRef.current !== workspaceId) return;
+    setTemplates(list);
+  }, [currentWorkspaceId]);
 
   const handleDeleteTemplate = useCallback(async (id: string) => {
     const ok = await deleteTemplate(id);
@@ -824,6 +947,7 @@ export function App() {
         kind === 'template' ? 'template' : 'blank';
       const result = await createProject({
         name: input.name,
+        workspaceId: currentWorkspaceId,
         skillId: input.skillId,
         designSystemId: input.designSystemId,
         pendingPrompt: derivedPendingPrompt,
@@ -927,12 +1051,13 @@ export function App() {
             appliedPluginSnapshotId: result.appliedPluginSnapshotId,
           }
         : result.project;
-      flushSync(() => {
-        setProjects((curr) => [
-          project,
-          ...curr.filter((p) => p.id !== project.id),
-        ]);
-      });
+      if (project.workspaceId !== currentWorkspaceIdRef.current) {
+        await handleWorkspaceChange(project.workspaceId);
+      }
+      setProjects((curr) => [
+        project,
+        ...curr.filter((p) => p.id !== project.id),
+      ]);
       const projectRoute = {
         kind: 'project',
         projectId: project.id,
@@ -942,7 +1067,7 @@ export function App() {
       navigate(projectRoute);
       return true;
     },
-    [analytics.track],
+    [analytics.track, currentWorkspaceId, handleWorkspaceChange],
   );
 
   const handleCreatePluginShareProject = useCallback(
@@ -951,7 +1076,7 @@ export function App() {
       action: PluginShareAction,
       locale?: string,
     ): Promise<PluginShareProjectOutcome> => {
-      const outcome = await createPluginShareProject(pluginId, action, locale);
+      const outcome = await createPluginShareProject(pluginId, action, locale, currentWorkspaceId);
       if (!outcome.ok) return outcome;
       try {
         window.sessionStorage.setItem(
@@ -968,6 +1093,9 @@ export function App() {
             appliedPluginSnapshotId: outcome.appliedPluginSnapshotId,
           }
         : outcome.project;
+      if (project.workspaceId !== currentWorkspaceIdRef.current) {
+        await handleWorkspaceChange(project.workspaceId);
+      }
       setProjects((curr) => [
         project,
         ...curr.filter((p) => p.id !== project.id),
@@ -979,12 +1107,13 @@ export function App() {
       });
       return outcome;
     },
-    [],
+    [currentWorkspaceId, handleWorkspaceChange],
   );
 
-  const handleImportClaudeDesign = useCallback(async (file: File) => {
-    const result = await importClaudeDesignZip(file);
-    if (!result) return;
+  const openImportedProject = useCallback(async (result: ImportFolderResponse) => {
+    if (result.project.workspaceId !== currentWorkspaceIdRef.current) {
+      await handleWorkspaceChange(result.project.workspaceId);
+    }
     setProjects((curr) => [
       result.project,
       ...curr.filter((p) => p.id !== result.project.id),
@@ -994,17 +1123,18 @@ export function App() {
       projectId: result.project.id,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [handleWorkspaceChange]);
+
+  const handleImportClaudeDesign = useCallback(async (file: File) => {
+    const result = await importClaudeDesignZip(file, currentWorkspaceId);
+    if (!result) return;
+    await openImportedProject(result);
+  }, [currentWorkspaceId, openImportedProject]);
 
   const handleImportFolder = useCallback(async (baseDir: string) => {
-    const result = await importFolderProject({ baseDir });
-    setProjects((curr) => [result.project, ...curr.filter((p) => p.id !== result.project.id)]);
-    navigate({
-      kind: 'project',
-      projectId: result.project.id,
-      fileName: result.entryFile,
-    });
-  }, []);
+    const result = await importFolderProject({ baseDir, workspaceId: currentWorkspaceId });
+    await openImportedProject(result);
+  }, [currentWorkspaceId, openImportedProject]);
 
   // PR #974: on desktop, the host bridge owns the picker and import POST
   // atomically. The renderer never sees the path, token, or daemon DTO;
@@ -1013,17 +1143,17 @@ export function App() {
   const handleImportFolderResponse = useCallback(async (result: OpenDesignHostProjectImportSuccess) => {
     const project = await getProject(result.projectId);
     if (project != null) {
+      if (project.workspaceId !== currentWorkspaceIdRef.current) {
+        await handleWorkspaceChange(project.workspaceId);
+      }
       setProjects((curr) => [project, ...curr.filter((p) => p.id !== project.id)]);
-    } else {
-      const list = await listProjects();
-      setProjects(list);
     }
     navigate({
       kind: 'project',
       projectId: result.projectId,
       fileName: result.entryFile,
     });
-  }, []);
+  }, [handleWorkspaceChange]);
 
   const handleOpenProject = useCallback((id: string) => {
     navigate({ kind: 'project', projectId: id, fileName: null });
@@ -1060,8 +1190,10 @@ export function App() {
   }, []);
 
   const handleDeleteProject = useCallback(async (id: string) => {
-    const ok = await deleteProjectApi(id);
-    if (!ok) return false;
+    const result = await deleteProjectResult(id);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
     setProjects((curr) => curr.filter((p) => p.id !== id));
     if (route.kind === 'project' && route.projectId === id) {
       navigate({ kind: 'home', view: 'home' });
@@ -1104,8 +1236,16 @@ export function App() {
   }, [route]);
 
   const handleProjectChange = useCallback((updated: Project) => {
-    setProjects((curr) => curr.map((p) => (p.id === updated.id ? updated : p)));
-  }, []);
+    if (updated.workspaceId !== currentWorkspaceIdRef.current) {
+      void handleWorkspaceChange(updated.workspaceId);
+      return;
+    }
+    setProjects((curr) => (
+      curr.some((p) => p.id === updated.id)
+        ? curr.map((p) => (p.id === updated.id ? updated : p))
+        : [updated, ...curr]
+    ));
+  }, [handleWorkspaceChange]);
 
   const activeProject =
     route.kind === 'project'
@@ -1121,30 +1261,33 @@ export function App() {
     if (!projects.length && !daemonLive) return;
     if (projects.some((p) => p.id === route.projectId)) return;
     let cancelled = false;
+    let switchingWorkspace = false;
     (async () => {
       const project = await getProject(route.projectId);
       if (cancelled) return;
-      if (project) {
-        setProjects((curr) => {
-          const existingIndex = curr.findIndex((candidate) => candidate.id === project.id);
-          if (existingIndex < 0) {
-            return [...curr, project];
-          }
-          return curr.map((candidate) => (candidate.id === project.id ? project : candidate));
-        });
+      if (!project) {
+        navigate({ kind: 'home', view: 'home' }, { replace: true });
         return;
       }
-      const list = await listProjects();
-      if (cancelled) return;
-      setProjects(list);
-      if (!list.find((p) => p.id === route.projectId)) {
+      try {
+        switchingWorkspace = true;
+        await handleWorkspaceChange(project.workspaceId);
+      } catch {
         navigate({ kind: 'home', view: 'home' }, { replace: true });
+        return;
       }
+      if (cancelled) return;
+      setProjects((current) => (
+        current.some((item) => item.id === project.id) ? current : [project, ...current]
+      ));
     })();
     return () => {
       cancelled = true;
+      if (switchingWorkspace) {
+        workspaceSelectionRequestRef.current += 1;
+      }
     };
-  }, [route, activeProject, projects, daemonLive]);
+  }, [route, activeProject, projects, daemonLive, handleWorkspaceChange]);
 
   const openSettings = useCallback((section: SettingsSection = 'execution') => {
     if (section === 'composio' || section === 'mcpClient' || section === 'integrations') {
@@ -1199,24 +1342,6 @@ export function App() {
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true });
   }, [openSettings]);
-
-  // Explicit enabled toggle — true = wake, false = tuck. Persists to
-  // localStorage so the overlay state survives across reloads. We keep
-  // `adopted` untouched so the entry-view CTA does not regress to
-  // "adopt me" once the user has already chosen.
-  const handleSetPetEnabled = useCallback((enabled: boolean) => {
-    setConfig((curr) => {
-      const prev = curr.pet ?? DEFAULT_PET;
-      const next: AppConfig = { ...curr, pet: { ...prev, enabled } };
-      saveConfig(next);
-      return next;
-    });
-  }, []);
-
-  const handleTuckPet = useCallback(
-    () => handleSetPetEnabled(false),
-    [handleSetPetEnabled],
-  );
 
   // Toggle wake/tuck — used by the pet rail and the composer button.
   const handleTogglePet = useCallback(() => {
@@ -1348,6 +1473,9 @@ export function App() {
       />
     );
   } else if (activeProject) {
+    const activeProjectWorkspaceRole = workspaces.find((workspace) => (
+      workspace.id === activeProject.workspaceId
+    ))?.currentUserRole;
     appMain = (
       <ProjectView
         key={activeProject.id}
@@ -1374,6 +1502,9 @@ export function App() {
         onTouchProject={handleTouchProject}
         onProjectChange={handleProjectChange}
         onProjectsRefresh={refreshProjects}
+        canCreateViewerLinks={activeProjectWorkspaceRole === 'owner' || activeProjectWorkspaceRole === 'admin'}
+        canSaveWorkspaceTemplates={activeProjectWorkspaceRole === 'owner' || activeProjectWorkspaceRole === 'admin'}
+        canDeployWorkspaceArtifacts={activeProjectWorkspaceRole === 'owner' || activeProjectWorkspaceRole === 'admin'}
       />
     );
   } else {
@@ -1383,6 +1514,9 @@ export function App() {
         designTemplates={enabledDesignTemplates}
         designSystems={enabledDS}
         projects={projects}
+        workspaces={workspaces}
+        currentWorkspaceId={currentWorkspaceId}
+        currentUserId={currentUserId}
         templates={templates}
         onDeleteTemplate={handleDeleteTemplate}
         promptTemplates={promptTemplates}
@@ -1406,6 +1540,12 @@ export function App() {
         promptTemplatesLoading={promptTemplatesLoading}
         onCreateProject={handleCreateProject}
         onCreatePluginShareProject={handleCreatePluginShareProject}
+        onWorkspaceChange={handleWorkspaceChange}
+        onWorkspaceCreated={handleWorkspaceCreated}
+        onWorkspaceRemoved={handleWorkspaceRemoved}
+        onWorkspaceUpdated={handleWorkspaceUpdated}
+        onProjectsRefresh={refreshProjects}
+        onCreateWorkspaceInvite={handleCreateWorkspaceInvite}
         onImportClaudeDesign={handleImportClaudeDesign}
         onImportFolder={handleImportFolder}
         onImportFolderResponse={handleImportFolderResponse}
@@ -1458,23 +1598,35 @@ export function App() {
   }
   return (
     <>
-      <div
-        className={`workspace-shell workspace-shell--${clientType}`}
-        data-client-type={clientType}
-      >
-        <WorkspaceTabsBar
-          route={route}
-          projects={projects}
+      {legacyWorkspaceInviteToken ? (
+        <WorkspaceInviteView
+          token={legacyWorkspaceInviteToken}
+          onAccepted={handleLegacyWorkspaceInviteAccepted}
         />
-        <div className="workspace-shell__body">{appMain}</div>
-      </div>
-      {clientType === 'desktop' ? null : (
-        <PetOverlay
-          pet={config.pet?.enabled ? config.pet : undefined}
-          taskCenter={petTaskCenter}
-          onOpenProject={handleOpenProject}
+      ) : route.kind === 'shareLiveArtifact' ? (
+        <LiveArtifactShareView token={route.token} />
+      ) : route.kind === 'workspaceInvite' ? (
+        <WorkspaceInviteView
+          token={route.token}
+          onAccepted={handleWorkspaceInviteRouteAccepted}
         />
+      ) : (
+        <div
+          className={`workspace-shell workspace-shell--${clientType}`}
+          data-client-type={clientType}
+        >
+          <WorkspaceTabsBar
+            route={route}
+            projects={projects}
+          />
+          <div className="workspace-shell__body">{appMain}</div>
+        </div>
       )}
+      <PetOverlay
+        pet={config.pet?.enabled ? config.pet : undefined}
+        taskCenter={petTaskCenter}
+        onOpenProject={handleOpenProject}
+      />
       {settingsOpen ? (
         <SettingsDialog
           initial={config}
@@ -1483,6 +1635,12 @@ export function App() {
           appVersionInfo={appVersionInfo}
           welcome={settingsWelcome}
           initialSection={settingsInitialSection}
+          currentWorkspaceId={currentWorkspaceId}
+          currentWorkspaceName={
+            workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.name
+            ?? 'Personal Workspace'
+          }
+          currentWorkspaceRole={workspaces.find((workspace) => workspace.id === currentWorkspaceId)?.currentUserRole}
           composioConfigLoading={composioConfigLoading}
           onPersist={handleConfigPersist}
           onPersistComposioKey={handleConfigPersistComposioKey}

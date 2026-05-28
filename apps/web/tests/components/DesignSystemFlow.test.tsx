@@ -268,6 +268,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -357,6 +358,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -857,6 +859,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-folder-design-system',
+      workspaceId: 'workspace-1',
       name: 'Folder Design System',
       skillId: null,
       designSystemId: system.id,
@@ -940,6 +943,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-snapshot-design-system',
+      workspaceId: 'workspace-1',
       name: 'Snapshot Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1013,6 +1017,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-dragged-folder-design-system',
+      workspaceId: 'workspace-1',
       name: 'Dragged Folder Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1126,6 +1131,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-figma-design-system',
+      workspaceId: 'workspace-1',
       name: 'Figma Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1205,6 +1211,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-asset-design-system',
+      workspaceId: 'workspace-1',
       name: 'Asset Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1275,6 +1282,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-cherry-studio-design-system',
+      workspaceId: 'workspace-1',
       name: 'Cherry Studio Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1577,6 +1585,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-github-design-system',
+      workspaceId: 'workspace-1',
       name: 'Github Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1733,6 +1742,7 @@ describe('DesignSystemCreationFlow', () => {
     };
     const project: Project = {
       id: 'ds-github-internal-account-design-system',
+      workspaceId: 'workspace-1',
       name: 'GitHub Internal Account Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1799,6 +1809,7 @@ describe('DesignSystemDetailView', () => {
     } satisfies Omit<DesignSystemDetail, 'source'>;
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1862,6 +1873,7 @@ describe('DesignSystemDetailView', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -1991,6 +2003,7 @@ describe('DesignSystemDetailView', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -2076,6 +2089,7 @@ describe('DesignSystemDetailView', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -2137,6 +2151,7 @@ describe('DesignSystemDetailView', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,
@@ -2205,6 +2220,7 @@ describe('DesignSystemDetailView', () => {
     };
     const project: Project = {
       id: 'ds-acme-design-system',
+      workspaceId: 'workspace-1',
       name: 'Acme Design System',
       skillId: null,
       designSystemId: system.id,

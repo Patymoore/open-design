@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { startServer } from '../src/server.js';
@@ -45,6 +46,62 @@ describe('POST /api/import/folder', () => {
     });
   }
 
+  function buildZip(entries: Array<{ name: string; body: string }>): Buffer {
+    const localChunks: Buffer[] = [];
+    const centralChunks: Buffer[] = [];
+    let offset = 0;
+    for (const entry of entries) {
+      const nameBuf = Buffer.from(entry.name, 'utf8');
+      const body = Buffer.from(entry.body, 'utf8');
+      const compressed = deflateRawSync(body);
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0, 6);
+      local.writeUInt16LE(8, 8);
+      local.writeUInt32LE(0, 10);
+      local.writeUInt32LE(0, 14);
+      local.writeUInt32LE(compressed.length, 18);
+      local.writeUInt32LE(body.length, 22);
+      local.writeUInt16LE(nameBuf.length, 26);
+      local.writeUInt16LE(0, 28);
+      localChunks.push(local, nameBuf, compressed);
+
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(20, 4);
+      central.writeUInt16LE(20, 6);
+      central.writeUInt16LE(0, 8);
+      central.writeUInt16LE(8, 10);
+      central.writeUInt32LE(0, 12);
+      central.writeUInt32LE(0, 16);
+      central.writeUInt32LE(compressed.length, 20);
+      central.writeUInt32LE(body.length, 24);
+      central.writeUInt16LE(nameBuf.length, 28);
+      central.writeUInt16LE(0, 30);
+      central.writeUInt16LE(0, 32);
+      central.writeUInt16LE(0, 34);
+      central.writeUInt16LE(0, 36);
+      central.writeUInt32LE(0, 38);
+      central.writeUInt32LE(offset, 42);
+      centralChunks.push(central, nameBuf);
+      offset += local.length + nameBuf.length + compressed.length;
+    }
+
+    const localBlob = Buffer.concat(localChunks);
+    const centralBlob = Buffer.concat(centralChunks);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(0, 4);
+    eocd.writeUInt16LE(0, 6);
+    eocd.writeUInt16LE(entries.length, 8);
+    eocd.writeUInt16LE(entries.length, 10);
+    eocd.writeUInt32LE(centralBlob.length, 12);
+    eocd.writeUInt32LE(localBlob.length, 16);
+    eocd.writeUInt16LE(0, 20);
+    return Buffer.concat([localBlob, centralBlob, eocd]);
+  }
+
   it('creates a project rooted at the submitted folder', async () => {
     const folder = makeFolder();
     await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
@@ -60,6 +117,131 @@ describe('POST /api/import/folder', () => {
     expect(body.project.metadata?.importedFrom).toBe('folder');
     expect(body.conversationId).toBeTruthy();
     expect(body.entryFile).toBe('index.html');
+  });
+
+  it('imports folders into the requested team workspace', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Import workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+    const resp = await importFolder({
+      baseDir: folder,
+      workspaceId: workspaceBody.workspace.id,
+    });
+
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as {
+      project: { id: string; workspaceId: string };
+    };
+    expect(body.project.workspaceId).toBe(workspaceBody.workspace.id);
+
+    const personalProjects = await fetch(`${baseUrl}/api/projects?workspaceId=local-personal`);
+    const personalBody = (await personalProjects.json()) as { projects: Array<{ id: string }> };
+    expect(personalBody.projects.some((project) => project.id === body.project.id)).toBe(false);
+
+    const workspaceProjects = await fetch(`${baseUrl}/api/projects?workspaceId=${workspaceBody.workspace.id}`);
+    const workspaceProjectsBody = (await workspaceProjects.json()) as { projects: Array<{ id: string }> };
+    expect(workspaceProjectsBody.projects.some((project) => project.id === body.project.id)).toBe(true);
+
+    const activityResp = await fetch(`${baseUrl}/api/workspaces/${workspaceBody.workspace.id}/activity`);
+    expect(activityResp.status).toBe(200);
+    const activityBody = (await activityResp.json()) as {
+      activities: Array<{ action: string; targetId?: string; metadata?: Record<string, unknown> }>;
+    };
+    expect(activityBody.activities).toContainEqual(expect.objectContaining({
+      action: 'project.imported',
+      targetId: body.project.id,
+      metadata: expect.objectContaining({
+        source: 'folder',
+      }),
+    }));
+  });
+
+  it('imports Claude Design zips into the requested team workspace', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Claude import workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+    const zip = buildZip([{ name: 'index.html', body: '<!doctype html><h1>Imported</h1>' }]);
+    const form = new FormData();
+    form.append('workspaceId', workspaceBody.workspace.id);
+    form.append('file', new Blob([zip], { type: 'application/zip' }), 'claude-export.zip');
+
+    const resp = await fetch(`${baseUrl}/api/import/claude-design`, {
+      method: 'POST',
+      body: form,
+    });
+
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as {
+      project: { id: string; workspaceId: string };
+      conversationId: string;
+      entryFile: string;
+      files: string[];
+    };
+    expect(body.project.workspaceId).toBe(workspaceBody.workspace.id);
+    expect(body.conversationId).toBeTruthy();
+    expect(body.entryFile).toBe('index.html');
+    expect(body.files).toContain('index.html');
+
+    const personalProjects = await fetch(`${baseUrl}/api/projects?workspaceId=local-personal`);
+    const personalBody = (await personalProjects.json()) as { projects: Array<{ id: string }> };
+    expect(personalBody.projects.some((project) => project.id === body.project.id)).toBe(false);
+
+    const activityResp = await fetch(`${baseUrl}/api/workspaces/${workspaceBody.workspace.id}/activity`);
+    expect(activityResp.status).toBe(200);
+    const activityBody = (await activityResp.json()) as {
+      activities: Array<{ action: string; targetId?: string; metadata?: Record<string, unknown> }>;
+    };
+    expect(activityBody.activities).toContainEqual(expect.objectContaining({
+      action: 'project.imported',
+      targetId: body.project.id,
+      metadata: expect.objectContaining({
+        source: 'claude-design',
+        sourceFileName: 'claude-export.zip',
+      }),
+    }));
+  });
+
+  it('imports folders into the current workspace when workspaceId is omitted', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Current import workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as {
+      workspace: { id: string };
+      currentWorkspaceId?: string;
+    };
+    expect(workspaceBody.currentWorkspaceId).toBe(workspaceBody.workspace.id);
+
+    const folder = makeFolder();
+    await writeFile(path.join(folder, 'index.html'), '<!doctype html>');
+
+    const resp = await importFolder({ baseDir: folder });
+    expect(resp.status).toBe(200);
+    const body = (await resp.json()) as {
+      project: { id: string; workspaceId: string };
+    };
+    expect(body.project.workspaceId).toBe(workspaceBody.workspace.id);
+
+    const personalProjects = await fetch(`${baseUrl}/api/projects?workspaceId=local-personal`);
+    const personalBody = (await personalProjects.json()) as { projects: Array<{ id: string }> };
+    expect(personalBody.projects.some((project) => project.id === body.project.id)).toBe(false);
+
+    const workspaceProjects = await fetch(`${baseUrl}/api/projects?workspaceId=${workspaceBody.workspace.id}`);
+    const workspaceProjectsBody = (await workspaceProjects.json()) as { projects: Array<{ id: string }> };
+    expect(workspaceProjectsBody.projects.some((project) => project.id === body.project.id)).toBe(true);
   });
 
   it('auto-detects the entry file when present', async () => {

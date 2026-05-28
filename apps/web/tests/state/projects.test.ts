@@ -3,9 +3,15 @@ import {
   applyPlugin,
   contributeGeneratedPluginToOpenDesign,
   createPluginShareProject,
+  deleteProject,
+  deleteProjectResult,
+  importClaudeDesignZip,
   importFolderProject,
   installGeneratedPluginFolder,
+  listTemplates,
   listPlugins,
+  patchProject,
+  patchProjectResult,
   publishGeneratedPluginToGitHub,
 } from '../../src/state/projects';
 
@@ -104,6 +110,73 @@ describe('listPlugins', () => {
     const rows = await listPlugins({ includeHidden: true });
 
     expect(rows.map((row) => row.id)).toEqual(['od-default', 'od-new-generation']);
+  });
+});
+
+describe('project state result helpers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('preserves daemon patch errors while keeping patchProject soft-failure compatible', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Admin or owner access required to move projects.',
+        },
+      }),
+      { status: 403, headers: { 'content-type': 'application/json' } },
+    )));
+
+    const result = await patchProjectResult('project-1', { workspaceId: 'team-ws' });
+    const project = await patchProject('project-1', { workspaceId: 'team-ws' });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe('Admin or owner access required to move projects.');
+    }
+    expect(project).toBeNull();
+  });
+
+  it('preserves daemon delete errors while keeping deleteProject boolean-compatible', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Admin or owner access required to delete projects.',
+        },
+      }),
+      { status: 403, headers: { 'content-type': 'application/json' } },
+    )));
+
+    const result = await deleteProjectResult('project-1');
+    const deleted = await deleteProject('project-1');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe('Admin or owner access required to delete projects.');
+    }
+    expect(deleted).toBe(false);
+  });
+
+  it('surfaces project delete routine blockers as an actionable message', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        error: {
+          code: 'PROJECT_HAS_ROUTINES',
+          message: 'delete routines targeting this project first',
+        },
+      }),
+      { status: 409, headers: { 'content-type': 'application/json' } },
+    )));
+
+    const result = await deleteProjectResult('project-1');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe('Delete automations that use this project before deleting it.');
+    }
   });
 });
 
@@ -239,6 +312,7 @@ describe('createPluginShareProject', () => {
       'sample-plugin',
       'publish-github',
       'zh-CN',
+      'team-ws',
     );
 
     expect(outcome).toMatchObject({
@@ -251,7 +325,7 @@ describe('createPluginShareProject', () => {
       '/api/plugins/sample-plugin/share-project',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ action: 'publish-github', locale: 'zh-CN' }),
+        body: JSON.stringify({ action: 'publish-github', locale: 'zh-CN', workspaceId: 'team-ws' }),
       }),
     );
   });
@@ -277,6 +351,56 @@ describe('createPluginShareProject', () => {
       code: 'share-action-plugin-missing',
       message: 'Restart the daemon.',
     });
+  });
+});
+
+describe('listTemplates', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('requests templates for the current workspace when provided', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({ templates: [{ id: 'tmpl-1', name: 'Landing', files: [], createdAt: 1 }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const templates = await listTemplates('team-ws');
+
+    expect(templates).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/templates?workspaceId=team-ws');
+  });
+});
+
+describe('importClaudeDesignZip', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts the selected workspace id with the uploaded zip', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({
+        project: { id: 'p-1', name: 'Imported', workspaceId: 'team-ws' },
+        conversationId: 'conv-1',
+        entryFile: 'index.html',
+        files: [],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await importClaudeDesignZip(
+      new File(['zip'], 'design.zip', { type: 'application/zip' }),
+      'team-ws',
+    );
+
+    expect(result?.project.id).toBe('p-1');
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(init?.method).toBe('POST');
+    const body = init?.body as FormData;
+    expect(body.get('workspaceId')).toBe('team-ws');
+    expect((body.get('file') as File).name).toBe('design.zip');
   });
 });
 

@@ -2,6 +2,7 @@ import type http from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 
 import { inlineRelativeAssets, type InlineAssetReader } from '../src/inline-assets.js';
 import { startServer } from '../src/server.js';
@@ -473,6 +474,18 @@ describe('GET /api/projects/:id/export/*?inline=1 route', () => {
     baseUrl = started.url;
     server = started.server;
 
+    const createProjectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        name: 'Inline export route fixture',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(createProjectResp.status).toBe(200);
+
     projectsRoot = path.join(process.env.OD_DATA_DIR!, 'projects');
     const dir = path.join(projectsRoot, projectId);
     const pages = path.join(dir, 'pages');
@@ -512,6 +525,40 @@ describe('GET /api/projects/:id/export/*?inline=1 route', () => {
 
   const exportUrl = (name: string, query = 'inline=1') =>
     `${baseUrl}/api/projects/${projectId}/export/${name}${query ? `?${query}` : ''}`;
+
+  it('requires workspace membership before exporting inline HTML', async () => {
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = new Database(path.join(dataDir, 'app.sqlite'));
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(`inline-export-outsider-${Date.now()}`);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const res = await fetch(exportUrl('index.html'));
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error).toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'workspace membership required',
+      });
+    } finally {
+      const restoreDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+  });
 
   it('returns a self-contained HTML body when ?inline=1 on a 3-file layout', async () => {
     const res = await fetch(exportUrl('index.html'));

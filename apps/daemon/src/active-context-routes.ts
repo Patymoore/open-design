@@ -43,7 +43,9 @@ type GetActiveOutput =
 interface ActiveContextDomainDeps {
   store: ActiveContextStore;
   db: unknown;
-  getProject: (db: unknown, projectId: string) => { name?: string | null } | null | undefined;
+  getLocalUserId: (db: unknown) => string;
+  getProject: (db: unknown, projectId: string) => { name?: string | null; workspaceId?: string | null } | null | undefined;
+  getWorkspaceMembership: (db: unknown, workspaceId: string, userId: string) => unknown;
   now: () => number;
 }
 
@@ -69,6 +71,16 @@ function handlePostActive(
     deps.store.current = null;
     return ok({ active: false });
   }
+  const project = deps.getProject(deps.db, input.projectId);
+  if (!project) {
+    return err(createApiError('PROJECT_NOT_FOUND', 'project not found'));
+  }
+  if (
+    !project.workspaceId ||
+    !deps.getWorkspaceMembership(deps.db, project.workspaceId, deps.getLocalUserId(deps.db))
+  ) {
+    return err(createApiError('FORBIDDEN', 'workspace membership required'));
+  }
   const next: ActiveContext = {
     projectId: input.projectId,
     fileName: input.fileName,
@@ -88,6 +100,14 @@ function handleGetActive(
     return ok({ active: false });
   }
   const project = deps.getProject(deps.db, current.projectId);
+  if (
+    !project ||
+    !project.workspaceId ||
+    !deps.getWorkspaceMembership(deps.db, project.workspaceId, deps.getLocalUserId(deps.db))
+  ) {
+    deps.store.current = null;
+    return ok({ active: false });
+  }
   return ok({
     active: true,
     projectId: current.projectId,
@@ -119,7 +139,9 @@ export function registerActiveContextRoutes(app: Express, ctx: RegisterActiveCon
   const domainDeps: ActiveContextDomainDeps = {
     store,
     db: ctx.db,
+    getLocalUserId: ctx.projectStore.getLocalUserId,
     getProject: ctx.projectStore.getProject,
+    getWorkspaceMembership: ctx.projectStore.getWorkspaceMembership,
     now: () => Date.now(),
   };
   const adapter = { resolvedPortRef: ctx.http.resolvedPortRef };

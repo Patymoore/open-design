@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 import { startServer } from '../src/server.js';
 import { connectorService, ConnectorServiceError } from '../src/connectors/service.js';
@@ -205,6 +206,16 @@ async function openProjectEvents(projectId: string): Promise<ProjectEventStream>
 }
 
 function mintToolToken(projectId: string, runId: string, overrides: Partial<Parameters<typeof toolTokenRegistry.mint>[0]> = {}) {
+  const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+  try {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO projects (id, workspace_id, name, created_at, updated_at)
+       VALUES (?, 'local-personal', ?, ?, ?)`,
+    ).run(projectId, projectId, now, now);
+  } finally {
+    db.close();
+  }
   return toolTokenRegistry.mint({
     projectId,
     runId,
@@ -254,6 +265,600 @@ describe('live artifact tool routes', () => {
       hasDocument: true,
     });
     expect(list.body.artifacts[0].document).toBeUndefined();
+  });
+
+  it('rejects live artifact access after its project is deleted from the workspace database', async () => {
+    const projectId = uniqueProjectId();
+    const token = mintToolToken(projectId, 'run-deleted-project-token-test');
+    await createProject(projectId);
+    const existing = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Deleted Project Existing Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+    expect(existing.status).toBe(200);
+
+    const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      db.prepare(`DELETE FROM projects WHERE id = ?`).run(projectId);
+    } finally {
+      db.close();
+    }
+
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Deleted Project Token Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+
+    expect(create.status).toBe(404);
+    expect(create.body.error).toMatchObject({
+      code: 'PROJECT_NOT_FOUND',
+      message: 'project not found',
+    });
+
+    const list = await jsonFetch(`${baseUrl}/api/live-artifacts?projectId=${encodeURIComponent(projectId)}`);
+    expect(list.status).toBe(404);
+    expect(list.body.error).toMatchObject({
+      code: 'PROJECT_NOT_FOUND',
+      message: 'project not found',
+    });
+
+    const detail = await jsonFetch(`${baseUrl}/api/live-artifacts/${existing.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`);
+    expect(detail.status).toBe(404);
+    expect(detail.body.error).toMatchObject({
+      code: 'PROJECT_NOT_FOUND',
+      message: 'project not found',
+    });
+
+    const deleteResp = await jsonFetch(`${baseUrl}/api/live-artifacts/${existing.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'DELETE',
+    });
+    expect(deleteResp.status).toBe(404);
+    expect(deleteResp.body.error).toMatchObject({
+      code: 'PROJECT_NOT_FOUND',
+      message: 'project not found',
+    });
+  });
+
+  it('creates public viewer links for live artifacts', async () => {
+    const projectId = uniqueProjectId();
+    const runId = 'run-share-test';
+    await createProject(projectId);
+    const token = mintToolToken(projectId, runId);
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Shared Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1><p>{{data.owner}}</p>',
+      }),
+    });
+
+    expect(create.status).toBe(200);
+    const artifactId = create.body.artifact.id;
+    const share = await jsonFetch(`${baseUrl}/api/live-artifacts/${artifactId}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+
+    expect(share.status).toBe(200);
+    expect(share.body.share).toMatchObject({
+      targetType: 'live_artifact',
+      projectId,
+      projectName: projectId,
+      artifactId,
+      role: 'viewer',
+    });
+    expect(share.body.share.shareUrl).toContain('/share/live-artifact/');
+
+    const duplicateShare = await jsonFetch(`${baseUrl}/api/live-artifacts/${artifactId}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(duplicateShare.status).toBe(200);
+    expect(duplicateShare.body.share.id).toBe(share.body.share.id);
+    expect(duplicateShare.body.share.token).toBe(share.body.share.token);
+    expect(duplicateShare.body.share.reused).toBeUndefined();
+
+    const publicShare = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(publicShare.status).toBe(200);
+    expect(publicShare.body.share).toMatchObject({
+      targetType: 'live_artifact',
+      projectName: projectId,
+      role: 'viewer',
+    });
+    expect(publicShare.body.share.createdByUserId).toBeUndefined();
+    expect(publicShare.body.share.projectId).toBeUndefined();
+    expect(publicShare.body.share.artifactId).toBeUndefined();
+    expect(publicShare.body.share.token).toBeUndefined();
+    expect(publicShare.body.artifact).toMatchObject({
+      title: 'Shared Artifact',
+      hasDocument: true,
+    });
+    expect(publicShare.body.artifact.id).toBeUndefined();
+    expect(publicShare.body.artifact.document).toBeUndefined();
+    expect(publicShare.body.artifact.projectId).toBeUndefined();
+    expect(publicShare.body.artifact.sessionId).toBeUndefined();
+    expect(publicShare.body.artifact.createdByRunId).toBeUndefined();
+    expect(publicShare.body.previewUrl).toBe(`/api/shares/live-artifacts/${share.body.share.token}/preview`);
+
+    const preview = await textFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}/preview`);
+    expect(preview.status).toBe(200);
+    expect(preview.body).toContain('Shared Artifact');
+
+    const workspaceShares = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/shares`);
+    expect(workspaceShares.status).toBe(200);
+    expect(workspaceShares.body.shares.filter((item: any) => item.artifactId === artifactId)).toHaveLength(1);
+    expect(workspaceShares.body.shares.find((item: any) => item.id === share.body.share.id)?.projectName).toBe(projectId);
+    const workspaceActivity = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/activity`);
+    expect(workspaceActivity.status).toBe(200);
+    expect(workspaceActivity.body.activities.filter((item: any) => (
+      item.action === 'share.created' && item.targetId === share.body.share.id
+    ))).toHaveLength(1);
+
+    const deleteProjectResp = await jsonFetch(`${baseUrl}/api/projects/${projectId}`, {
+      method: 'DELETE',
+    });
+    expect(deleteProjectResp.status).toBe(200);
+    const afterProjectDelete = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(afterProjectDelete.status).toBe(404);
+    const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      const shareRow = db.prepare(`SELECT id FROM resource_shares WHERE id = ?`).get(share.body.share.id);
+      expect(shareRow).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('revokes public viewer links for live artifacts', async () => {
+    const projectId = uniqueProjectId();
+    const runId = 'run-share-revoke-test';
+    await createProject(projectId);
+    const token = mintToolToken(projectId, runId);
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Revoked Shared Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+
+    expect(create.status).toBe(200);
+    const artifactId = create.body.artifact.id;
+    const share = await jsonFetch(`${baseUrl}/api/live-artifacts/${artifactId}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(share.status).toBe(200);
+
+    const revoke = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/shares/${share.body.share.id}`, {
+      method: 'DELETE',
+    });
+    expect(revoke.status).toBe(200);
+
+    const revokedShare = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(revokedShare.status).toBe(404);
+
+    const activity = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/activity`);
+    expect(activity.status).toBe(200);
+    const actions = activity.body.activities.map((item: any) => item.action);
+    expect(actions).toContain('share.created');
+    expect(actions).toContain('share.revoked');
+    expect(activity.body.activities.find((item: any) => item.action === 'share.created')?.metadata).toMatchObject({
+      projectId,
+      projectName: projectId,
+      artifactId,
+    });
+    expect(activity.body.activities.find((item: any) => item.action === 'share.revoked')?.metadata).toMatchObject({
+      projectId,
+      projectName: projectId,
+      artifactId,
+    });
+  });
+
+  it('revokes public viewer links when their live artifact is deleted', async () => {
+    const projectId = uniqueProjectId();
+    await createProject(projectId);
+    const token = mintToolToken(projectId, 'run-share-delete-artifact-test');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Deleted Shared Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const artifactId = create.body.artifact.id;
+    const share = await jsonFetch(`${baseUrl}/api/live-artifacts/${artifactId}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(share.status).toBe(200);
+
+    const beforeDelete = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/shares`);
+    expect(beforeDelete.status).toBe(200);
+    expect(beforeDelete.body.shares.some((item: any) => item.id === share.body.share.id)).toBe(true);
+
+    const deleted = await jsonFetch(`${baseUrl}/api/live-artifacts/${artifactId}?projectId=${projectId}`, {
+      method: 'DELETE',
+    });
+    expect(deleted.status).toBe(200);
+
+    const afterDelete = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/shares`);
+    expect(afterDelete.status).toBe(200);
+    expect(afterDelete.body.shares.some((item: any) => item.id === share.body.share.id)).toBe(false);
+
+    const publicShare = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(publicShare.status).toBe(404);
+
+    const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      const shareRow = db
+        .prepare(`SELECT revoked_at AS revokedAt FROM resource_shares WHERE id = ?`)
+        .get(share.body.share.id) as { revokedAt?: number | null } | undefined;
+      expect(typeof shareRow?.revokedAt).toBe('number');
+    } finally {
+      db.close();
+    }
+
+    const activity = await jsonFetch(`${baseUrl}/api/workspaces/local-personal/activity`);
+    expect(activity.status).toBe(200);
+    expect(activity.body.activities.find((item: any) => item.targetId === share.body.share.id)?.metadata).toMatchObject({
+      reason: 'artifact_deleted',
+      projectId,
+      projectName: projectId,
+      artifactId,
+    });
+  });
+
+  it('requires workspace admin role to create public viewer links', async () => {
+    const workspaceResp = await jsonFetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Share workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceId = workspaceResp.body.workspace.id as string;
+    const projectId = uniqueProjectId();
+    const projectResp = await jsonFetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: projectId, name: projectId, workspaceId }),
+    });
+    expect(projectResp.status).toBe(200);
+    const token = mintToolToken(projectId, 'run-share-role-test');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Manager-only Share Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    const owner = await jsonFetch(`${baseUrl}/api/workspaces`);
+    const ownerUserId = owner.body.currentUserId as string;
+    const memberUserId = `share-member-${Date.now()}`;
+    try {
+      db.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspaceId, memberUserId, Date.now());
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(memberUserId);
+    } finally {
+      db.close();
+    }
+
+    const denied = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe('FORBIDDEN');
+
+    const memberDelete = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${projectId}`, {
+      method: 'DELETE',
+    });
+    expect(memberDelete.status).toBe(403);
+    expect(memberDelete.body.error.code).toBe('FORBIDDEN');
+
+    const restoreDb = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      restoreDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(ownerUserId);
+    } finally {
+      restoreDb.close();
+    }
+
+    const allowed = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.share.shareUrl).toContain('/share/live-artifact/');
+
+    const memberAgainDb = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      memberAgainDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(memberUserId);
+    } finally {
+      memberAgainDb.close();
+    }
+
+    const memberShares = await jsonFetch(`${baseUrl}/api/workspaces/${workspaceId}/shares`);
+    expect(memberShares.status).toBe(403);
+    expect(memberShares.body.error.code).toBe('FORBIDDEN');
+
+    const memberRevoke = await jsonFetch(`${baseUrl}/api/workspaces/${workspaceId}/shares/${allowed.body.share.id}`, {
+      method: 'DELETE',
+    });
+    expect(memberRevoke.status).toBe(403);
+    expect(memberRevoke.body.error.code).toBe('FORBIDDEN');
+
+    const finalRestoreDb = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      finalRestoreDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(ownerUserId);
+    } finally {
+      finalRestoreDb.close();
+    }
+
+    const ownerDelete = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${projectId}`, {
+      method: 'DELETE',
+    });
+    expect(ownerDelete.status).toBe(200);
+  });
+
+  it('allows members to collaborate on live artifacts but rejects non-members', async () => {
+    const workspaceResp = await jsonFetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Live artifact collaboration ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceId = workspaceResp.body.workspace.id as string;
+    const projectId = uniqueProjectId();
+    const projectResp = await jsonFetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: projectId, name: projectId, workspaceId }),
+    });
+    expect(projectResp.status).toBe(200);
+    await writeProjectJson(projectId, 'artifact-metrics.json', {
+      summary: { owner: 'Member source', status: 'ready' },
+    });
+
+    const token = mintToolToken(projectId, 'run-member-live-artifact-test');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: {
+          ...validCreateInput('Member Editable Artifact'),
+          document: {
+            ...validCreateInput('Member Editable Artifact').document,
+            sourceJson: {
+              type: 'local_file',
+              input: { path: 'artifact-metrics.json' },
+              outputMapping: { dataPaths: [{ from: 'json.summary', to: 'summary' }], transform: 'identity' },
+              refreshPermission: 'manual_refresh_granted_for_read_only',
+            },
+          },
+        },
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const owner = await jsonFetch(`${baseUrl}/api/workspaces`);
+    const ownerUserId = owner.body.currentUserId as string;
+    const memberUserId = `live-artifact-member-${Date.now()}`;
+    const outsiderUserId = `live-artifact-outsider-${Date.now()}`;
+    const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      db.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspaceId, memberUserId, Date.now());
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(memberUserId);
+    } finally {
+      db.close();
+    }
+
+    const memberPatch = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Member Updated Artifact' }),
+    });
+    expect(memberPatch.status).toBe(200);
+    expect(memberPatch.body.artifact.title).toBe('Member Updated Artifact');
+
+    const memberRefresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(memberRefresh.status).toBe(200);
+    expect(memberRefresh.body.artifact.refreshStatus).toBe('succeeded');
+
+    const outsiderDb = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      outsiderDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(outsiderUserId);
+    } finally {
+      outsiderDb.close();
+    }
+
+    const outsiderPatch = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Outsider Updated Artifact' }),
+    });
+    expect(outsiderPatch.status).toBe(403);
+    expect(outsiderPatch.body.error).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'workspace membership required',
+    });
+
+    const outsiderRefresh = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/refresh?projectId=${encodeURIComponent(projectId)}`, {
+      method: 'POST',
+    });
+    expect(outsiderRefresh.status).toBe(403);
+    expect(outsiderRefresh.body.error).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'workspace membership required',
+    });
+
+    const restoreDb = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      restoreDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(ownerUserId);
+    } finally {
+      restoreDb.close();
+    }
+  });
+
+  it('revokes viewer links created by admins when they lose manager access', async () => {
+    const workspaceResp = await jsonFetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Share revoke workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceId = workspaceResp.body.workspace.id as string;
+    const projectId = uniqueProjectId();
+    const projectResp = await jsonFetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: projectId, name: projectId, workspaceId }),
+    });
+    expect(projectResp.status).toBe(200);
+    const token = mintToolToken(projectId, 'run-share-creator-demote-test');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: validCreateInput('Admin-created Share Artifact'),
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+    expect(create.status).toBe(200);
+
+    const owner = await jsonFetch(`${baseUrl}/api/workspaces`);
+    const ownerUserId = owner.body.currentUserId as string;
+    const adminUserId = `share-admin-${Date.now()}`;
+    const db = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      db.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'admin', ?)`,
+      ).run(workspaceId, adminUserId, Date.now());
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(adminUserId);
+    } finally {
+      db.close();
+    }
+
+    const share = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(share.status).toBe(200);
+    const publicShareBeforeDemote = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(publicShareBeforeDemote.status).toBe(200);
+
+    const restoreDb = new Database(path.join(serverRuntimeDataRoot, 'app.sqlite'));
+    try {
+      restoreDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(ownerUserId);
+    } finally {
+      restoreDb.close();
+    }
+
+    const demote = await jsonFetch(`${baseUrl}/api/workspaces/${workspaceId}/members/${adminUserId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'member' }),
+    });
+    expect(demote.status).toBe(200);
+
+    const publicShareAfterDemote = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(publicShareAfterDemote.status).toBe(404);
+    expect(publicShareAfterDemote.body.error.code).toBe('SHARE_NOT_FOUND');
+
+    const workspaceShares = await jsonFetch(`${baseUrl}/api/workspaces/${workspaceId}/shares`);
+    expect(workspaceShares.status).toBe(200);
+    expect(workspaceShares.body.shares.some((item: any) => item.id === share.body.share.id)).toBe(false);
+
+    const activity = await jsonFetch(`${baseUrl}/api/workspaces/${workspaceId}/activity`);
+    expect(activity.status).toBe(200);
+    const revokedActivity = activity.body.activities.find((item: any) => item.targetId === share.body.share.id);
+    expect(revokedActivity?.action).toBe('share.revoked');
+    expect(revokedActivity?.metadata).toMatchObject({
+      reason: 'member_demoted',
+      revokedUserId: adminUserId,
+      artifactId: create.body.artifact.id,
+      projectId,
+      projectName: projectId,
+    });
+  });
+
+  it('does not expose live artifact document source metadata through public viewer links', async () => {
+    const projectId = uniqueProjectId();
+    await createProject(projectId);
+    const token = mintToolToken(projectId, 'run-share-redaction-test');
+    const create = await jsonFetch(`${baseUrl}/api/tools/live-artifacts/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        input: {
+          ...validCreateInput('Redacted Shared Artifact'),
+          document: {
+            ...validCreateInput('Redacted Shared Artifact').document,
+            sourceJson: {
+              type: 'local_file',
+              input: { path: 'private-metrics.json' },
+              refreshPermission: 'manual_refresh_granted_for_read_only',
+            },
+          },
+        },
+        templateHtml: '<!doctype html><h1>{{data.title}}</h1>',
+      }),
+    });
+    expect(create.status).toBe(200);
+    expect(create.body.artifact.document.sourceJson.input.path).toBe('private-metrics.json');
+
+    const share = await jsonFetch(`${baseUrl}/api/live-artifacts/${create.body.artifact.id}/shares?projectId=${projectId}`, {
+      method: 'POST',
+    });
+    expect(share.status).toBe(200);
+
+    const publicShare = await jsonFetch(`${baseUrl}/api/shares/live-artifacts/${share.body.share.token}`);
+    expect(publicShare.status).toBe(200);
+    expect(publicShare.body.artifact).toMatchObject({
+      title: 'Redacted Shared Artifact',
+      hasDocument: true,
+    });
+    expect(publicShare.body.artifact.id).toBeUndefined();
+    expect(publicShare.body.artifact.document).toBeUndefined();
+    expect(JSON.stringify(publicShare.body)).not.toContain('private-metrics.json');
+    expect(JSON.stringify(publicShare.body)).not.toContain('sourceJson');
+    expect(JSON.stringify(publicShare.body)).not.toContain('run-share-redaction-test');
   });
 
   it('refreshes live artifacts through tool and UI routes', async () => {

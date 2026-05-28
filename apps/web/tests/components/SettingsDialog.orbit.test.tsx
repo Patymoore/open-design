@@ -97,6 +97,7 @@ function renderOrbitSettings(
     composioApiKeyConfigured?: boolean;
     onPersist?: OnPersist;
     onClose?: OnClose;
+    currentWorkspaceName?: string;
   } = {},
 ) {
   const onPersist = options.onPersist ?? vi.fn<OnPersist>();
@@ -116,6 +117,7 @@ function renderOrbitSettings(
       daemonLive
       appVersionInfo={null}
       initialSection="orbit"
+      currentWorkspaceName={options.currentWorkspaceName}
       onPersist={onPersist}
       onPersistComposioKey={vi.fn<(composio: AppConfig['composio']) => void>()}
       onClose={onClose}
@@ -139,6 +141,23 @@ describe('SettingsDialog Orbit connector gate refresh', () => {
     vi.mocked(fetchConnectors).mockReset();
     vi.mocked(fetchDesignTemplates).mockReset();
     vi.mocked(fetchSkills).mockReset();
+  });
+
+  it('shows which workspace new Orbit projects will be saved to', async () => {
+    vi.mocked(fetchConnectors).mockResolvedValue([connectedConnector]);
+    vi.mocked(fetchDesignTemplates).mockResolvedValue(orbitTemplates);
+    vi.mocked(fetchSkills).mockResolvedValue([]);
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/orbit/status') {
+        return new Response(JSON.stringify({ running: false, nextRunAt: null }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    renderOrbitSettings({}, { currentWorkspaceName: 'Design Team' });
+
+    expect(await screen.findByText('New Orbit projects will be saved to Design Team.')).toBeTruthy();
   });
 
   it('rechecks connected connectors when the window regains focus', async () => {

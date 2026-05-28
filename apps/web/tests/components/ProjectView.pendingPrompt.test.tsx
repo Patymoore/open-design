@@ -130,6 +130,7 @@ const config: AppConfig = {
 
 const project = (id: string, pendingPrompt?: string): Project => ({
   id,
+  workspaceId: 'local-personal',
   name: `Project ${id}`,
   skillId: null,
   designSystemId: null,

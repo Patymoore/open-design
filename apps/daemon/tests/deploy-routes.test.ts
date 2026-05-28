@@ -1,8 +1,9 @@
-import type http from 'node:http';
+import http from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 import {
   CLOUDFLARE_PAGES_PROVIDER_ID,
@@ -13,6 +14,35 @@ import {
 } from '../src/deploy.js';
 import { ensureProject } from '../src/projects.js';
 import { startServer } from '../src/server.js';
+
+function rawHttpRequest(
+  url: string,
+  opts: { method?: string; headers?: http.OutgoingHttpHeaders; body?: string } = {},
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: opts.method ?? 'GET',
+        headers: opts.headers ?? {},
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    if (opts.body) req.write(opts.body);
+    req.end();
+  });
+}
 
 describe('deploy provider routes', () => {
   let server: http.Server;
@@ -28,6 +58,40 @@ describe('deploy provider routes', () => {
   });
 
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  it('protects local deploy provider configuration from cross-origin requests', async () => {
+    const serverUrl = new URL(baseUrl);
+    const port = serverUrl.port;
+
+    const sameOrigin = await rawHttpRequest(`${baseUrl}/api/deploy/config`, {
+      headers: { Host: `127.0.0.1:${port}` },
+    });
+    expect(sameOrigin.status).toBe(200);
+
+    const rejectedGet = await rawHttpRequest(`${baseUrl}/api/deploy/config`, {
+      headers: {
+        Host: `127.0.0.1:${port}`,
+        Origin: 'https://evil.example',
+      },
+    });
+    expect(rejectedGet.status).toBe(403);
+
+    const rejectedPut = await rawHttpRequest(`${baseUrl}/api/deploy/config`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Host: `127.0.0.1:${port}`,
+        Origin: 'https://evil.example',
+      },
+      body: JSON.stringify({ providerId: VERCEL_PROVIDER_ID, token: 'stolen' }),
+    });
+    expect(rejectedPut.status).toBe(403);
+
+    const rejectedZones = await rawHttpRequest(`${baseUrl}/api/deploy/cloudflare-pages/zones`, {
+      headers: { Host: 'evil.example' },
+    });
+    expect(rejectedZones.status).toBe(403);
+  });
 
   it('dispatches deploy config reads and writes by providerId', async () => {
     const stateRoot = await mkdtemp(path.join(os.tmpdir(), 'od-deploy-route-config-'));
@@ -164,6 +228,17 @@ describe('deploy provider routes', () => {
     const dataDir = process.env.OD_DATA_DIR;
     if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
     const projectId = `deploy-route-${Date.now()}`;
+    const createProjectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        name: 'Deploy preflight fixture',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(createProjectResp.status).toBe(200);
     const dir = await ensureProject(path.join(dataDir, 'projects'), projectId);
     await writeFile(
       path.join(dir, 'index.html'),
@@ -185,6 +260,158 @@ describe('deploy provider routes', () => {
       entry: 'index.html',
       totalFiles: 1,
     });
+  });
+
+  it('requires workspace membership and manager access for project deploy surfaces', async () => {
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Deploy Access ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+    const projectId = `deploy-access-${Date.now()}`;
+    const createProjectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Private deploy fixture',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(createProjectResp.status).toBe(200);
+    const dir = await ensureProject(path.join(dataDir, 'projects'), projectId);
+    await writeFile(
+      path.join(dir, 'index.html'),
+      '<!doctype html><meta name="viewport" content="width=device-width"><h1>Private</h1>',
+    );
+    const deploymentId = `deploy-access-deployment-${Date.now()}`;
+    const deploymentRowId = `deploy-access-row-${Date.now()}`;
+
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+    const outsiderUserId = `deploy-outsider-${Date.now()}`;
+    const sqlite = new Database(path.join(dataDir, 'app.sqlite'));
+    try {
+      sqlite.prepare(
+        `INSERT INTO deployments
+           (id, project_id, file_name, provider_id, url, deployment_id, deployment_count, target, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        deploymentRowId,
+        projectId,
+        'index.html',
+        VERCEL_PROVIDER_ID,
+        'https://example.com/private-deploy',
+        deploymentId,
+        1,
+        'preview',
+        'link-delayed',
+        Date.now(),
+        Date.now(),
+      );
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(outsiderUserId);
+    } finally {
+      sqlite.close();
+    }
+
+    try {
+      const deploymentsResp = await fetch(`${baseUrl}/api/projects/${projectId}/deployments`);
+      expect(deploymentsResp.status).toBe(403);
+      const preflightResp = await fetch(`${baseUrl}/api/projects/${projectId}/deploy/preflight`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: 'index.html',
+          providerId: CLOUDFLARE_PAGES_PROVIDER_ID,
+        }),
+      });
+      expect(preflightResp.status).toBe(403);
+    } finally {
+      const memberUserId = `deploy-member-${Date.now()}`;
+      const memberDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        memberDb.prepare(
+          `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+           VALUES (?, ?, 'member', ?)`,
+        ).run(workspaceBody.workspace.id, memberUserId, Date.now());
+        memberDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(memberUserId);
+        memberDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES (?, ?)`)
+          .run(`currentWorkspaceId:${memberUserId}`, workspaceBody.workspace.id);
+      } finally {
+        memberDb.close();
+      }
+    }
+
+    try {
+      const memberDeploymentsResp = await fetch(`${baseUrl}/api/projects/${projectId}/deployments`);
+      expect(memberDeploymentsResp.status).toBe(200);
+      const memberPreflightResp = await fetch(`${baseUrl}/api/projects/${projectId}/deploy/preflight`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: 'index.html',
+          providerId: CLOUDFLARE_PAGES_PROVIDER_ID,
+        }),
+      });
+      expect(memberPreflightResp.status).toBe(200);
+
+      const memberCheckLinkResp = await fetch(
+        `${baseUrl}/api/projects/${projectId}/deployments/${deploymentRowId}/check-link`,
+        { method: 'POST' },
+      );
+      expect(memberCheckLinkResp.status).toBe(403);
+      const memberCheckLinkBody = (await memberCheckLinkResp.json()) as { error?: { code?: string; message?: string } };
+      expect(memberCheckLinkBody.error?.code).toBe('FORBIDDEN');
+      expect(memberCheckLinkBody.error?.message).toMatch(/admin role/i);
+
+      const memberDeployResp = await fetch(`${baseUrl}/api/projects/${projectId}/deploy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: 'index.html',
+          providerId: VERCEL_PROVIDER_ID,
+        }),
+      });
+      expect(memberDeployResp.status).toBe(403);
+      const memberDeployBody = (await memberDeployResp.json()) as { error?: { code?: string; message?: string } };
+      expect(memberDeployBody.error?.code).toBe('FORBIDDEN');
+      expect(memberDeployBody.error?.message).toMatch(/admin role/i);
+
+      const memberConfigGetResp = await fetch(`${baseUrl}/api/deploy/config`);
+      expect(memberConfigGetResp.status).toBe(403);
+      const memberConfigGetBody = (await memberConfigGetResp.json()) as { error?: { code?: string; message?: string } };
+      expect(memberConfigGetBody.error?.code).toBe('FORBIDDEN');
+      expect(memberConfigGetBody.error?.message).toMatch(/admin role/i);
+
+      const memberConfigPutResp = await fetch(`${baseUrl}/api/deploy/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId: VERCEL_PROVIDER_ID, token: 'member-token' }),
+      });
+      expect(memberConfigPutResp.status).toBe(403);
+      const memberConfigPutBody = (await memberConfigPutResp.json()) as { error?: { code?: string; message?: string } };
+      expect(memberConfigPutBody.error?.code).toBe('FORBIDDEN');
+      expect(memberConfigPutBody.error?.message).toMatch(/admin role/i);
+
+      const memberZonesResp = await fetch(`${baseUrl}/api/deploy/cloudflare-pages/zones`);
+      expect(memberZonesResp.status).toBe(403);
+      const memberZonesBody = (await memberZonesResp.json()) as { error?: { code?: string; message?: string } };
+      expect(memberZonesBody.error?.code).toBe('FORBIDDEN');
+      expect(memberZonesBody.error?.message).toMatch(/admin role/i);
+    } finally {
+      const restoreDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
   });
 
   it('derives Cloudflare Pages project names from the Open Design project', async () => {

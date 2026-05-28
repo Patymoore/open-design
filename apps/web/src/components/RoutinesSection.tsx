@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type {
   CreateRoutineRequest,
@@ -7,6 +7,8 @@ import type {
   RoutineRun,
   RoutineSchedule,
   Weekday,
+  Workspace,
+  WorkspaceMembership,
 } from '@open-design/contracts';
 
 import { Icon } from './Icon';
@@ -22,6 +24,9 @@ type ProjectSummary = { id: string; name: string };
 
 type RoutinesSectionProps = {
   onClose?: () => void;
+  currentWorkspaceId?: string;
+  currentWorkspaceName?: string;
+  currentWorkspaceRole?: Workspace['currentUserRole'];
 };
 
 type ScheduleKind = RoutineSchedule['kind'];
@@ -455,10 +460,16 @@ function RunHistory({
   );
 }
 
-export function RoutinesSection({ onClose }: RoutinesSectionProps) {
+export function RoutinesSection({
+  onClose,
+  currentWorkspaceId,
+  currentWorkspaceName = 'Personal Workspace',
+  currentWorkspaceRole,
+}: RoutinesSectionProps) {
   const t = useT();
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [members, setMembers] = useState<WorkspaceMembership[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -466,8 +477,15 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [ownerTargets, setOwnerTargets] = useState<Record<string, string>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [historyTick, setHistoryTick] = useState(0);
+  const refreshSerialRef = useRef(0);
+  const currentWorkspaceIdRef = useRef(currentWorkspaceId);
+  currentWorkspaceIdRef.current = currentWorkspaceId;
+  const canManageRoutines = currentWorkspaceId
+    ? currentWorkspaceRole === 'owner' || currentWorkspaceRole === 'admin'
+    : currentWorkspaceRole == null || currentWorkspaceRole === 'owner' || currentWorkspaceRole === 'admin';
 
   const timezones = useMemo(() => {
     const local = detectLocalTimezone();
@@ -477,17 +495,35 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
     return Array.from(set);
   }, []);
 
-  const refresh = async () => {
+  const refresh = async (options: { clear?: boolean } = {}) => {
+    const refreshSerial = refreshSerialRef.current + 1;
+    refreshSerialRef.current = refreshSerial;
+    setError(null);
+    if (options.clear) {
+      setLoading(true);
+      setRoutines([]);
+      setProjects([]);
+      setMembers([]);
+    }
     try {
-      const [rRes, pRes] = await Promise.all([
-        fetch('/api/routines'),
-        fetch('/api/projects'),
+      const workspaceQuery = currentWorkspaceId
+        ? `?workspaceId=${encodeURIComponent(currentWorkspaceId)}`
+        : '';
+      const [rRes, pRes, mRes] = await Promise.all([
+        fetch(`/api/routines${workspaceQuery}`),
+        fetch(`/api/projects${workspaceQuery}`),
+        currentWorkspaceId
+          ? fetch(`/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/members`)
+          : Promise.resolve(null),
       ]);
+      if (refreshSerial !== refreshSerialRef.current) return;
       if (!rRes.ok) throw new Error(`routines: ${rRes.status}`);
       const rJson = await rRes.json();
+      if (refreshSerial !== refreshSerialRef.current) return;
       setRoutines(rJson.routines ?? []);
       if (pRes.ok) {
         const pJson = await pRes.json();
+        if (refreshSerial !== refreshSerialRef.current) return;
         setProjects(
           (pJson.projects ?? []).map((p: ProjectSummary) => ({
             id: p.id,
@@ -495,17 +531,38 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
           })),
         );
       }
+      if (mRes?.ok) {
+        const mJson = await mRes.json();
+        if (refreshSerial !== refreshSerialRef.current) return;
+        setMembers(mJson.members ?? []);
+      } else {
+        setMembers([]);
+      }
       setError(null);
     } catch (err) {
+      if (refreshSerial !== refreshSerialRef.current) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (refreshSerial === refreshSerialRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    void refresh();
-  }, []);
+    setShowForm(false);
+    setForm(emptyForm());
+    setEditingId(null);
+    setSubmitting(false);
+    setOwnerTargets({});
+    setExpandedId(null);
+    setBusyId(null);
+    setError(null);
+  }, [currentWorkspaceId]);
+
+  useEffect(() => {
+    void refresh({ clear: true });
+  }, [currentWorkspaceId]);
 
   const projectsById = useMemo(() => {
     const map = new Map<string, string>();
@@ -515,6 +572,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    const workspaceId = currentWorkspaceId;
     setSubmitting(true);
     setError(null);
     try {
@@ -526,6 +584,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
           ? { mode: 'reuse', projectId: form.projectId }
           : { mode: 'create_each_run' };
       const body: CreateRoutineRequest = {
+        ...(workspaceId ? { workspaceId } : {}),
         name: form.name.trim(),
         prompt: form.prompt,
         schedule: buildSchedule(form),
@@ -535,7 +594,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
       const isEdit = editingId !== null;
       const url = isEdit ? `/api/routines/${editingId}` : '/api/routines';
       const payload = isEdit
-        ? { name: body.name, prompt: body.prompt, schedule: body.schedule, target: body.target }
+        ? { workspaceId: body.workspaceId, name: body.name, prompt: body.prompt, schedule: body.schedule, target: body.target }
         : body;
       const res = await fetch(url, {
         method: isEdit ? 'PATCH' : 'POST',
@@ -546,18 +605,24 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `${isEdit ? 'update' : 'create'} failed: ${res.status}`);
       }
+      if (currentWorkspaceIdRef.current !== workspaceId) return;
       setShowForm(false);
       setEditingId(null);
       setForm(emptyForm());
       void refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setSubmitting(false);
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setSubmitting(false);
+      }
     }
   };
 
   const runNow = async (id: string) => {
+    const workspaceId = currentWorkspaceId;
     setBusyId(id);
     setError(null);
     try {
@@ -566,17 +631,23 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `run failed: ${res.status}`);
       }
+      if (currentWorkspaceIdRef.current !== workspaceId) return;
       void refresh();
       setExpandedId(id);
       setHistoryTick((v) => v + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setBusyId(null);
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setBusyId((current) => (current === id ? null : current));
+      }
     }
   };
 
   const toggleEnabled = async (routine: Routine) => {
+    const workspaceId = currentWorkspaceId;
     setBusyId(routine.id);
     try {
       const res = await fetch(`/api/routines/${routine.id}`, {
@@ -588,16 +659,55 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `update failed: ${res.status}`);
       }
+      if (currentWorkspaceIdRef.current !== workspaceId) return;
       void refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setBusyId(null);
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setBusyId((current) => (current === routine.id ? null : current));
+      }
+    }
+  };
+
+  const transferOwner = async (routine: Routine) => {
+    const workspaceId = currentWorkspaceId;
+    const ownedByUserId = ownerTargets[routine.id] ?? routine.ownedByUserId ?? '';
+    if (!ownedByUserId || ownedByUserId === routine.ownedByUserId) return;
+    setBusyId(routine.id);
+    try {
+      const res = await fetch(`/api/routines/${routine.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ownedByUserId }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `update failed: ${res.status}`);
+      }
+      if (currentWorkspaceIdRef.current !== workspaceId) return;
+      setOwnerTargets((current) => {
+        const next = { ...current };
+        delete next[routine.id];
+        return next;
+      });
+      void refresh();
+    } catch (err) {
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setBusyId((current) => (current === routine.id ? null : current));
+      }
     }
   };
 
   const remove = async (id: string) => {
     if (!window.confirm(t('routines.confirmDelete'))) return;
+    const workspaceId = currentWorkspaceId;
     setBusyId(id);
     try {
       const res = await fetch(`/api/routines/${id}`, { method: 'DELETE' });
@@ -605,12 +715,17 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `delete failed: ${res.status}`);
       }
+      if (currentWorkspaceIdRef.current !== workspaceId) return;
       if (expandedId === id) setExpandedId(null);
       void refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setBusyId(null);
+      if (currentWorkspaceIdRef.current === workspaceId) {
+        setBusyId((current) => (current === id ? null : current));
+      }
     }
   };
 
@@ -619,12 +734,15 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
       <div className="section-head">
         <div>
           <h3>{t('routines.title')}</h3>
+          <p>Scheduled agent sessions for {currentWorkspaceName}.</p>
         </div>
         {!showForm ? (
           <button
             type="button"
             className="btn btn-primary"
+            disabled={!canManageRoutines}
             onClick={() => {
+              if (!canManageRoutines) return;
               setForm(emptyForm());
               setShowForm(true);
             }}
@@ -638,6 +756,11 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
       {error ? (
         <div className="settings-notice error" role="alert">
           {error}
+        </div>
+      ) : null}
+      {!canManageRoutines ? (
+        <div className="settings-notice" role="status">
+          Admin or owner access required to manage workspace routines.
         </div>
       ) : null}
 
@@ -755,6 +878,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
             const isBusy = busyId === r.id;
             const isExpanded = expandedId === r.id;
             const failureReason = runFailureReason(r.lastRun);
+            const ownerTarget = ownerTargets[r.id] ?? r.ownedByUserId ?? '';
             return (
               <li key={r.id} className={`routines-card routines-item${r.enabled ? '' : ' is-disabled'}`}>
                 <div className="routines-item-head">
@@ -768,6 +892,18 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                     <div className="routines-item-line">{describeSchedule(r.schedule, t, r.nextRunAt)}</div>
                     <div className="routines-item-meta">
                       <span>{targetLabel}</span>
+                      {r.ownedByUserId ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span>owned by {r.ownedByUserId}</span>
+                        </>
+                      ) : null}
+                      {r.createdByUserId && r.createdByUserId !== r.ownedByUserId ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span>created by {r.createdByUserId}</span>
+                        </>
+                      ) : null}
                       <span aria-hidden>·</span>
                       <span>{t('routines.metaNext', { when: formatRelative(r.nextRunAt) })}</span>
                       {r.lastRun ? (
@@ -786,11 +922,34 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                     ) : null}
                   </div>
                   <div className="routines-item-actions">
+                    <select
+                      aria-label={`Transfer owner for ${r.name}`}
+                      value={ownerTarget}
+                      disabled={!canManageRoutines || isBusy || members.length === 0}
+                      onChange={(event) => setOwnerTargets((current) => ({
+                        ...current,
+                        [r.id]: event.target.value,
+                      }))}
+                    >
+                      {members.map((member) => (
+                        <option key={member.userId} value={member.userId}>
+                          Owner: {member.userId === r.ownedByUserId ? `${member.userId} (current)` : member.userId}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => transferOwner(r)}
+                      disabled={!canManageRoutines || isBusy || !ownerTarget || ownerTarget === r.ownedByUserId}
+                    >
+                      Transfer
+                    </button>
                     <button
                       type="button"
                       className="btn btn-primary"
                       onClick={() => runNow(r.id)}
-                      disabled={isBusy}
+                      disabled={!canManageRoutines || isBusy}
                     >
                       {t('routines.runNow')}
                     </button>
@@ -798,11 +957,12 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                       type="button"
                       className="btn"
                       onClick={() => {
+                        if (!canManageRoutines) return;
                         setForm(formFromRoutine(r));
                         setEditingId(r.id);
                         setShowForm(true);
                       }}
-                      disabled={isBusy}
+                      disabled={!canManageRoutines || isBusy}
                     >
                       {t('routines.edit')}
                     </button>
@@ -810,7 +970,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                       type="button"
                       className="btn"
                       onClick={() => toggleEnabled(r)}
-                      disabled={isBusy}
+                      disabled={!canManageRoutines || isBusy}
                     >
                       {r.enabled ? t('routines.pause') : t('routines.resume')}
                     </button>
@@ -826,7 +986,7 @@ export function RoutinesSection({ onClose }: RoutinesSectionProps) {
                       type="button"
                       className="btn btn-ghost btn-danger"
                       onClick={() => remove(r.id)}
-                      disabled={isBusy}
+                      disabled={!canManageRoutines || isBusy}
                       title={t('routines.deleteTitle')}
                     >
                       {t('routines.delete')}

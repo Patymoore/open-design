@@ -97,6 +97,7 @@ const PLUGIN_SHARE_DETAILS: Record<PluginShareAction, {
 interface PluginsViewProps {
   onCreatePlugin?: (goal?: string) => void;
   onUsePlugin?: (record: InstalledPluginRecord, action: PluginUseAction) => void;
+  canSharePluginProjects?: boolean;
   onCreatePluginShareProject?: (
     pluginId: string,
     action: PluginShareAction,
@@ -107,6 +108,7 @@ interface PluginsViewProps {
 export function PluginsView({
   onCreatePlugin,
   onUsePlugin,
+  canSharePluginProjects = true,
   onCreatePluginShareProject,
 }: PluginsViewProps) {
   const { locale, t } = useI18n();
@@ -243,10 +245,22 @@ export function PluginsView({
     record: InstalledPluginRecord,
     action: PluginShareAction,
   ) {
+    if (!canSharePluginProjects) {
+      setNotice({
+        ok: false,
+        message: 'Admin or owner access required to publish or contribute workspace plugins.',
+      });
+      return;
+    }
     const actionRecord =
       plugins.find((plugin) => plugin.id === PLUGIN_SHARE_ACTION_PLUGIN_IDS[action]) ?? null;
     setShareConfirm({ sourceRecord: record, action, actionRecord });
   }
+
+  useEffect(() => {
+    if (canSharePluginProjects) return;
+    setShareConfirm(null);
+  }, [canSharePluginProjects]);
 
   async function handleInstallAvailable(plugin: AvailableMarketplacePlugin) {
     setPendingInstallEntry(plugin.key);
@@ -413,16 +427,20 @@ export function PluginsView({
               });
               setDetailsRecord(record);
             }}
-            onPluginShareAction={(record, action) => {
-              trackPluginsInstalledTabClick(analytics.track, {
-                page_name: 'plugins',
-                area: 'installed_tab',
-                element: action === 'publish-github' ? 'templates_publish' : 'templates_contribute',
-                template_id: record.id,
-                template_type: record.sourceKind,
-              });
-              requestPluginShareTask(record, action);
-            }}
+            {...(canSharePluginProjects
+              ? {
+                  onPluginShareAction: (record, action) => {
+                    trackPluginsInstalledTabClick(analytics.track, {
+                      page_name: 'plugins',
+                      area: 'installed_tab',
+                      element: action === 'publish-github' ? 'templates_publish' : 'templates_contribute',
+                      template_id: record.id,
+                      template_type: record.sourceKind,
+                    });
+                    requestPluginShareTask(record, action);
+                  },
+                }
+              : {})}
             preferDefaultFacet={false}
             title={t('pluginsView.installedTitle')}
             subtitle={t('pluginsView.installedSubtitle')}

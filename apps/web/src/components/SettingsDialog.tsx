@@ -73,6 +73,7 @@ import type {
   ProviderModelsResponse,
   SkillSummary,
 } from '../types';
+import type { Workspace } from '@open-design/contracts';
 import { testAgent, testApiProvider } from '../providers/connection-test';
 import { fetchProviderModels } from '../providers/provider-models';
 import {
@@ -147,6 +148,9 @@ interface Props {
   appVersionInfo: AppVersionInfo | null;
   welcome?: boolean;
   initialSection?: SettingsSection;
+  currentWorkspaceId?: string;
+  currentWorkspaceName?: string;
+  currentWorkspaceRole?: Workspace['currentUserRole'];
   /**
    * Persist the current draft. Invoked by the dialog's autosave loop on
    * every committed edit. Returns a promise that resolves once both
@@ -792,6 +796,9 @@ export function SettingsDialog({
   appVersionInfo,
   welcome,
   initialSection = 'execution',
+  currentWorkspaceId,
+  currentWorkspaceName,
+  currentWorkspaceRole,
   onPersist,
   onPersistComposioKey,
   composioConfigLoading = false,
@@ -3268,12 +3275,20 @@ export function SettingsDialog({
             />
           ) : null}
 
-          {activeSection === 'routines' ? <RoutinesSection onClose={onClose} /> : null}
+          {activeSection === 'routines' ? (
+            <RoutinesSection
+              onClose={onClose}
+              currentWorkspaceId={currentWorkspaceId}
+              currentWorkspaceName={currentWorkspaceName}
+              currentWorkspaceRole={currentWorkspaceRole}
+            />
+          ) : null}
 
           {activeSection === 'orbit' ? (
             <OrbitSection
               cfg={cfg}
               setCfg={setCfg}
+              currentWorkspaceName={currentWorkspaceName}
               composioApiKeyConfigured={Boolean(cfg.composio?.apiKeyConfigured)}
               daemonMediaProviders={daemonMediaProviders}
               daemonMediaProvidersFetchState={daemonMediaProvidersFetchState}
@@ -4008,6 +4023,7 @@ function formatRelative(
 function OrbitSection({
   cfg,
   setCfg,
+  currentWorkspaceName,
   composioApiKeyConfigured,
   daemonMediaProviders,
   daemonMediaProvidersFetchState,
@@ -4016,6 +4032,7 @@ function OrbitSection({
 }: {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  currentWorkspaceName?: string;
   /** Whether the user has already saved a Composio API key. Drives the
    *  Orbit configuration gate's copy/CTA. When false the gate explains
    *  that Orbit needs Composio first; when true (key present, just no
@@ -4313,6 +4330,9 @@ function OrbitSection({
           <h3 className="orbit-hero-title">{t('settings.orbit.title')}</h3>
           <p className="orbit-hero-lede">
             {t('settings.orbit.lede')}
+          </p>
+          <p className="orbit-hero-workspace">
+            New Orbit projects will be saved to {currentWorkspaceName ?? 'Personal Workspace'}.
           </p>
         </div>
         <div className="orbit-hero-actions">

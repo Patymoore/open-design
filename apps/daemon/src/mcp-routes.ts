@@ -7,12 +7,14 @@ import { beginAuth, exchangeCodeForToken, refreshAccessToken } from './mcp-oauth
 import { clearToken, getToken, isTokenExpired, readAllTokens, setToken } from './mcp-tokens.js';
 import type { RouteDeps } from './server-context.js';
 
-export interface RegisterMcpRoutesDeps extends RouteDeps<'http' | 'paths' | 'mcp'> {}
+export interface RegisterMcpRoutesDeps extends RouteDeps<'db' | 'http' | 'paths' | 'mcp' | 'projectStore'> {}
 
 export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
+  const { db } = ctx;
   const { isLocalSameOrigin, resolvedPortRef, sendApiError } = ctx.http;
   const { OD_BIN, RUNTIME_DATA_DIR, PROJECTS_DIR } = ctx.paths;
   const { pendingAuth, daemonUrlRef } = ctx.mcp;
+  const { getLocalUserId, getCurrentWorkspaceId, getWorkspaceMembership } = ctx.projectStore;
   const getResolvedPort = () => resolvedPortRef.current;
   const getDaemonUrl = () => daemonUrlRef.current;
   // Surfaces the absolute paths to the daemon's Node-compatible runtime and
@@ -23,6 +25,17 @@ export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
   // paths cannot change without a daemon restart.
   const INSTALL_INFO_TTL_MS = 5000;
   let installInfoCache: { t: number; payload: object } | null = null;
+
+  function requireCurrentWorkspaceManager(res: any) {
+    const userId = getLocalUserId(db);
+    const workspaceId = getCurrentWorkspaceId(db, userId);
+    const role = getWorkspaceMembership(db, workspaceId, userId)?.role;
+    if (role !== 'owner' && role !== 'admin') {
+      sendApiError(res, 403, 'FORBIDDEN', role ? 'workspace admin role required' : 'workspace membership required');
+      return false;
+    }
+    return true;
+  }
 
   app.get('/api/mcp/install-info', (req, res) => {
     if (!isLocalSameOrigin(req, getResolvedPort())) {
@@ -77,6 +90,7 @@ export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
     if (!isLocalSameOrigin(req, getResolvedPort())) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const cfg = await readMcpConfig(RUNTIME_DATA_DIR);
       res.json({ servers: cfg.servers, templates: MCP_TEMPLATES });
@@ -91,6 +105,7 @@ export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
     if (!isLocalSameOrigin(req, getResolvedPort())) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const cfg = await writeMcpConfig(RUNTIME_DATA_DIR, req.body);
       res.json({ servers: cfg.servers, templates: MCP_TEMPLATES });
@@ -116,6 +131,7 @@ export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
     if (!isLocalSameOrigin(req, getResolvedPort())) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
+    if (!requireCurrentWorkspaceManager(res)) return;
     const serverId =
       typeof req.body?.serverId === 'string' ? req.body.serverId.trim() : '';
     if (!serverId) {
@@ -246,6 +262,7 @@ export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
     if (!isLocalSameOrigin(req, getResolvedPort())) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
+    if (!requireCurrentWorkspaceManager(res)) return;
     const serverId =
       typeof req.query.serverId === 'string' ? req.query.serverId.trim() : '';
     if (!serverId) return res.status(400).json({ error: 'serverId is required' });
@@ -267,6 +284,7 @@ export function registerMcpRoutes(app: Express, ctx: RegisterMcpRoutesDeps) {
     if (!isLocalSameOrigin(req, getResolvedPort())) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
+    if (!requireCurrentWorkspaceManager(res)) return;
     const serverId =
       typeof req.body?.serverId === 'string' ? req.body.serverId.trim() : '';
     if (!serverId) return res.status(400).json({ error: 'serverId is required' });

@@ -101,6 +101,400 @@ describe('RoutinesSection', () => {
     ]);
   });
 
+  it('scopes routine and project requests to the current workspace when provided', async () => {
+    const fetchUrls: string[] = [];
+    const createBodies: unknown[] = [];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      fetchUrls.push(url);
+      if (url === '/api/routines?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body));
+        createBodies.push(body);
+        return new Response(JSON.stringify({
+          routine: {
+            id: 'routine-1',
+            workspaceId: 'team-ws',
+            name: body.name,
+            prompt: body.prompt,
+            schedule: body.schedule,
+            target: body.target,
+            skillId: null,
+            agentId: null,
+            enabled: true,
+            nextRunAt: null,
+            lastRun: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    }) as typeof fetch;
+
+    render(
+      <RoutinesSection
+        currentWorkspaceId="team-ws"
+        currentWorkspaceName="Team Workspace"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    expect(await screen.findByText('Scheduled agent sessions for Team Workspace.')).toBeTruthy();
+    expect(fetchUrls).toContain('/api/routines?workspaceId=team-ws');
+    expect(fetchUrls).toContain('/api/projects?workspaceId=team-ws');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New automation' }));
+    fireEvent.change(screen.getByLabelText('Name'), {
+      target: { value: 'Team digest' },
+    });
+    fireEvent.change(screen.getByLabelText('Prompt'), {
+      target: { value: 'Summarize team activity.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(createBodies).toHaveLength(1);
+    });
+    expect(createBodies[0]).toMatchObject({
+      workspaceId: 'team-ws',
+      name: 'Team digest',
+      target: { mode: 'create_each_run' },
+    });
+  });
+
+  it('does not allow managing workspace routines until the current role is known', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/workspaces/team-ws/members') {
+        return new Response(JSON.stringify({ members: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    }) as typeof fetch;
+
+    render(<RoutinesSection currentWorkspaceId="team-ws" currentWorkspaceName="Team Workspace" />);
+
+    expect(await screen.findByText('Scheduled agent sessions for Team Workspace.')).toBeTruthy();
+    expect(screen.getByText('Admin or owner access required to manage workspace routines.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'New automation' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('renders workspace routines as read-only for workspace members', async () => {
+    const routines: Routine[] = [{
+      id: 'routine-1',
+      workspaceId: 'team-ws',
+      createdByUserId: 'owner-1',
+      ownedByUserId: 'owner-1',
+      name: 'Team digest',
+      prompt: 'Summarize team activity.',
+      schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' },
+      skillId: null,
+      agentId: null,
+      enabled: true,
+      nextRunAt: Date.now() + 3600_000,
+      lastRun: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    render(
+      <RoutinesSection
+        currentWorkspaceId="team-ws"
+        currentWorkspaceName="Team Workspace"
+        currentWorkspaceRole="member"
+      />,
+    );
+
+    const card = (await screen.findByText('Team digest')).closest('li');
+    expect(card).toBeTruthy();
+    expect(within(card as HTMLElement).getByText('owned by owner-1')).toBeTruthy();
+    expect(screen.getByText('Admin or owner access required to manage workspace routines.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'New automation' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(card as HTMLElement).getByRole('button', { name: 'Run now' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(card as HTMLElement).getByRole('button', { name: 'Edit' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(card as HTMLElement).getByRole('button', { name: 'Pause' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(card as HTMLElement).getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(card as HTMLElement).getByRole('button', { name: 'History' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('clears routine state when switching workspaces', async () => {
+    let resolveSecondRoutines: (response: Response) => void = () => {};
+    const secondRoutines = new Promise<Response>((resolve) => {
+      resolveSecondRoutines = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines?workspaceId=team-a' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({
+          routines: [{
+            id: 'routine-a',
+            workspaceId: 'team-a',
+            name: 'Team A digest',
+            prompt: 'Summarize team A.',
+            schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+            target: { mode: 'create_each_run' },
+            skillId: null,
+            agentId: null,
+            enabled: true,
+            nextRunAt: Date.now() + 3600_000,
+            lastRun: null,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines?workspaceId=team-b' && (!init || init.method === undefined)) {
+        return secondRoutines;
+      }
+      if (url === '/api/projects?workspaceId=team-a' || url === '/api/projects?workspaceId=team-b') {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/workspaces/team-a/members' || url === '/api/workspaces/team-b/members') {
+        return new Response(JSON.stringify({ members: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { rerender } = render(
+      <RoutinesSection
+        currentWorkspaceId="team-a"
+        currentWorkspaceName="Team A"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    expect(await screen.findByText('Team A digest')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'New automation' }));
+    expect(screen.getByLabelText('Name')).toBeTruthy();
+
+    rerender(
+      <RoutinesSection
+        currentWorkspaceId="team-b"
+        currentWorkspaceName="Team B"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Loading…')).toBeTruthy();
+    });
+    expect(screen.queryByText('Team A digest')).toBeNull();
+    expect(screen.queryByLabelText('Name')).toBeNull();
+
+    resolveSecondRoutines(new Response(JSON.stringify({ routines: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No automations yet.')).toBeTruthy();
+    });
+  });
+
+  it('ignores stale routine load failures after switching workspaces', async () => {
+    let rejectFirstRoutines: (error: Error) => void = () => {};
+    const firstRoutines = new Promise<Response>((_, reject) => {
+      rejectFirstRoutines = reject;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines?workspaceId=team-a' && (!init || init.method === undefined)) {
+        return firstRoutines;
+      }
+      if (url === '/api/routines?workspaceId=team-b' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects?workspaceId=team-a' || url === '/api/projects?workspaceId=team-b') {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/workspaces/team-a/members' || url === '/api/workspaces/team-b/members') {
+        return new Response(JSON.stringify({ members: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { rerender } = render(
+      <RoutinesSection
+        currentWorkspaceId="team-a"
+        currentWorkspaceName="Team A"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    rerender(
+      <RoutinesSection
+        currentWorkspaceId="team-b"
+        currentWorkspaceName="Team B"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('No automations yet.')).toBeTruthy();
+    });
+
+    rejectFirstRoutines(new Error('team-a failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('team-a failed')).toBeNull();
+  });
+
+  it('ignores stale routine action failures after switching workspaces', async () => {
+    let resolveRun: (response: Response) => void = () => {};
+    const runResponse = new Promise<Response>((resolve) => {
+      resolveRun = resolve;
+    });
+    const teamARoutines: Routine[] = [{
+      id: 'routine-a',
+      workspaceId: 'team-a',
+      name: 'Team A digest',
+      prompt: 'Summarize team A.',
+      schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' },
+      skillId: null,
+      agentId: null,
+      enabled: true,
+      nextRunAt: null,
+      lastRun: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines?workspaceId=team-a' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: teamARoutines }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines?workspaceId=team-b' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines/routine-a/run' && init?.method === 'POST') {
+        return runResponse;
+      }
+      if (url === '/api/projects?workspaceId=team-a' || url === '/api/projects?workspaceId=team-b') {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/workspaces/team-a/members' || url === '/api/workspaces/team-b/members') {
+        return new Response(JSON.stringify({ members: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const { rerender } = render(
+      <RoutinesSection
+        currentWorkspaceId="team-a"
+        currentWorkspaceName="Team A"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    const card = (await screen.findByText('Team A digest')).closest('li');
+    expect(card).toBeTruthy();
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'Run now' }));
+
+    rerender(
+      <RoutinesSection
+        currentWorkspaceId="team-b"
+        currentWorkspaceName="Team B"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('No automations yet.')).toBeTruthy();
+    });
+
+    resolveRun(new Response(JSON.stringify({ error: 'team-a run failed' }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('team-a run failed')).toBeNull();
+  });
+
   it('pauses and resumes an existing routine through PATCH updates', async () => {
     let routines: Routine[] = [{
       id: 'routine-1',
@@ -165,6 +559,82 @@ describe('RoutinesSection', () => {
     });
 
     expect(patchBodies).toEqual([{ enabled: false }, { enabled: true }]);
+  });
+
+  it('transfers routine owner for workspace managers', async () => {
+    let routines: Routine[] = [{
+      id: 'routine-1',
+      workspaceId: 'team-ws',
+      name: 'Morning briefing',
+      prompt: 'Morning summary',
+      schedule: { kind: 'daily', time: '09:00', timezone: 'UTC' },
+      target: { mode: 'create_each_run' },
+      ownedByUserId: 'owner-1',
+      skillId: null,
+      agentId: null,
+      enabled: true,
+      nextRunAt: Date.now() + 3600_000,
+      lastRun: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }];
+    const patchBodies: unknown[] = [];
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/routines?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ routines }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/projects?workspaceId=team-ws' && (!init || init.method === undefined)) {
+        return new Response(JSON.stringify({ projects: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/workspaces/team-ws/members') {
+        return new Response(JSON.stringify({
+          members: [
+            { workspaceId: 'team-ws', userId: 'owner-1', role: 'owner', joinedAt: 1 },
+            { workspaceId: 'team-ws', userId: 'member-1', role: 'member', joinedAt: 2 },
+          ],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url === '/api/routines/routine-1' && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body));
+        patchBodies.push(body);
+        routines = [{ ...routines[0]!, ownedByUserId: body.ownedByUserId, updatedAt: Date.now() }];
+        return new Response(JSON.stringify({ routine: routines[0] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    }) as typeof fetch;
+
+    render(
+      <RoutinesSection
+        currentWorkspaceId="team-ws"
+        currentWorkspaceRole="owner"
+      />,
+    );
+
+    const card = (await screen.findByText('Morning briefing')).closest('li');
+    expect(card).toBeTruthy();
+    fireEvent.change(within(card as HTMLElement).getByLabelText('Transfer owner for Morning briefing'), {
+      target: { value: 'member-1' },
+    });
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'Transfer' }));
+
+    await waitFor(() => {
+      expect(patchBodies).toEqual([{ ownedByUserId: 'member-1' }]);
+      expect(within(card as HTMLElement).getByText('owned by member-1')).toBeTruthy();
+    });
   });
 
   it('runs a routine now and loads its history', async () => {

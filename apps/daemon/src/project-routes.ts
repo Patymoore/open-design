@@ -5,11 +5,27 @@ import {
 } from '@open-design/contracts';
 import { createProjectArtifactFile } from './artifact-create.js';
 import { ArtifactPublicationBlockedError } from './artifact-publication-guard.js';
+import type {
+  ConversationResponse,
+  ConversationsResponse,
+  CreateProjectResponse,
+  DeleteConversationResponse,
+  DeleteProjectResponse,
+  DeleteProjectTemplateResponse,
+  MessageResponse,
+  MessagesResponse,
+  ProjectDetailResponse,
+  ProjectResponse,
+  ProjectsResponse,
+  ProjectTemplateResponse,
+  ProjectTemplatesResponse,
+} from '@open-design/contracts';
 import { ArtifactRegressionError } from './artifact-stub-guard.js';
 import { listDesignSystems } from './design-systems.js';
 import {
   FIRST_PARTY_ATOMS,
   getInstalledPlugin,
+  getSnapshot,
   listInstalledPlugins,
   resolvePluginSnapshot,
 } from './plugins/index.js';
@@ -23,7 +39,25 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   const { db, design } = ctx;
   const { sendApiError, createSseResponse } = ctx.http;
   const { DESIGN_SYSTEMS_DIR, PROJECTS_DIR, SKILLS_DIR } = ctx.paths;
-  const { insertProject, validateLinkedDirs, getProject, updateProject, dbDeleteProject, removeProjectDir } = ctx.projectStore;
+  const {
+    getLocalUserId,
+    getCurrentWorkspaceId,
+    getWorkspace,
+    getWorkspaceMembership,
+    insertWorkspaceActivity,
+    insertProject,
+    validateLinkedDirs,
+    getProject,
+    listDeployments,
+    listWorkspaceResourceShares,
+    listReuseRoutinesForProject,
+    listWorkspaces,
+    updateProject,
+    updateReuseRoutinesWorkspaceForProject,
+    setCurrentWorkspaceId,
+    dbDeleteProject,
+    removeProjectDir,
+  } = ctx.projectStore;
   const { writeProjectFile, readProjectFile, ensureProject, listFiles, listTabs, setTabs, resolveProjectDir } = ctx.projectFiles;
   const { insertConversation, getConversation, listConversations, updateConversation, deleteConversation, listMessages, upsertMessage, listPreviewComments, upsertPreviewComment, updatePreviewCommentStatus, deletePreviewComment } = ctx.conversations;
   const { getTemplate, listTemplates, deleteTemplate, insertTemplate, findTemplateByNameAndProject, updateTemplate } = ctx.templates;
@@ -80,8 +114,162 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
     return Array.from(byTaskKind.values());
   }
 
-  app.get('/api/projects', (_req, res) => {
+  function authorizeSnapshotReuseForLocalUser(snapshotId: string) {
+    const row = db
+      .prepare(`SELECT project_id FROM applied_plugin_snapshots WHERE id = ?`)
+      .get(snapshotId) as { project_id?: string | null } | undefined;
+    const projectId = row?.project_id ?? null;
+    const project = projectId ? getProject(db, projectId) : null;
+    if (!project) {
+      return {
+        ok: false as const,
+        status: 404,
+        exitCode: 65,
+        body: {
+          error: {
+            code: 'snapshot-project-not-found',
+            message: `Applied plugin snapshot ${snapshotId} is not linked to an existing project.`,
+            data: { snapshotId },
+          },
+        },
+      };
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      return {
+        ok: false as const,
+        status: 403,
+        exitCode: 65,
+        body: {
+          error: {
+            code: 'snapshot-project-forbidden',
+            message: `Workspace membership is required to reuse applied plugin snapshot ${snapshotId}.`,
+            data: { snapshotId, projectId },
+          },
+        },
+      };
+    }
+    return null;
+  }
+
+  function hasWorkspaceAccess(workspaceId: string | undefined) {
+    if (!workspaceId) return false;
+    return Boolean(getWorkspaceMembership(db, workspaceId, getLocalUserId(db)));
+  }
+
+  function hasWorkspaceManagerAccess(workspaceId: string | undefined) {
+    if (!workspaceId) return false;
+    const role = getWorkspaceMembership(db, workspaceId, getLocalUserId(db))?.role;
+    return role === 'owner' || role === 'admin';
+  }
+
+  function requireWorkspaceAccess(workspaceId: string | undefined, res: any) {
+    if (!workspaceId || !getWorkspace(db, workspaceId)) {
+      sendApiError(res, 404, 'WORKSPACE_NOT_FOUND', 'workspace not found');
+      return false;
+    }
+    if (!hasWorkspaceAccess(workspaceId)) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return false;
+    }
+    return true;
+  }
+
+  function currentAccessibleWorkspaceId() {
+    const userId = getLocalUserId(db);
+    const savedWorkspaceId = getCurrentWorkspaceId(db, userId);
+    if (getWorkspace(db, savedWorkspaceId) && getWorkspaceMembership(db, savedWorkspaceId, userId)) {
+      return savedWorkspaceId;
+    }
+    const fallbackWorkspaceId = listWorkspaces(db, { userId })[0]?.id ?? 'local-personal';
+    setCurrentWorkspaceId(db, userId, fallbackWorkspaceId);
+    return fallbackWorkspaceId;
+  }
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
+      return null;
+    }
+    if (!hasWorkspaceAccess(project.workspaceId)) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
+
+  function isTemplateAccessible(template: { sourceProjectId?: string }) {
+    if (!template.sourceProjectId) return true;
+    const sourceProject = getProject(db, template.sourceProjectId);
+    return Boolean(sourceProject && hasWorkspaceAccess(sourceProject.workspaceId));
+  }
+
+  function templateBelongsToWorkspace(template: { sourceProjectId?: string }, workspaceId: string) {
+    if (!template.sourceProjectId) return true;
+    const sourceProject = getProject(db, template.sourceProjectId);
+    return Boolean(sourceProject && sourceProject.workspaceId === workspaceId);
+  }
+
+  function hasTemplateManagerAccess(template: { sourceProjectId?: string }) {
+    if (!template.sourceProjectId) return false;
+    const sourceProject = getProject(db, template.sourceProjectId);
+    return Boolean(sourceProject && hasWorkspaceManagerAccess(sourceProject.workspaceId));
+  }
+
+  function getAccessibleTemplate(templateId: string, res: any) {
+    const template = getTemplate(db, templateId);
+    if (!template) {
+      sendApiError(res, 404, 'TEMPLATE_NOT_FOUND', 'template not found');
+      return null;
+    }
+    if (!isTemplateAccessible(template)) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return template;
+  }
+
+  function requireReusableSnapshot(snapshotId: string, res: any) {
+    const snapshot = getSnapshot(db, snapshotId);
+    if (!snapshot) {
+      res.status(404).json({
+        error: {
+          code: 'snapshot-not-found',
+          message: `Applied plugin snapshot ${snapshotId} not found`,
+          data: { snapshotId },
+        },
+      });
+      return false;
+    }
+    if (snapshot.status === 'stale') {
+      res.status(409).json({
+        error: {
+          code: 'snapshot-stale',
+          message: `Snapshot ${snapshotId} was marked stale; re-apply the plugin or replay the run.`,
+          data: {
+            snapshotId,
+            pluginId: snapshot.pluginId,
+            snapshotVersion: snapshot.pluginVersion,
+          },
+        },
+      });
+      return false;
+    }
+    const accessError = authorizeSnapshotReuseForLocalUser(snapshotId);
+    if (accessError) {
+      res.status(accessError.status).json(accessError.body);
+      return false;
+    }
+    return true;
+  }
+
+  app.get('/api/projects', (req, res) => {
     try {
+      const workspaceId =
+        typeof req.query.workspaceId === 'string' && req.query.workspaceId.trim()
+          ? req.query.workspaceId.trim()
+          : undefined;
+      if (workspaceId && !requireWorkspaceAccess(workspaceId, res)) return;
       const latestRunStatuses = listLatestProjectRunStatuses(db);
       const awaitingInputProjects = listProjectsAwaitingInput(db);
       const activeRunStatuses = new Map();
@@ -100,17 +288,18 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
           }
         }
       }
-      /** @type {import('@open-design/contracts').ProjectsResponse} */
-      const body = {
-        projects: listProjects(db).map((project: any) => ({
-          ...project,
-          status: composeProjectDisplayStatus(
-            activeRunStatuses.get(project.id) ??
-              latestRunStatuses.get(project.id) ?? { value: 'not_started' },
-            awaitingInputProjects,
-            project.id,
-          ),
-        })),
+      const body: ProjectsResponse = {
+        projects: listProjects(db, { workspaceId })
+          .filter((project: any) => hasWorkspaceAccess(project.workspaceId))
+          .map((project: any) => ({
+            ...project,
+            status: composeProjectDisplayStatus(
+              activeRunStatuses.get(project.id) ??
+                latestRunStatuses.get(project.id) ?? { value: 'not_started' },
+              awaitingInputProjects,
+              project.id,
+            ),
+          })),
       };
       res.json(body);
     } catch (err: any) {
@@ -130,12 +319,18 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
     try {
       const { id, name, skillId, designSystemId, pendingPrompt, metadata, customInstructions, skipDiscoveryBrief } =
         req.body || {};
+      const workspaceId = req.body?.workspaceId;
       if (typeof id !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(id)) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'invalid project id');
       }
       if (typeof name !== 'string' || !name.trim()) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'name required');
       }
+      const targetWorkspaceId =
+        typeof workspaceId === 'string' && workspaceId.trim()
+          ? workspaceId.trim()
+          : currentAccessibleWorkspaceId();
+      if (!requireWorkspaceAccess(targetWorkspaceId, res)) return;
       // baseDir is privileged: it lets a project root directly inside the
       // user's filesystem. The /api/import/folder endpoint is the only
       // path that's allowed to set it, because that's where realpath() +
@@ -191,33 +386,67 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
                   })()
                 : {}),
             }
-          : skipDiscoveryBrief === true
-            ? { skipDiscoveryBrief: true }
-            : null;
+        : skipDiscoveryBrief === true
+          ? { skipDiscoveryBrief: true }
+          : null;
+      const templateId = projectMetadata && typeof projectMetadata.templateId === 'string'
+        ? projectMetadata.templateId
+        : null;
+      const sourceTemplate = templateId ? getAccessibleTemplate(templateId, res) : null;
+      if (templateId && !sourceTemplate) return;
+      if (sourceTemplate && !templateBelongsToWorkspace(sourceTemplate, targetWorkspaceId)) {
+        return sendApiError(res, 403, 'FORBIDDEN', 'template belongs to another workspace');
+      }
+      const explicitSnapshotId =
+        typeof req.body?.appliedPluginSnapshotId === 'string' && req.body.appliedPluginSnapshotId.trim().length > 0
+          ? req.body.appliedPluginSnapshotId.trim()
+          : null;
+      if (explicitSnapshotId && !requireReusableSnapshot(explicitSnapshotId, res)) return;
       const now = Date.now();
-      const project = insertProject(db, {
-        id,
-        name: name.trim(),
-        skillId: skillId ?? null,
-        designSystemId: normalizedDesignSystemId,
-        pendingPrompt: pendingPrompt || null,
-        metadata: projectMetadata,
-        customInstructions:
-          typeof customInstructions === 'string'
-            ? customInstructions
-            : null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const currentUserId = getLocalUserId(db);
       // Seed a default conversation so the UI always has somewhere to write.
       const cid = randomId();
-      insertConversation(db, {
-        id: cid,
-        projectId: id,
-        title: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const project = db.transaction(() => {
+        const insertedProject = insertProject(db, {
+          id,
+          workspaceId: targetWorkspaceId,
+          createdByUserId: currentUserId,
+          ownedByUserId: currentUserId,
+          name: name.trim(),
+          skillId: skillId ?? null,
+          designSystemId: designSystemId ?? null,
+          pendingPrompt: pendingPrompt || null,
+          metadata: projectMetadata,
+          customInstructions:
+            typeof customInstructions === 'string'
+              ? customInstructions
+              : null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertWorkspaceActivity(db, {
+          workspaceId: targetWorkspaceId,
+          actorUserId: currentUserId,
+          action: 'project.created',
+          targetType: 'project',
+          targetId: insertedProject.id,
+          metadata: {
+            projectName: insertedProject.name,
+            source: projectMetadata?.kind === 'template' ? 'template' : 'manual',
+            projectKind: projectMetadata?.kind ?? undefined,
+            createdByUserId: currentUserId,
+            ownedByUserId: currentUserId,
+          },
+        });
+        insertConversation(db, {
+          id: cid,
+          projectId: id,
+          title: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        return insertedProject;
+      })();
 
       const explicitPlugin =
         typeof req.body?.pluginId === 'string' && req.body.pluginId.trim().length > 0
@@ -245,6 +474,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
             typeof normalizedDesignSystemId === 'string' && normalizedDesignSystemId.length > 0
               ? { id: normalizedDesignSystemId }
               : undefined,
+          authorizeSnapshotReuse: authorizeSnapshotReuseForLocalUser,
         });
         if (resolved && !resolved.ok) {
           if (!explicitPlugin) {
@@ -268,7 +498,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
         metadata.kind === 'template' &&
         typeof metadata.templateId === 'string'
       ) {
-        const tpl = getTemplate(db, metadata.templateId);
+        const tpl = sourceTemplate;
         if (tpl && Array.isArray(tpl.files) && tpl.files.length > 0) {
           await ensureProject(PROJECTS_DIR, id);
           for (const f of tpl.files) {
@@ -293,8 +523,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
           }
         }
       }
-      /** @type {import('@open-design/contracts').CreateProjectResponse} */
-      const body = {
+      const body: CreateProjectResponse = {
         project: resolvedSnapshot?.ok ? getProject(db, id) ?? project : project,
         conversationId: cid,
         ...(resolvedSnapshot?.ok
@@ -308,18 +537,64 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   });
 
   app.get('/api/projects/:id', (req, res) => {
-    const project = getProject(db, req.params.id);
-    if (!project)
-      return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
+    const project = getAccessibleProject(req.params.id, res);
+    if (!project) return;
     const resolvedDir = resolveProjectDir(PROJECTS_DIR, project.id, project.metadata);
-    /** @type {import('@open-design/contracts').ProjectResponse} */
-    const body = { project, resolvedDir };
+    const body: ProjectDetailResponse = { project, resolvedDir };
     res.json(body);
   });
 
   app.patch('/api/projects/:id', async (req, res) => {
     try {
       const patch = req.body || {};
+      const patchTarget = getAccessibleProject(req.params.id, res);
+      if (!patchTarget) return;
+      if ('name' in patch && !hasWorkspaceManagerAccess(patchTarget.workspaceId)) {
+        return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+      }
+      if ('workspaceId' in patch) {
+        const nextWorkspaceId = typeof patch.workspaceId === 'string' ? patch.workspaceId.trim() : '';
+        if (!nextWorkspaceId) {
+          return sendApiError(res, 400, 'BAD_REQUEST', 'workspaceId must be a string');
+        }
+        if (!requireWorkspaceAccess(nextWorkspaceId, res)) return;
+        if (
+          nextWorkspaceId !== patchTarget.workspaceId &&
+          (!hasWorkspaceManagerAccess(patchTarget.workspaceId) || !hasWorkspaceManagerAccess(nextWorkspaceId))
+        ) {
+          return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+        }
+        patch.workspaceId = nextWorkspaceId;
+      }
+      if ('ownedByUserId' in patch) {
+        const nextOwnedByUserId = typeof patch.ownedByUserId === 'string' ? patch.ownedByUserId.trim() : '';
+        if (!nextOwnedByUserId) {
+          return sendApiError(res, 400, 'BAD_REQUEST', 'ownedByUserId must be a string');
+        }
+        const ownerWorkspaceId = typeof patch.workspaceId === 'string' && patch.workspaceId.trim()
+          ? patch.workspaceId.trim()
+          : patchTarget.workspaceId;
+        if (!hasWorkspaceManagerAccess(patchTarget.workspaceId)) {
+          return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+        }
+        if (ownerWorkspaceId !== patchTarget.workspaceId && !hasWorkspaceManagerAccess(ownerWorkspaceId)) {
+          return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+        }
+        if (!getWorkspaceMembership(db, ownerWorkspaceId, nextOwnedByUserId)) {
+          return sendApiError(res, 404, 'MEMBER_NOT_FOUND', 'asset owner must be a workspace member');
+        }
+        patch.ownedByUserId = nextOwnedByUserId;
+      }
+      if (
+        'workspaceId' in patch &&
+        patch.workspaceId !== patchTarget.workspaceId &&
+        !('ownedByUserId' in patch)
+      ) {
+        const currentOwnerUserId = patchTarget.ownedByUserId ?? patchTarget.createdByUserId;
+        if (!currentOwnerUserId || !getWorkspaceMembership(db, patch.workspaceId, currentOwnerUserId)) {
+          patch.ownedByUserId = getLocalUserId(db);
+        }
+      }
       // baseDir / folder-import state is privileged: it's set only by the
       // import endpoint and otherwise immutable. Two failure modes to
       // guard against here:
@@ -334,7 +609,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
       // project record onto the incoming patch so the user can keep
       // patching other metadata without ever losing their import root.
       if (patch.metadata && typeof patch.metadata === 'object') {
-        const existing = getProject(db, req.params.id);
+        const existing = patchTarget;
         const existingMeta = existing?.metadata;
         if ('fromTrustedPicker' in patch.metadata
             && patch.metadata.fromTrustedPicker !== existingMeta?.fromTrustedPicker) {
@@ -370,7 +645,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
         }
       }
       if (patch.metadata?.linkedDirs) {
-        const existing = getProject(db, req.params.id);
+        const existing = patchTarget;
         const validated = validateLinkedDirs(patch.metadata.linkedDirs);
         if (validated.error) {
           return sendApiError(res, 400, 'INVALID_LINKED_DIR', validated.error);
@@ -400,11 +675,124 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
         }
         patch.designSystemId = designSystemValidation.id;
       }
-      const project = updateProject(db, req.params.id, patch);
+      const movingWorkspace = 'workspaceId' in patch && patchTarget.workspaceId !== patch.workspaceId;
+      const transferringOwner = 'ownedByUserId' in patch
+        && (patchTarget.ownedByUserId ?? patchTarget.createdByUserId) !== patch.ownedByUserId;
+      const actorUserId = getLocalUserId(db);
+      const project = db.transaction(() => {
+        const movedShareCount = movingWorkspace
+          ? listWorkspaceResourceShares(db, patchTarget.workspaceId)
+            .filter((share: any) => share.projectId === patchTarget.id).length
+          : 0;
+        const updatedProject = updateProject(db, req.params.id, patch);
+        if (!updatedProject) return null;
+        if ('workspaceId' in patch && patchTarget.workspaceId !== updatedProject.workspaceId) {
+          const movedReuseRoutines = listReuseRoutinesForProject(db, updatedProject.id);
+          const movedDeploymentCount = listDeployments(db, updatedProject.id).length;
+          const movedRoutineOwnerTransfers = movedReuseRoutines
+            .map((routine: any) => ({
+              routine,
+              fromUserId: routine.ownedByUserId ?? routine.createdByUserId,
+            }))
+            .filter((item: any) => (
+              !item.fromUserId || !getWorkspaceMembership(db, updatedProject.workspaceId, item.fromUserId)
+            ));
+          updateReuseRoutinesWorkspaceForProject(db, {
+            projectId: updatedProject.id,
+            workspaceId: updatedProject.workspaceId,
+            fallbackOwnerUserId: actorUserId,
+          });
+          insertWorkspaceActivity(db, {
+            workspaceId: patchTarget.workspaceId,
+            actorUserId,
+            action: 'project.moved',
+            targetType: 'project',
+            targetId: updatedProject.id,
+            metadata: {
+              projectName: updatedProject.name,
+              fromWorkspaceId: patchTarget.workspaceId,
+              toWorkspaceId: updatedProject.workspaceId,
+              movedDeploymentCount,
+              movedShareCount,
+            },
+          });
+          insertWorkspaceActivity(db, {
+            workspaceId: updatedProject.workspaceId,
+            actorUserId,
+            action: 'project.moved',
+            targetType: 'project',
+            targetId: updatedProject.id,
+            metadata: {
+              projectName: updatedProject.name,
+              fromWorkspaceId: patchTarget.workspaceId,
+              toWorkspaceId: updatedProject.workspaceId,
+              movedDeploymentCount,
+              movedShareCount,
+            },
+          });
+          for (const routine of movedReuseRoutines) {
+            const metadata = {
+              routineName: routine.name,
+              reason: 'project_moved',
+              projectId: updatedProject.id,
+              projectName: updatedProject.name,
+              fromWorkspaceId: patchTarget.workspaceId,
+              toWorkspaceId: updatedProject.workspaceId,
+            };
+            insertWorkspaceActivity(db, {
+              workspaceId: patchTarget.workspaceId,
+              actorUserId,
+              action: 'routine.updated',
+              targetType: 'routine',
+              targetId: routine.id,
+              metadata,
+            });
+            insertWorkspaceActivity(db, {
+              workspaceId: updatedProject.workspaceId,
+              actorUserId,
+              action: 'routine.updated',
+              targetType: 'routine',
+              targetId: routine.id,
+              metadata,
+            });
+          }
+          for (const { routine, fromUserId } of movedRoutineOwnerTransfers) {
+            insertWorkspaceActivity(db, {
+              workspaceId: updatedProject.workspaceId,
+              actorUserId,
+              action: 'routine.owner_transferred',
+              targetType: 'routine',
+              targetId: routine.id,
+              metadata: {
+                routineName: routine.name,
+                reason: 'project_moved',
+                projectId: updatedProject.id,
+                projectName: updatedProject.name,
+                fromUserId,
+                toUserId: actorUserId,
+              },
+            });
+          }
+        }
+        if (transferringOwner) {
+          insertWorkspaceActivity(db, {
+            workspaceId: updatedProject.workspaceId,
+            actorUserId,
+            action: 'project.owner_transferred',
+            targetType: 'project',
+            targetId: updatedProject.id,
+            metadata: {
+              projectName: updatedProject.name,
+              fromUserId: patchTarget.ownedByUserId ?? patchTarget.createdByUserId,
+              toUserId: updatedProject.ownedByUserId,
+            },
+          });
+        }
+        return updatedProject;
+      })();
       if (!project)
         return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
-      /** @type {import('@open-design/contracts').ProjectResponse} */
-      const body = { project };
+      const body: ProjectResponse = { project };
       res.json(body);
     } catch (err: any) {
       sendApiError(res, 400, 'BAD_REQUEST', String(err));
@@ -413,10 +801,54 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
 
   app.delete('/api/projects/:id', async (req, res) => {
     try {
-      dbDeleteProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
+      if (!hasWorkspaceManagerAccess(project.workspaceId)) {
+        return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+      }
+      const projectRoutines = listReuseRoutinesForProject(db, project.id);
+      if (projectRoutines.length > 0) {
+        return sendApiError(res, 409, 'PROJECT_HAS_ROUTINES', 'delete routines targeting this project first');
+      }
+      const projectTemplates = listTemplates(db).filter((template: any) => template.sourceProjectId === project.id);
+      const projectShares = listWorkspaceResourceShares(db, project.workspaceId)
+        .filter((share: any) => share.projectId === project.id);
+      const actorUserId = getLocalUserId(db);
+      db.transaction(() => {
+        for (const template of projectTemplates) {
+          deleteTemplate(db, template.id);
+        }
+        for (const share of projectShares) {
+          insertWorkspaceActivity(db, {
+            workspaceId: project.workspaceId,
+            actorUserId,
+            action: 'share.revoked',
+            targetType: 'share',
+            targetId: share.id,
+            metadata: {
+              reason: 'project_deleted',
+              artifactId: share.artifactId,
+              projectId: project.id,
+              projectName: project.name,
+            },
+          });
+        }
+        dbDeleteProject(db, req.params.id);
+        insertWorkspaceActivity(db, {
+          workspaceId: project.workspaceId,
+          actorUserId,
+          action: 'project.deleted',
+          targetType: 'project',
+          targetId: project.id,
+          metadata: {
+            projectName: project.name,
+            deletedTemplateCount: projectTemplates.length,
+            revokedShareCount: projectShares.length,
+          },
+        });
+      })();
       await removeProjectDir(PROJECTS_DIR, req.params.id).catch(() => {});
-      /** @type {import('@open-design/contracts').OkResponse} */
-      const body = { ok: true };
+      const body: DeleteProjectResponse = { ok: true };
       res.json(body);
     } catch (err: any) {
       sendApiError(res, 400, 'BAD_REQUEST', String(err));
@@ -431,9 +863,8 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   // chokidar watcher is refcounted in project-watchers.ts so we never hold
   // descriptors for projects no UI is looking at.
   app.get('/api/projects/:id/events', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
-    }
+    const project = getAccessibleProject(req.params.id, res);
+    if (!project) return;
     let sub: any;
     try {
       const sse = createSseResponse(res);
@@ -446,10 +877,9 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
         activeProjectEventSinks.set(req.params.id, sinks);
       }
       sinks.add(projectEventSink);
-      const watchProject = getProject(db, req.params.id);
       sub = subscribeFileEvents(PROJECTS_DIR, req.params.id, (evt: any) => {
         sse.send('file-changed', evt);
-      }, { metadata: watchProject?.metadata });
+      }, { metadata: project.metadata });
       sub.ready.then(() => sse.send('ready', { projectId: req.params.id })).catch(() => {});
       const cleanup = () => {
         if (sub) {
@@ -472,16 +902,13 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   // ---- Conversations --------------------------------------------------------
 
   app.get('/api/projects/:id/conversations', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
-    res.json({ conversations: listConversations(db, req.params.id) });
+    if (!getAccessibleProject(req.params.id, res)) return;
+    const body: ConversationsResponse = { conversations: listConversations(db, req.params.id) };
+    res.json(body);
   });
 
   app.post('/api/projects/:id/conversations', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
+    if (!getAccessibleProject(req.params.id, res)) return;
     const { title } = req.body || {};
     const now = Date.now();
     const conv = insertConversation(db, {
@@ -491,38 +918,46 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
       createdAt: now,
       updatedAt: now,
     });
-    res.json({ conversation: conv });
+    const body: ConversationResponse = { conversation: conv };
+    res.json(body);
   });
 
   app.patch('/api/projects/:id/conversations/:cid', (req, res) => {
+    if (!getAccessibleProject(req.params.id, res)) return;
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'not found' });
     }
     const updated = updateConversation(db, req.params.cid, req.body || {});
-    res.json({ conversation: updated });
+    const body: ConversationResponse = { conversation: updated };
+    res.json(body);
   });
 
   app.delete('/api/projects/:id/conversations/:cid', (req, res) => {
+    if (!getAccessibleProject(req.params.id, res)) return;
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'not found' });
     }
     deleteConversation(db, req.params.cid);
-    res.json({ ok: true });
+    const body: DeleteConversationResponse = { ok: true };
+    res.json(body);
   });
 
   // ---- Messages -------------------------------------------------------------
 
   app.get('/api/projects/:id/conversations/:cid/messages', (req, res) => {
+    if (!getAccessibleProject(req.params.id, res)) return;
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'conversation not found' });
     }
-    res.json({ messages: listMessages(db, req.params.cid) });
+    const body: MessagesResponse = { messages: listMessages(db, req.params.cid) };
+    res.json(body);
   });
 
   app.put('/api/projects/:id/conversations/:cid/messages/:mid', (req, res) => {
+    if (!getAccessibleProject(req.params.id, res)) return;
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'conversation not found' });
@@ -538,12 +973,14 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
     // Bump the parent project's updatedAt so the project list re-orders.
     updateProject(db, req.params.id, {});
     ctx.telemetry?.reportFinalizedMessage(saved, m);
-    res.json({ message: saved });
+    const body: MessageResponse = { message: saved };
+    res.json(body);
   });
 
   // ---- Preview comments ----------------------------------------------------
 
   app.get('/api/projects/:id/conversations/:cid/comments', (req, res) => {
+    if (!getAccessibleProject(req.params.id, res)) return;
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'conversation not found' });
@@ -554,6 +991,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   });
 
   app.post('/api/projects/:id/conversations/:cid/comments', (req, res) => {
+    if (!getAccessibleProject(req.params.id, res)) return;
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'conversation not found' });
@@ -575,6 +1013,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   app.patch(
     '/api/projects/:id/conversations/:cid/comments/:commentId',
     (req, res) => {
+      if (!getAccessibleProject(req.params.id, res)) return;
       const conv = getConversation(db, req.params.cid);
       if (!conv || conv.projectId !== req.params.id) {
         return res.status(404).json({ error: 'conversation not found' });
@@ -600,6 +1039,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   app.delete(
     '/api/projects/:id/conversations/:cid/comments/:commentId',
     (req, res) => {
+      if (!getAccessibleProject(req.params.id, res)) return;
       const conv = getConversation(db, req.params.cid);
       if (!conv || conv.projectId !== req.params.id) {
         return res.status(404).json({ error: 'conversation not found' });
@@ -619,16 +1059,12 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   // ---- Tabs -----------------------------------------------------------------
 
   app.get('/api/projects/:id/tabs', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
+    if (!getAccessibleProject(req.params.id, res)) return;
     res.json(listTabs(db, req.params.id));
   });
 
   app.put('/api/projects/:id/tabs', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
+    if (!getAccessibleProject(req.params.id, res)) return;
     const { tabs = [], active = null } = req.body || {};
     if (!Array.isArray(tabs) || !tabs.every((t) => typeof t === 'string')) {
       return res.status(400).json({ error: 'tabs must be string[]' });
@@ -649,14 +1085,25 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
   // starting point. Created via the project's Share menu (snapshots
   // every .html file in the project folder at the moment of save).
 
-  app.get('/api/templates', (_req, res) => {
-    res.json({ templates: listTemplates(db) });
+  app.get('/api/templates', (req, res) => {
+    const workspaceId =
+      typeof req.query.workspaceId === 'string' && req.query.workspaceId.trim()
+        ? req.query.workspaceId.trim()
+        : undefined;
+    if (workspaceId && !requireWorkspaceAccess(workspaceId, res)) return;
+    const body: ProjectTemplatesResponse = {
+      templates: listTemplates(db)
+        .filter(isTemplateAccessible)
+        .filter((template: any) => !workspaceId || templateBelongsToWorkspace(template, workspaceId)),
+    };
+    res.json(body);
   });
 
   app.get('/api/templates/:id', (req, res) => {
-    const t = getTemplate(db, req.params.id);
-    if (!t) return res.status(404).json({ error: 'not found' });
-    res.json({ template: t });
+    const t = getAccessibleTemplate(req.params.id, res);
+    if (!t) return;
+    const body: ProjectTemplateResponse = { template: t };
+    res.json(body);
   });
 
   app.post('/api/templates', async (req, res) => {
@@ -671,9 +1118,12 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
       if (typeof sourceProjectId !== 'string') {
         return res.status(400).json({ error: 'sourceProjectId required' });
       }
-      const sourceProject = getProject(db, sourceProjectId);
+      const sourceProject = getAccessibleProject(sourceProjectId, res);
       if (!sourceProject) {
-        return res.status(404).json({ error: 'source project not found' });
+        return;
+      }
+      if (!hasWorkspaceManagerAccess(sourceProject.workspaceId)) {
+        return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
       }
       // Snapshot every HTML / sketch / text file in the source project.
       // We deliberately skip binary uploads — templates are about the
@@ -717,15 +1167,25 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
           createdAt: Date.now(),
         });
       }
-      res.json({ template: t });
+      const body: ProjectTemplateResponse = { template: t };
+      res.json(body);
     } catch (err: any) {
       res.status(400).json({ error: String(err) });
     }
   });
 
   app.delete('/api/templates/:id', (req, res) => {
+    const t = getAccessibleTemplate(req.params.id, res);
+    if (!t) return;
+    if (!t.sourceProjectId) {
+      return sendApiError(res, 403, 'READ_ONLY_TEMPLATE', 'template is read-only');
+    }
+    if (!hasTemplateManagerAccess(t)) {
+      return sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+    }
     deleteTemplate(db, req.params.id);
-    res.json({ ok: true });
+    const body: DeleteProjectTemplateResponse = { ok: true };
+    res.json(body);
   });
 
 }
@@ -803,10 +1263,23 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
   const { PROJECTS_DIR } = ctx.paths;
   const { upload } = ctx.uploads;
   const { fs } = ctx.node;
-  const { getProject } = ctx.projectStore;
+  const { getLocalUserId, getProject, getWorkspaceMembership } = ctx.projectStore;
   const { listFiles, searchProjectFiles, readProjectFile, resolveProjectDir, resolveProjectFilePath, parseByteRange, renameProjectFile, deleteProjectFile, writeProjectFile, sanitizeName, ensureProject } = ctx.projectFiles;
   const { buildDocumentPreview } = ctx.documents;
   const { validateArtifactManifestInput } = ctx.artifacts;
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
 
   // Project files. Each project owns a flat folder under .od/projects/<id>/
   // containing every file the user has uploaded, pasted, sketched, or that
@@ -815,10 +1288,11 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
   app.get('/api/projects/:id/files', async (req, res) => {
     try {
       const since = Number(req.query?.since);
-      const project = getProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       const files = await listFiles(PROJECTS_DIR, req.params.id, {
         since: Number.isFinite(since) ? since : undefined,
-        metadata: project?.metadata,
+        metadata: project.metadata,
       });
       /** @type {import('@open-design/contracts').ProjectFilesResponse} */
       const body = { files };
@@ -830,6 +1304,8 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
   app.get('/api/projects/:id/search', async (req, res) => {
     try {
+      const searchProject = getAccessibleProject(req.params.id, res);
+      if (!searchProject) return;
       const query = String(req.query.q ?? '');
       if (!query) {
         sendApiError(res, 400, 'BAD_REQUEST', 'q query parameter is required');
@@ -837,11 +1313,10 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
       }
       const pattern = req.query.pattern ? String(req.query.pattern) : null;
       const max = Math.min(Number(req.query.max) || 200, 1000);
-      const searchProject = getProject(db, req.params.id);
       const matches = await searchProjectFiles(PROJECTS_DIR, req.params.id, query, {
         pattern,
         max,
-        metadata: searchProject?.metadata,
+        metadata: searchProject.metadata,
       });
       res.json({ query, matches });
     } catch (err: any) {
@@ -881,7 +1356,8 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
   app.get('/api/projects/:id/raw/*', async (req, res) => {
     try {
       const relPath = (req.params as any)[0];
-      const project = getProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       // PreviewModal loads artifact HTML via srcdoc, giving the iframe Origin: "null".
       // data: URIs, file://, and some sandboxed iframes also send null — all are
       // local-only callers, so this is safe. Real cross-origin sites send a real
@@ -894,7 +1370,7 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
         PROJECTS_DIR,
         req.params.id,
         relPath,
-        project?.metadata,
+        project.metadata,
       );
 
       if (meta.mime.startsWith('video/') || meta.mime.startsWith('audio/')) {
@@ -941,7 +1417,7 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
         return;
       }
 
-      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath, project?.metadata);
+      const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath, project.metadata);
       res.type(file.mime).send(file.buffer);
     } catch (err: any) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
@@ -956,8 +1432,9 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
   app.delete('/api/projects/:id/raw/*', async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, (req.params as any)[0], project?.metadata);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
+      await deleteProjectFile(PROJECTS_DIR, req.params.id, (req.params as any)[0], project.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
@@ -974,12 +1451,13 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
   app.get('/api/projects/:id/files/:name/preview', async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       const file = await readProjectFile(
         PROJECTS_DIR,
         req.params.id,
         req.params.name,
-        project?.metadata,
+        project.metadata,
       );
       const preview = await buildDocumentPreview(file);
       res.json(preview);
@@ -1001,12 +1479,13 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
   app.get('/api/projects/:id/files/*', async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       const file = await readProjectFile(
         PROJECTS_DIR,
         req.params.id,
         (req.params as any)[0],
-        project?.metadata,
+        project.metadata,
       );
       res.type(file.mime).send(file.buffer);
     } catch (err: any) {
@@ -1033,8 +1512,9 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
     },
     async (req, res) => {
       try {
-        const uploadProject = getProject(db, req.params.id);
-        await ensureProject(PROJECTS_DIR, req.params.id, uploadProject?.metadata);
+        const uploadProject = getAccessibleProject(req.params.id, res);
+        if (!uploadProject) return;
+        await ensureProject(PROJECTS_DIR, req.params.id, uploadProject.metadata);
         if (req.file) {
           const buf = await fs.promises.readFile(req.file.path);
           const desiredName = sanitizeName(
@@ -1046,7 +1526,7 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
             desiredName,
             buf,
             {},
-            uploadProject?.metadata,
+            uploadProject.metadata,
           );
           fs.promises.unlink(req.file.path).catch(() => {});
           /** @type {import('@open-design/contracts').ProjectFileResponse} */
@@ -1138,13 +1618,14 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
       if (typeof from !== 'string' || typeof to !== 'string') {
         return sendApiError(res, 400, 'BAD_REQUEST', 'from and to required');
       }
-      const project = getProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       const result = await renameProjectFile(
         PROJECTS_DIR,
         req.params.id,
         from,
         to,
-        project?.metadata,
+        project.metadata,
       );
       /** @type {import('@open-design/contracts').RenameProjectFileResponse} */
       const body = result;
@@ -1163,8 +1644,9 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
   app.delete('/api/projects/:id/files/:name', async (req, res) => {
     try {
-      const delProject = getProject(db, req.params.id);
-      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params.name, delProject?.metadata);
+      const delProject = getAccessibleProject(req.params.id, res);
+      if (!delProject) return;
+      await deleteProjectFile(PROJECTS_DIR, req.params.id, req.params.name, delProject.metadata);
       /** @type {import('@open-design/contracts').DeleteProjectFileResponse} */
       const body = { ok: true };
       res.json(body);
@@ -1181,15 +1663,34 @@ export function registerProjectFileRoutes(app: Express, ctx: RegisterProjectFile
 
 }
 
-export interface RegisterProjectUploadRoutesDeps extends RouteDeps<'http' | 'uploads' | 'node'> {}
+export interface RegisterProjectUploadRoutesDeps extends RouteDeps<'db' | 'http' | 'uploads' | 'node' | 'projectStore'> {}
 
 export function registerProjectUploadRoutes(app: Express, ctx: RegisterProjectUploadRoutesDeps) {
+  const { db } = ctx;
   const { sendApiError } = ctx.http;
   const { handleProjectUpload } = ctx.uploads;
   const { fs } = ctx.node;
+  const { getLocalUserId, getProject, getWorkspaceMembership } = ctx.projectStore;
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
 
   app.post(
     '/api/projects/:id/upload',
+    (req, res, next) => {
+      if (!getAccessibleProject(req.params.id, res)) return;
+      next();
+    },
     handleProjectUpload,
     async (req, res) => {
       try {

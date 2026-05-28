@@ -43,6 +43,9 @@ export interface RoutineContextSelection {
 
 export interface Routine {
   id: string;
+  workspaceId: string;
+  createdByUserId?: string;
+  ownedByUserId?: string;
   name: string;
   prompt: string;
   schedule: RoutineSchedule;

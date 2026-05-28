@@ -54,6 +54,8 @@ export interface RegisterConnectorRoutesOptions {
   sendApiError: ConnectorApiErrorSender;
   projectsRoot?: string;
   authorizeToolRequest?: (req: Request, res: Response, operation: string) => ToolTokenGrant | null;
+  requireToolProjectAccess?: (projectId: string, res: Response) => boolean;
+  requireCurrentWorkspaceManager?: (res: Response) => boolean;
   requireLocalDaemonRequest?: RequestHandler;
   composio?: {
     clearDiscoveryCache: () => void;
@@ -567,6 +569,7 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
   });
 
   app.get('/api/connectors/composio/config', (_req: Request, res: Response) => {
+    if (options.requireCurrentWorkspaceManager && !options.requireCurrentWorkspaceManager(res)) return;
     try {
       res.json(readPublicComposioConfig());
     } catch (err) {
@@ -575,6 +578,7 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
   });
 
   app.put('/api/connectors/composio/config', requireLocalDaemonRequest, (req: Request, res: Response) => {
+    if (options.requireCurrentWorkspaceManager && !options.requireCurrentWorkspaceManager(res)) return;
     try {
       const before = readComposioConfig();
       const cfg = writeComposioConfig(req.body);
@@ -702,6 +706,7 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
       }
       const grant = options.authorizeToolRequest?.(req, res, 'connectors:list');
       if (!grant) return;
+      if (options.requireToolProjectAccess && !options.requireToolProjectAccess(grant.projectId, res)) return;
       const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
       if (projectId && projectId !== grant.projectId) {
         options.sendApiError(res, 403, 'FORBIDDEN', 'projectId is derived from the tool token', {
@@ -733,6 +738,7 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
       }
       const grant = options.authorizeToolRequest?.(req, res, 'connectors:execute');
       if (!grant) return;
+      if (options.requireToolProjectAccess && !options.requireToolProjectAccess(grant.projectId, res)) return;
       if (!options.projectsRoot) {
         options.sendApiError(res, 500, 'CONNECTOR_EXECUTION_FAILED', 'connector tool routes are not configured');
         return;

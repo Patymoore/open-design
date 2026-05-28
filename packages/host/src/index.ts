@@ -32,6 +32,7 @@ export type OpenDesignHostProjectImportInit = {
   designSystemId?: string | null;
   name?: string;
   skillId?: string | null;
+  workspaceId?: string;
 };
 
 export type OpenDesignHostProjectImportSuccess = {

@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 
 import { buildDesktopPdfExportInput } from '../src/pdf-export.js';
 import { startServer } from '../src/server.js';
@@ -58,6 +59,63 @@ describe('buildDesktopPdfExportInput', () => {
 });
 
 describe('POST /api/projects/:id/export/pdf', () => {
+  it('checks workspace membership before request body validation', async () => {
+    const started = await startServer({
+      port: 0,
+      returnServer: true,
+      desktopPdfExporter: async () => ({ ok: true, path: '/tmp/should-not-run.pdf' }),
+    }) as { server: { close(cb: () => void): void }; url: string };
+
+    try {
+      const workspaceResp = await fetch(`${started.url}/api/workspaces`, {
+        body: JSON.stringify({ name: `PDF private workspace ${Date.now()}` }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(workspaceResp.status).toBe(200);
+      const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+      const projectId = `proj-pdf-private-${Date.now()}`;
+      const createProjectResp = await fetch(`${started.url}/api/projects`, {
+        body: JSON.stringify({
+          id: projectId,
+          name: 'PDF private route fixture',
+          workspaceId: workspaceBody.workspace.id,
+          skillId: null,
+          designSystemId: null,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(createProjectResp.status).toBe(200);
+
+      const ownerResp = await fetch(`${started.url}/api/workspaces`);
+      const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+      const dataDir = process.env.OD_DATA_DIR;
+      if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+      const db = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        db.prepare(
+          `DELETE FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?`,
+        ).run(workspaceBody.workspace.id, ownerBody.currentUserId);
+      } finally {
+        db.close();
+      }
+
+      const response = await fetch(`${started.url}/api/projects/${encodeURIComponent(projectId)}/export/pdf`, {
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('FORBIDDEN');
+      expect(body.error?.message).toMatch(/workspace membership/i);
+    } finally {
+      await new Promise<void>((resolve) => started.server.close(resolve));
+    }
+  });
+
   it('forwards the project HTML file to the configured desktop PDF exporter', async () => {
     const projectId = `proj-pdf-route-${Date.now()}`;
     const calls: unknown[] = [];
@@ -71,7 +129,19 @@ describe('POST /api/projects/:id/export/pdf', () => {
     }) as { server: { close(cb: () => void): void }; url: string };
 
     try {
-      await fetch(`${started.url}/api/projects/${encodeURIComponent(projectId)}/files`, {
+      const createProjectResp = await fetch(`${started.url}/api/projects`, {
+        body: JSON.stringify({
+          id: projectId,
+          name: 'PDF route fixture',
+          skillId: null,
+          designSystemId: null,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(createProjectResp.status).toBe(200);
+
+      const fileResp = await fetch(`${started.url}/api/projects/${encodeURIComponent(projectId)}/files`, {
         body: JSON.stringify({
           content: '<!doctype html><section class="slide">One</section>',
           name: 'deck/index.html',
@@ -79,6 +149,7 @@ describe('POST /api/projects/:id/export/pdf', () => {
         headers: { 'content-type': 'application/json' },
         method: 'POST',
       });
+      expect(fileResp.status).toBe(200);
 
       const response = await fetch(`${started.url}/api/projects/${encodeURIComponent(projectId)}/export/pdf`, {
         body: JSON.stringify({ deck: true, fileName: 'deck/index.html', title: 'Seed Deck' }),

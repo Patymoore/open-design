@@ -126,6 +126,7 @@ describe('NewProjectModal template deletion plumbing', () => {
         name: 'Landing Page',
         description: 'A saved landing page starter.',
         files: [{ name: 'prototype/App.jsx', content: '' }],
+        sourceProjectId: 'project-landing',
         createdAt: 1714867200000,
       },
     ];

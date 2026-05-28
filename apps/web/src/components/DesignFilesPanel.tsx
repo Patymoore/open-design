@@ -35,6 +35,7 @@ interface Props {
   ) => Promise<{ message?: string; url?: string } | void> | { message?: string; url?: string } | void;
   activePluginActionPaths?: Set<string>;
   hiddenPluginActionPaths?: Set<string>;
+  canSharePluginFolders?: boolean;
 }
 
 interface ActionNotice {
@@ -128,6 +129,7 @@ export function DesignFilesPanel({
   onPluginFolderAgentAction,
   activePluginActionPaths = new Set(),
   hiddenPluginActionPaths = new Set(),
+  canSharePluginFolders = true,
 }: Props) {
   const t = useT();
   const analytics = useAnalytics();
@@ -825,6 +827,7 @@ export function DesignFilesPanel({
     action: PluginFolderAgentAction,
   ) {
     if (!onPluginFolderAgentAction || installingFolder || sharingFolder) return;
+    if (action !== 'install' && !canSharePluginFolders) return;
     setInstallNotice(null);
     if (action === 'install') {
       setInstallingFolder(relativePath);
@@ -1174,28 +1177,32 @@ export function DesignFilesPanel({
                           >
                             {installingFolder === folder.path ? 'Sending…' : 'Add to My plugins'}
                           </button>
-                          <button
-                            type="button"
-                            className="df-plugin-install"
-                            data-testid={`design-plugin-folder-publish-${folder.path}`}
-                            disabled={actionBusy || installingFolder !== null || sharingFolder !== null}
-                            onClick={() =>
-                              void handlePluginFolderAgentAction(folder.path, 'publish')
-                            }
-                          >
-                            {sharingFolder === `publish:${folder.path}` ? 'Sending…' : 'Publish repo'}
-                          </button>
-                          <button
-                            type="button"
-                            className="df-plugin-install"
-                            data-testid={`design-plugin-folder-contribute-${folder.path}`}
-                            disabled={actionBusy || installingFolder !== null || sharingFolder !== null}
-                            onClick={() =>
-                              void handlePluginFolderAgentAction(folder.path, 'contribute')
-                            }
-                          >
-                            {sharingFolder === `contribute:${folder.path}` ? 'Sending…' : 'Open Design PR'}
-                          </button>
+                          {canSharePluginFolders ? (
+                            <>
+                              <button
+                                type="button"
+                                className="df-plugin-install"
+                                data-testid={`design-plugin-folder-publish-${folder.path}`}
+                                disabled={actionBusy || installingFolder !== null || sharingFolder !== null}
+                                onClick={() =>
+                                  void handlePluginFolderAgentAction(folder.path, 'publish')
+                                }
+                              >
+                                {sharingFolder === `publish:${folder.path}` ? 'Sending…' : 'Publish repo'}
+                              </button>
+                              <button
+                                type="button"
+                                className="df-plugin-install"
+                                data-testid={`design-plugin-folder-contribute-${folder.path}`}
+                                disabled={actionBusy || installingFolder !== null || sharingFolder !== null}
+                                onClick={() =>
+                                  void handlePluginFolderAgentAction(folder.path, 'contribute')
+                                }
+                              >
+                                {sharingFolder === `contribute:${folder.path}` ? 'Sending…' : 'Open Design PR'}
+                              </button>
+                            </>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

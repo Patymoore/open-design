@@ -107,6 +107,23 @@ describe('parseRoute / buildPath (issue #1505)', () => {
     });
   });
 
+  it('round-trips public share and workspace invite routes', () => {
+    const shareRoute: Route = { kind: 'shareLiveArtifact', token: 'share/token with space' };
+    const inviteRoute: Route = { kind: 'workspaceInvite', token: 'invite/token with space' };
+
+    expect(buildPath(shareRoute)).toBe('/share/live-artifact/share%2Ftoken%20with%20space');
+    expect(roundTrip(shareRoute)).toEqual(shareRoute);
+    expect(buildPath(inviteRoute)).toBe('/workspace-invites/invite%2Ftoken%20with%20space');
+    expect(roundTrip(inviteRoute)).toEqual(inviteRoute);
+  });
+
+  it('round-trips the workspace management route', () => {
+    const route: Route = { kind: 'home', view: 'workspace' };
+    expect(buildPath(route)).toBe('/workspace');
+    expect(parseRoute('/workspace')).toEqual(route);
+    expect(roundTrip(route)).toEqual(route);
+  });
+
   it('falls back to home when the URL is unrecognized', () => {
     expect(parseRoute('/something/else')).toEqual({ kind: 'home', view: 'home' });
     expect(parseRoute('/projects')).toEqual({ kind: 'home', view: 'projects' });

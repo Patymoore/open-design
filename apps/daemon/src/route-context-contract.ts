@@ -10,6 +10,7 @@ import type { RegisterMediaRoutesDeps } from './media-routes.js';
 import type { RegisterProjectArtifactRoutesDeps, RegisterProjectFileRoutesDeps, RegisterProjectRoutesDeps, RegisterProjectUploadRoutesDeps } from './project-routes.js';
 import type { RegisterRoutineRoutesDeps } from './routine-routes.js';
 import type { RegisterStaticResourceRoutesDeps } from './static-resource-routes.js';
+import type { RegisterWorkspaceRoutesDeps } from './workspace-routes.js';
 
 type AllRegisteredRouteDeps =
   & RegisterActiveContextRoutesDeps
@@ -28,7 +29,8 @@ type AllRegisteredRouteDeps =
   & RegisterProjectRoutesDeps
   & RegisterProjectUploadRoutesDeps
   & RegisterRoutineRoutesDeps
-  & RegisterStaticResourceRoutesDeps;
+  & RegisterStaticResourceRoutesDeps
+  & RegisterWorkspaceRoutesDeps;
 
 type Assert<T extends true> = T;
 type ServerContextCoversRouteDeps = Assert<ServerContext extends AllRegisteredRouteDeps ? true : false>;

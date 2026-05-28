@@ -5,9 +5,9 @@ import { buildPetTaskCenter } from '../../src/components/pet/taskCenter';
 import type { Project } from '../../src/types';
 
 const projects: Project[] = [
-  { id: 'p1', name: 'Landing Page', skillId: null, designSystemId: null, createdAt: 1, updatedAt: 1 },
-  { id: 'p2', name: 'Brand Deck', skillId: null, designSystemId: null, createdAt: 1, updatedAt: 1 },
-  { id: 'p3', name: 'Ignored', skillId: null, designSystemId: null, createdAt: 1, updatedAt: 1 },
+  { id: 'p1', workspaceId: 'workspace-1', name: 'Landing Page', skillId: null, designSystemId: null, createdAt: 1, updatedAt: 1 },
+  { id: 'p2', workspaceId: 'workspace-1', name: 'Brand Deck', skillId: null, designSystemId: null, createdAt: 1, updatedAt: 1 },
+  { id: 'p3', workspaceId: 'workspace-1', name: 'Ignored', skillId: null, designSystemId: null, createdAt: 1, updatedAt: 1 },
 ];
 
 function run(

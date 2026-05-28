@@ -15,6 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import {
   composeLiveInstructionPrompt,
   resolveGrantedCodexImagegenOverride,
@@ -28,6 +29,7 @@ import { skillCwdAliasSegment } from '../src/cwd-aliases.js';
 import { getAgentDef } from '../src/agents.js';
 import { readMemoryConfig, writeMemoryConfig } from '../src/memory.js';
 import { renderCodexImagegenOverride } from '../src/prompts/system.js';
+import { insertCritiqueRun } from '../src/critique/persistence.js';
 
 function symlinkDir(target: string, link: string): void {
   symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
@@ -167,8 +169,362 @@ describe('/api/chat', () => {
     expect(body).toContain('AGENT_UNAVAILABLE');
   });
 
+  it('requires workspace membership before accepting interactive tool results', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Tool result workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const projectId = `tool-result-private-${Date.now()}`;
+    const projectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Tool result private project',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(projectResp.status).toBe(200);
+
+    const runResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'codex',
+        projectId,
+        message: 'hello',
+      }),
+    });
+    expect(runResp.status).toBe(202);
+    const runBody = (await runResp.json()) as { runId: string };
+
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = new Database(join(dataDir, 'app.sqlite'));
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(`tool-result-outsider-${Date.now()}`);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const toolResultResp = await fetch(`${baseUrl}/api/runs/${runBody.runId}/tool-result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          toolUseId: 'tool-use-private',
+          content: 'nope',
+        }),
+      });
+      expect(toolResultResp.status).toBe(403);
+    } finally {
+      const restoreDb = new Database(join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+      await fetch(`${baseUrl}/api/runs/${runBody.runId}/cancel`, { method: 'POST' });
+    }
+  });
+
+  it('hides inaccessible workspace runs from unfiltered run lists', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Run list workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const projectId = `run-list-private-${Date.now()}`;
+    const projectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Run list private project',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(projectResp.status).toBe(200);
+
+    const runResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'codex',
+        projectId,
+        message: 'hello',
+      }),
+    });
+    expect(runResp.status).toBe(202);
+    const runBody = (await runResp.json()) as { runId: string };
+
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = new Database(join(dataDir, 'app.sqlite'));
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(`run-list-outsider-${Date.now()}`);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const listResp = await fetch(`${baseUrl}/api/runs`);
+      expect(listResp.status).toBe(200);
+      const listBody = (await listResp.json()) as { runs?: Array<{ id: string }> };
+      expect(listBody.runs?.some((run) => run.id === runBody.runId)).toBe(false);
+
+      const statusResp = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runBody.runId)}`);
+      expect(statusResp.status).toBe(403);
+    } finally {
+      const restoreDb = new Database(join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+      await fetch(`${baseUrl}/api/runs/${runBody.runId}/cancel`, { method: 'POST' });
+    }
+  });
+
+  it('requires workspace membership before starting legacy chat runs for a project', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Legacy chat workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const projectId = `legacy-chat-private-${Date.now()}`;
+    const projectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Legacy chat private project',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(projectResp.status).toBe(200);
+    const projectBody = (await projectResp.json()) as { conversationId: string };
+
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = new Database(join(dataDir, 'app.sqlite'));
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(`legacy-chat-outsider-${Date.now()}`);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const chatResp = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 'codex',
+          projectId,
+          message: 'hello',
+        }),
+      });
+      expect(chatResp.status).toBe(403);
+
+      const conversationOnlyChatResp = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: 'codex',
+          conversationId: projectBody.conversationId,
+          message: 'hello',
+        }),
+      });
+      expect(conversationOnlyChatResp.status).toBe(403);
+    } finally {
+      const restoreDb = new Database(join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+  });
+
+  it('rejects run requests when the conversation belongs to a different project', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Conversation project guard ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const firstProjectId = `conversation-guard-a-${Date.now()}`;
+    const firstProjectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: firstProjectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Conversation guard A',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(firstProjectResp.status).toBe(200);
+
+    const secondProjectId = `conversation-guard-b-${Date.now()}`;
+    const secondProjectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: secondProjectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Conversation guard B',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(secondProjectResp.status).toBe(200);
+    const secondProjectBody = (await secondProjectResp.json()) as { conversationId: string };
+
+    const runsResp = await fetch(`${baseUrl}/api/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'codex',
+        projectId: firstProjectId,
+        conversationId: secondProjectBody.conversationId,
+        message: 'hello',
+      }),
+    });
+    expect(runsResp.status).toBe(409);
+    const runsBody = (await runsResp.json()) as { error?: { code?: string } };
+    expect(runsBody.error?.code).toBe('CONVERSATION_PROJECT_MISMATCH');
+
+    const chatResp = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: 'codex',
+        projectId: firstProjectId,
+        conversationId: secondProjectBody.conversationId,
+        message: 'hello',
+      }),
+    });
+    expect(chatResp.status).toBe(409);
+    const chatBody = (await chatResp.json()) as { error?: { code?: string } };
+    expect(chatBody.error?.code).toBe('CONVERSATION_PROJECT_MISMATCH');
+  });
+
+  it('requires workspace membership before accessing critique project endpoints', async () => {
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Critique workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const projectId = `critique-private-${Date.now()}`;
+    const projectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        workspaceId: workspaceBody.workspace.id,
+        name: 'Critique private project',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(projectResp.status).toBe(200);
+
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const db = new Database(join(dataDir, 'app.sqlite'));
+    const runId = `critique-run-${Date.now()}`;
+    try {
+      insertCritiqueRun(db, {
+        id: runId,
+        projectId,
+        status: 'running',
+        protocolVersion: 1,
+      });
+      db.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(`critique-outsider-${Date.now()}`);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const interruptResp = await fetch(`${baseUrl}/api/projects/${projectId}/critique/${runId}/interrupt`, {
+        method: 'POST',
+      });
+      expect(interruptResp.status).toBe(403);
+
+      const artifactResp = await fetch(`${baseUrl}/api/projects/${projectId}/critique/${runId}/artifact`);
+      expect(artifactResp.status).toBe(403);
+    } finally {
+      const restoreDb = new Database(join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+  });
+
   it('marks json stream runs failed when an error frame exits with code 0', async () => {
-    const conversationId = `conv-${randomUUID()}`;
+    const projectId = `json-stream-error-${randomUUID()}`;
+    const projectResp = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        name: 'JSON stream error route fixture',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(projectResp.status).toBe(200);
+    const projectBody = (await projectResp.json()) as { conversationId: string };
+    const conversationId = projectBody.conversationId;
 
     await withFakeAgent(
       'opencode',
@@ -185,6 +541,7 @@ process.exit(0);
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             agentId: 'opencode',
+            projectId,
             conversationId,
             message: 'hello',
           }),

@@ -90,6 +90,9 @@ export interface RoutineLastRunSummary {
 
 export interface Routine {
   id: string;
+  workspaceId?: string;
+  createdByUserId?: string;
+  ownedByUserId?: string;
   name: string;
   prompt: string;
   schedule: RoutineSchedule;
@@ -120,6 +123,7 @@ export interface RoutineRun {
 }
 
 export interface CreateRoutineRequest {
+  workspaceId?: string;
   name: string;
   prompt: string;
   schedule: RoutineSchedule;
@@ -131,6 +135,8 @@ export interface CreateRoutineRequest {
 }
 
 export interface UpdateRoutineRequest {
+  workspaceId?: string;
+  ownedByUserId?: string;
   name?: string;
   prompt?: string;
   schedule?: RoutineSchedule;

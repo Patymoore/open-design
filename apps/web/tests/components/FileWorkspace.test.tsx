@@ -365,6 +365,49 @@ describe('DesignFilesPanel plugin folders', () => {
       'Sent to the agent. The CLI run will continue in chat.',
     );
   });
+
+  it('keeps local plugin install available when external share actions are unavailable', async () => {
+    const onPluginFolderAgentAction = vi.fn();
+    const container = renderWorkspace(
+      <DesignFilesPanel
+        projectId="project-1"
+        files={[
+          workspaceFile('generated-plugin/open-design.json'),
+          workspaceFile('generated-plugin/SKILL.md'),
+          workspaceFile('generated-plugin/examples/demo.md'),
+        ]}
+        liveArtifacts={[]}
+        onRefreshFiles={vi.fn()}
+        onOpenFile={vi.fn()}
+        onOpenLiveArtifact={vi.fn()}
+        onDeleteFile={vi.fn()}
+        onDeleteFiles={vi.fn()}
+        onRenameFile={vi.fn()}
+        onUpload={vi.fn()}
+        onUploadFiles={vi.fn()}
+        onPaste={vi.fn()}
+        onNewSketch={vi.fn()}
+        onPluginFolderAgentAction={onPluginFolderAgentAction}
+        canSharePluginFolders={false}
+      />,
+    );
+
+    const install = container.querySelector<HTMLButtonElement>(
+      '[data-testid="design-plugin-folder-install-generated-plugin"]',
+    );
+    expect(install).toBeTruthy();
+    expect(
+      container.querySelector('[data-testid="design-plugin-folder-publish-generated-plugin"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-testid="design-plugin-folder-contribute-generated-plugin"]'),
+    ).toBeNull();
+
+    await act(async () => {
+      install?.click();
+    });
+    expect(onPluginFolderAgentAction).toHaveBeenCalledWith('generated-plugin', 'install');
+  });
 });
 
 describe('FileWorkspace tab reordering', () => {

@@ -16,6 +16,7 @@ import { existsSync, promises as fsp, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import { startServer } from '../src/server.js';
 
 async function withFakeClaude<T>(run: () => Promise<T>): Promise<T> {
@@ -117,6 +118,89 @@ describe('spawn writes external MCP config for Claude Code', () => {
       : join(process.cwd(), '.od', 'projects');
     return { id, dir: join(projectsBase, id) };
   }
+
+  it('requires workspace manager access for MCP server and OAuth management routes', async () => {
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+
+    const initialServers = [{
+      id: 'higgsfield',
+      transport: 'sse',
+      enabled: true,
+      url: 'https://mcp.higgsfield.ai',
+    }];
+    const putInitial = await fetch(`${baseUrl}/api/mcp/servers`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ servers: initialServers }),
+    });
+    expect(putInitial.ok).toBe(true);
+
+    const ownerResp = await fetch(`${baseUrl}/api/workspaces`);
+    expect(ownerResp.ok).toBe(true);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: `MCP Access ${Date.now()}` }),
+    });
+    expect(workspaceResp.ok).toBe(true);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const memberUserId = `mcp-member-${Date.now()}`;
+    const sqlite = new Database(join(dataDir, 'app.sqlite'));
+    try {
+      sqlite.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspaceBody.workspace.id, memberUserId, Date.now());
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(memberUserId);
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES (?, ?)`)
+        .run(`currentWorkspaceId:${memberUserId}`, workspaceBody.workspace.id);
+    } finally {
+      sqlite.close();
+    }
+
+    const assertForbiddenAdmin = async (response: Response) => {
+      expect(response.status).toBe(403);
+      const body = (await response.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('FORBIDDEN');
+      expect(body.error?.message).toMatch(/admin role/i);
+    };
+
+    try {
+      await assertForbiddenAdmin(await fetch(`${baseUrl}/api/mcp/servers`));
+      await assertForbiddenAdmin(await fetch(`${baseUrl}/api/mcp/servers`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ servers: [] }),
+      }));
+      await assertForbiddenAdmin(await fetch(`${baseUrl}/api/mcp/oauth/start`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ serverId: 'higgsfield' }),
+      }));
+      await assertForbiddenAdmin(await fetch(`${baseUrl}/api/mcp/oauth/status?serverId=higgsfield`));
+      await assertForbiddenAdmin(await fetch(`${baseUrl}/api/mcp/oauth/disconnect`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ serverId: 'higgsfield' }),
+      }));
+    } finally {
+      const restoreDb = new Database(join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+
+    const ownerServersResp = await fetch(`${baseUrl}/api/mcp/servers`);
+    expect(ownerServersResp.ok).toBe(true);
+    const ownerServersBody = (await ownerServersResp.json()) as { servers: Array<{ id: string }> };
+    expect(ownerServersBody.servers.map((server) => server.id)).toEqual(['higgsfield']);
+  });
 
   it('writes .mcp.json into the per-project dir, then removes it when servers are cleared', async () => {
     await withFakeClaude(async () => {

@@ -66,6 +66,10 @@ export interface ResolveSnapshotInput {
   // plugins that declared `od.context.designSystem.primary: true` get
   // bound to the project's DS at apply time.
   activeProjectDesignSystem?: { id: string; title?: string } | undefined;
+  // Explicit snapshot reuse can carry resolved context from another
+  // project. Route owners provide the current user's access check here
+  // before the resolver re-links that snapshot to a new project/run.
+  authorizeSnapshotReuse?: ((snapshotId: string) => ResolveSnapshotError | null) | undefined;
 }
 
 export interface ResolveSnapshotOk {
@@ -185,6 +189,8 @@ export function resolvePluginSnapshot(input: ResolveSnapshotInput): ResolveSnaps
         },
       };
     }
+    const accessError = input.authorizeSnapshotReuse?.(fields.snapshotId);
+    if (accessError) return accessError;
     return finalizeOk({
       input,
       snapshot,

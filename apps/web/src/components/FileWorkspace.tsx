@@ -84,6 +84,10 @@ interface Props {
   ) => Promise<{ message?: string; url?: string } | void> | { message?: string; url?: string } | void;
   activePluginActionPaths?: Set<string>;
   hiddenPluginActionPaths?: Set<string>;
+  canSharePluginFolders?: boolean;
+  canCreateViewerLinks?: boolean;
+  canSaveWorkspaceTemplates?: boolean;
+  canDeployWorkspaceArtifacts?: boolean;
   focusMode?: boolean;
   onFocusModeChange?: (next: boolean) => void;
   designSystemProject?: DesignSystemSummary | null;
@@ -206,6 +210,10 @@ export function FileWorkspace({
   onPluginFolderAgentAction,
   activePluginActionPaths,
   hiddenPluginActionPaths,
+  canSharePluginFolders = true,
+  canCreateViewerLinks = true,
+  canSaveWorkspaceTemplates = true,
+  canDeployWorkspaceArtifacts = true,
   focusMode = false,
   onFocusModeChange,
   designSystemProject = null,
@@ -1010,6 +1018,7 @@ export function FileWorkspace({
             onPluginFolderAgentAction={onPluginFolderAgentAction}
             activePluginActionPaths={activePluginActionPaths}
             hiddenPluginActionPaths={hiddenPluginActionPaths}
+            canSharePluginFolders={canSharePluginFolders}
           />
         ) : isActiveSketch && activeSketch && activeFile ? (
           activeSketch.loaded ? (
@@ -1035,6 +1044,7 @@ export function FileWorkspace({
             liveArtifact={activeLiveArtifact}
             liveArtifactEvents={liveArtifactEvents}
             onRefreshArtifacts={onRefreshFiles}
+            canCreateViewerLinks={canCreateViewerLinks}
           />
         ) : activeFile ? (
           <FileViewer
@@ -1051,6 +1061,8 @@ export function FileWorkspace({
             onSendBoardCommentAttachments={onSendBoardCommentAttachments}
             onFileSaved={onRefreshFiles}
             onOpenFileReplacing={openFileReplacing}
+            canSaveWorkspaceTemplates={canSaveWorkspaceTemplates}
+            canDeployWorkspaceArtifacts={canDeployWorkspaceArtifacts}
           />
         ) : (
           <div className="viewer-empty">

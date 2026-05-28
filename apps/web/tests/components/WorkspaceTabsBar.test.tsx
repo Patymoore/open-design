@@ -49,6 +49,7 @@ const projectRoute: Route = {
 
 const project: Project = {
   id: 'project-alpha',
+  workspaceId: 'local-personal',
   name: 'Project Alpha',
   skillId: null,
   designSystemId: null,

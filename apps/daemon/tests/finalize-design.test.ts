@@ -10,6 +10,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type http from 'node:http';
+import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,9 +46,11 @@ let tempDir: string | null = null;
 let projectsRoot: string | null = null;
 
 afterEach(() => {
-  closeDatabase();
   vi.restoreAllMocks();
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir) {
+    closeDatabase();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
   tempDir = null;
   projectsRoot = null;
 });
@@ -982,6 +985,18 @@ describe('POST /api/projects/:id/finalize/anthropic — HTTP-layer validation', 
     };
     serverBaseUrl = started.url;
     server = started.server;
+
+    const createFixtureResp = await fetch(`${serverBaseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'p1',
+        name: 'Finalize validation fixture',
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(createFixtureResp.status).toBe(200);
   });
 
   afterAll(async () => {
@@ -995,6 +1010,48 @@ describe('POST /api/projects/:id/finalize/anthropic — HTTP-layer validation', 
       body: JSON.stringify(body),
     });
   }
+
+  it('403 FORBIDDEN when workspace membership is missing before request body validation', async () => {
+    const workspaceResp = await fetch(`${serverBaseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: `Finalize private workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = await workspaceResp.json() as { workspace: { id: string } };
+    const projectId = `proj-finalize-private-${Date.now()}`;
+    const createProjectResp = await fetch(`${serverBaseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: projectId,
+        name: 'Finalize private route fixture',
+        workspaceId: workspaceBody.workspace.id,
+        skillId: null,
+        designSystemId: null,
+      }),
+    });
+    expect(createProjectResp.status).toBe(200);
+
+    const ownerResp = await fetch(`${serverBaseUrl}/api/workspaces`);
+    const ownerBody = await ownerResp.json() as { currentUserId: string };
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const routeDb = new Database(path.join(dataDir, 'app.sqlite'));
+    try {
+      routeDb.prepare(
+        `DELETE FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?`,
+      ).run(workspaceBody.workspace.id, ownerBody.currentUserId);
+    } finally {
+      routeDb.close();
+    }
+
+    const res = await postJson(projectId, {});
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.message).toMatch(/workspace membership/i);
+  });
 
   it('400 BAD_REQUEST when baseUrl is not a valid URL (test #13)', async () => {
     const res = await postJson('p1', {

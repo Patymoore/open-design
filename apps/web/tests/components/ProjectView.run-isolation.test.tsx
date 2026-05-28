@@ -191,6 +191,7 @@ const config: AppConfig = {
 
 const project: Project = {
   id: 'project-1',
+  workspaceId: 'local-personal',
   name: 'Project',
   skillId: null,
   designSystemId: null,

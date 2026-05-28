@@ -4,6 +4,7 @@ import type {
   ProjectContextMcpServerRef,
   ProjectContextPluginRef,
 } from './context.js';
+import type { OkResponse } from '../common.js';
 
 export type ProjectKind =
   | 'prototype'
@@ -163,6 +164,9 @@ export interface ProjectMetadata {
 
 export interface Project {
   id: string;
+  workspaceId: string;
+  createdByUserId?: string;
+  ownedByUserId?: string;
   name: string;
   skillId: string | null;
   designSystemId: string | null;
@@ -205,6 +209,7 @@ export interface Conversation {
 
 export interface CreateProjectRequest {
   name: string;
+  workspaceId?: string;
   skillId?: string | null;
   designSystemId?: string | null;
   pendingPrompt?: string;
@@ -218,7 +223,10 @@ export interface CreateProjectRequest {
 }
 
 export interface UpdateProjectRequest {
+  workspaceId?: string;
+  ownedByUserId?: string;
   name?: string;
+  updatedAt?: number;
   skillId?: string | null;
   designSystemId?: string | null;
   pendingPrompt?: string | null;
@@ -246,9 +254,11 @@ export interface ProjectDetailResponse extends ProjectResponse {
 }
 
 export interface CreateProjectResponse extends ProjectResponse {
-  conversationId?: string;
+  conversationId: string;
   appliedPluginSnapshotId?: string;
 }
+
+export interface DeleteProjectResponse extends OkResponse {}
 
 // POST /api/import/folder — create a project rooted at an existing local
 // folder. The submitted baseDir is stored as the project's metadata.baseDir
@@ -256,6 +266,7 @@ export interface CreateProjectResponse extends ProjectResponse {
 // The user owns version control; OD does not snapshot or copy.
 export interface ImportFolderRequest {
   baseDir: string;
+  workspaceId?: string;
   name?: string;
   skillId?: string | null;
   designSystemId?: string | null;
@@ -277,6 +288,13 @@ export interface ReplaceProjectWorkingDirResponse {
   entryFile: string | null;
 }
 
+export interface ImportClaudeDesignResponse {
+  project: Project;
+  conversationId: string;
+  entryFile: string;
+  files: string[];
+}
+
 export interface ConversationsResponse {
   conversations: Conversation[];
 }
@@ -284,6 +302,8 @@ export interface ConversationsResponse {
 export interface ConversationResponse {
   conversation: Conversation;
 }
+
+export interface DeleteConversationResponse extends OkResponse {}
 
 export interface CreateConversationRequest {
   title?: string | null;
@@ -296,6 +316,20 @@ export interface UpdateConversationRequest {
 export interface MessagesResponse {
   messages: ChatMessage[];
 }
+
+export interface MessageResponse {
+  message: ChatMessage;
+}
+
+export interface ProjectTemplatesResponse {
+  templates: ProjectTemplate[];
+}
+
+export interface ProjectTemplateResponse {
+  template: ProjectTemplate;
+}
+
+export interface DeleteProjectTemplateResponse extends OkResponse {}
 
 export type DeployProviderId = 'vercel-self' | 'cloudflare-pages';
 export type DeploymentStatus =

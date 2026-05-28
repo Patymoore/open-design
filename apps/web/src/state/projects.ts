@@ -8,13 +8,27 @@
 import type {
   AppliedPluginSnapshot,
   ApplyResult,
+  ConversationsResponse,
+  ConversationResponse,
   CreatePluginShareProjectResponse,
+  CreatePluginShareProjectRequest,
+  CreateProjectRequest,
+  CreateProjectResponse,
+  DeleteProjectResponse,
+  DeleteProjectTemplateResponse,
+  ImportClaudeDesignResponse,
   ImportFolderRequest,
   ImportFolderResponse,
   InstalledPluginRecord,
+  MessagesResponse,
   PluginInstallOutcome,
   PluginShareAction,
+  ProjectResponse,
   ProjectPluginFolderInstallRequest,
+  ProjectsResponse,
+  ProjectTemplateResponse,
+  ProjectTemplatesResponse,
+  UpdateProjectRequest,
 } from '@open-design/contracts';
 import { randomUUID } from '../utils/uuid';
 import type {
@@ -29,11 +43,32 @@ import type {
 export type { PluginInstallOutcome } from '@open-design/contracts';
 export type { PluginShareAction } from '@open-design/contracts';
 
-export async function listProjects(): Promise<Project[]> {
+export type ProjectOperationResult<T = true> =
+  | { ok: true; value: T }
+  | { ok: false; error: string };
+
+async function readApiError(resp: Response, fallback: string): Promise<string> {
   try {
-    const resp = await fetch('/api/projects');
+    const json = (await resp.json()) as { error?: { message?: string; code?: string }; message?: string };
+    if (json.error?.code === 'PROJECT_HAS_ROUTINES') {
+      return 'Delete automations that use this project before deleting it.';
+    }
+    return json.error?.message || json.message || json.error?.code || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function networkError(fallback: string): ProjectOperationResult<never> {
+  return { ok: false, error: fallback };
+}
+
+export async function listProjects(workspaceId?: string): Promise<Project[]> {
+  try {
+    const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+    const resp = await fetch(`/api/projects${query}`);
     if (!resp.ok) return [];
-    const json = (await resp.json()) as { projects: Project[] };
+    const json = (await resp.json()) as ProjectsResponse;
     return json.projects ?? [];
   } catch {
     return [];
@@ -44,7 +79,7 @@ export async function getProject(id: string): Promise<Project | null> {
   try {
     const resp = await fetch(`/api/projects/${encodeURIComponent(id)}`);
     if (!resp.ok) return null;
-    const json = (await resp.json()) as { project: Project };
+    const json = (await resp.json()) as ProjectResponse;
     return json.project;
   } catch {
     return null;
@@ -55,6 +90,7 @@ export async function createProject(input: {
   name: string;
   skillId: string | null;
   designSystemId: string | null;
+  workspaceId?: string;
   pendingPrompt?: string;
   metadata?: ProjectMetadata;
   // Plan §3.A1 / spec §11.5 — POST /api/projects accepts a pluginId
@@ -75,14 +111,12 @@ export async function createProject(input: {
     const resp = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, ...input }),
+      body: JSON.stringify(
+        { id, ...input } satisfies CreateProjectRequest & { id: string },
+      ),
     });
     if (!resp.ok) return null;
-    return (await resp.json()) as {
-      project: Project;
-      conversationId: string;
-      appliedPluginSnapshotId?: string;
-    };
+    return (await resp.json()) as CreateProjectResponse;
   } catch {
     return null;
   }
@@ -109,20 +143,18 @@ export async function importFolderProject(
 
 export async function importClaudeDesignZip(
   file: File,
-): Promise<{ project: Project; conversationId: string; entryFile: string } | null> {
+  workspaceId?: string,
+): Promise<ImportClaudeDesignResponse | null> {
   try {
     const form = new FormData();
     form.append('file', file);
+    if (workspaceId) form.append('workspaceId', workspaceId);
     const resp = await fetch('/api/import/claude-design', {
       method: 'POST',
       body: form,
     });
     if (!resp.ok) return null;
-    return (await resp.json()) as {
-      project: Project;
-      conversationId: string;
-      entryFile: string;
-    };
+    return (await resp.json()) as ImportClaudeDesignResponse;
   } catch {
     return null;
   }
@@ -130,11 +162,12 @@ export async function importClaudeDesignZip(
 
 // ---------- templates ----------
 
-export async function listTemplates(): Promise<ProjectTemplate[]> {
+export async function listTemplates(workspaceId?: string): Promise<ProjectTemplate[]> {
   try {
-    const resp = await fetch('/api/templates');
+    const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+    const resp = await fetch(`/api/templates${query}`);
     if (!resp.ok) return [];
-    const json = (await resp.json()) as { templates: ProjectTemplate[] };
+    const json = (await resp.json()) as ProjectTemplatesResponse;
     return json.templates ?? [];
   } catch {
     return [];
@@ -145,7 +178,7 @@ export async function getTemplate(id: string): Promise<ProjectTemplate | null> {
   try {
     const resp = await fetch(`/api/templates/${encodeURIComponent(id)}`);
     if (!resp.ok) return null;
-    const json = (await resp.json()) as { template: ProjectTemplate };
+    const json = (await resp.json()) as ProjectTemplateResponse;
     return json.template;
   } catch {
     return null;
@@ -164,7 +197,7 @@ export async function saveTemplate(input: {
       body: JSON.stringify(input),
     });
     if (!resp.ok) return null;
-    const json = (await resp.json()) as { template: ProjectTemplate };
+    const json = (await resp.json()) as ProjectTemplateResponse;
     return json.template;
   } catch {
     return null;
@@ -176,7 +209,9 @@ export async function deleteTemplate(id: string): Promise<boolean> {
     const resp = await fetch(`/api/templates/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
-    return resp.ok;
+    if (!resp.ok) return false;
+    const json = (await resp.json()) as DeleteProjectTemplateResponse;
+    return json.ok === true;
   } catch {
     return false;
   }
@@ -185,34 +220,53 @@ export async function deleteTemplate(id: string): Promise<boolean> {
 type ProjectPatch = Omit<Partial<Project>, 'pendingPrompt' | 'customInstructions'> & {
   pendingPrompt?: Project['pendingPrompt'] | null;
   customInstructions?: string | null;
-};
+} & UpdateProjectRequest;
 
 export async function patchProject(
   id: string,
   patch: ProjectPatch,
 ): Promise<Project | null> {
+  const result = await patchProjectResult(id, patch);
+  return result.ok ? result.value : null;
+}
+
+export async function patchProjectResult(
+  id: string,
+  patch: ProjectPatch,
+): Promise<ProjectOperationResult<Project>> {
   try {
     const resp = await fetch(`/api/projects/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
-    if (!resp.ok) return null;
-    const json = (await resp.json()) as { project: Project };
-    return json.project;
+    if (!resp.ok) return { ok: false, error: await readApiError(resp, 'Could not update project.') };
+    const json = (await resp.json()) as ProjectResponse;
+    return json.project
+      ? { ok: true, value: json.project }
+      : { ok: false, error: 'Could not update project.' };
   } catch {
-    return null;
+    return networkError('Could not update project.');
   }
 }
 
 export async function deleteProject(id: string): Promise<boolean> {
+  const result = await deleteProjectResult(id);
+  return result.ok;
+}
+
+export async function deleteProjectResult(id: string): Promise<ProjectOperationResult> {
   try {
     const resp = await fetch(`/api/projects/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
-    return resp.ok;
+    if (!resp.ok) return { ok: false, error: await readApiError(resp, 'Could not delete project.') };
+    const json = (await resp.json()) as DeleteProjectResponse;
+    return json.ok === true
+      ? { ok: true, value: true }
+      : { ok: false, error: 'Could not delete project.' };
   } catch {
-    return false;
+    return networkError('Could not delete project.');
   }
 }
 
@@ -226,7 +280,7 @@ export async function listConversations(
       `/api/projects/${encodeURIComponent(projectId)}/conversations`,
     );
     if (!resp.ok) return [];
-    const json = (await resp.json()) as { conversations: Conversation[] };
+    const json = (await resp.json()) as ConversationsResponse;
     return json.conversations ?? [];
   } catch {
     return [];
@@ -247,7 +301,7 @@ export async function createConversation(
       },
     );
     if (!resp.ok) return null;
-    const json = (await resp.json()) as { conversation: Conversation };
+    const json = (await resp.json()) as ConversationResponse;
     return json.conversation;
   } catch {
     return null;
@@ -269,7 +323,7 @@ export async function patchConversation(
       },
     );
     if (!resp.ok) return null;
-    const json = (await resp.json()) as { conversation: Conversation };
+    const json = (await resp.json()) as ConversationResponse;
     return json.conversation;
   } catch {
     return null;
@@ -302,7 +356,7 @@ export async function listMessages(
       `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
     );
     if (!resp.ok) return [];
-    const json = (await resp.json()) as { messages: ChatMessage[] };
+    const json = (await resp.json()) as MessagesResponse;
     return json.messages ?? [];
   } catch {
     return [];
@@ -631,6 +685,7 @@ export async function createPluginShareProject(
   pluginId: string,
   action: PluginShareAction,
   locale?: string,
+  workspaceId?: string,
 ): Promise<PluginShareProjectOutcome> {
   try {
     const resp = await fetch(
@@ -641,7 +696,8 @@ export async function createPluginShareProject(
         body: JSON.stringify({
           action,
           ...(locale ? { locale } : {}),
-        }),
+          ...(workspaceId ? { workspaceId } : {}),
+        } satisfies CreatePluginShareProjectRequest),
       },
     );
     const body = (await resp.json().catch(() => null)) as

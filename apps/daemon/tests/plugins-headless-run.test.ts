@@ -31,6 +31,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import url from 'node:url';
 import { promisify } from 'node:util';
+import Database from 'better-sqlite3';
 import { startServer } from '../src/server.js';
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -227,15 +228,81 @@ describe('Plan §8 e2e-3 (entry slice) — headless install → project → run'
     const installSuccess = await readSseUntilSuccess(installResp);
     expect(installSuccess?.plugin?.id).toBe('sample-plugin');
 
+    const missingWorkspaceResp = await fetch(`${baseUrl}/api/plugins/sample-plugin/share-project`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body:    JSON.stringify({ action: 'publish-github', locale: 'en', workspaceId: 'missing-workspace' }),
+    });
+    expect(missingWorkspaceResp.status).toBe(404);
+    const missingWorkspaceBody = (await missingWorkspaceResp.json()) as {
+      error?: { code?: string; message?: string };
+    };
+    expect(missingWorkspaceBody.error?.code).toBe('WORKSPACE_NOT_FOUND');
+
+    const workspaceResp = await fetch(`${baseUrl}/api/workspaces`, {
+      method:  'POST',
+      headers: { 'content-type': 'application/json' },
+      body:    JSON.stringify({ name: `Plugin share workspace ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string }; currentWorkspaceId?: string };
+    expect(workspaceBody.currentWorkspaceId).toBe(workspaceBody.workspace.id);
+
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const memberUserId = `plugin-share-member-${Date.now()}`;
+    const setupMemberDb = new Database(path.join(dataDir, 'app.sqlite'));
+    const ownerUserId = (
+      setupMemberDb
+        .prepare(`SELECT value FROM local_identity WHERE key = 'localUserId'`)
+        .get() as { value?: string } | undefined
+    )?.value;
+    if (!ownerUserId) {
+      setupMemberDb.close();
+      throw new Error('local user id is required for plugin share permission test');
+    }
+    try {
+      setupMemberDb.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspaceBody.workspace.id, memberUserId, Date.now());
+      setupMemberDb.prepare(
+        `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+      ).run(memberUserId);
+    } finally {
+      setupMemberDb.close();
+    }
+
+    try {
+      const memberShareResp = await fetch(`${baseUrl}/api/plugins/sample-plugin/share-project`, {
+        method:  'POST',
+        headers: { 'content-type': 'application/json' },
+        body:    JSON.stringify({ action: 'publish-github', locale: 'en', workspaceId: workspaceBody.workspace.id }),
+      });
+      expect(memberShareResp.status).toBe(403);
+      const memberShareBody = (await memberShareResp.json()) as { error?: { code?: string; message?: string } };
+      expect(memberShareBody.error?.code).toBe('FORBIDDEN');
+      expect(memberShareBody.error?.message).toMatch(/workspace admin role required/i);
+    } finally {
+      const restoreOwnerDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        restoreOwnerDb.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(ownerUserId);
+      } finally {
+        restoreOwnerDb.close();
+      }
+    }
+
     const shareResp = await fetch(`${baseUrl}/api/plugins/sample-plugin/share-project`, {
       method:  'POST',
       headers: { 'content-type': 'application/json' },
-      body:    JSON.stringify({ action: 'publish-github', locale: 'en' }),
+      body:    JSON.stringify({ action: 'publish-github', locale: 'en', workspaceId: workspaceBody.workspace.id }),
     });
     expect(shareResp.status).toBe(200);
     const shareBody = (await shareResp.json()) as {
       ok: boolean;
-      project: { id: string; pendingPrompt?: string };
+      project: { id: string; pendingPrompt?: string; workspaceId: string };
       conversationId: string;
       appliedPluginSnapshotId?: string;
       actionPluginId: string;
@@ -245,6 +312,7 @@ describe('Plan §8 e2e-3 (entry slice) — headless install → project → run'
     };
     expect(shareBody.ok).toBe(true);
     expect(shareBody.actionPluginId).toBe('od-plugin-publish-github');
+    expect(shareBody.project.workspaceId).toBe(workspaceBody.workspace.id);
     expect(shareBody.sourcePluginId).toBe('sample-plugin');
     expect(shareBody.appliedPluginSnapshotId).toBeTruthy();
     expect(shareBody.stagedPath).toBe('plugin-source/sample-plugin');
@@ -252,6 +320,16 @@ describe('Plan §8 e2e-3 (entry slice) — headless install → project → run'
     expect(shareBody.prompt).toContain('/api/projects/$OD_PROJECT_ID/plugins/publish-github');
     expect(shareBody.prompt).toContain('plugin-source/sample-plugin');
     expect(shareBody.project.pendingPrompt).toBe(shareBody.prompt);
+
+    const personalProjectsResp = await fetch(`${baseUrl}/api/projects?workspaceId=local-personal`);
+    expect(personalProjectsResp.status).toBe(200);
+    const personalProjects = (await personalProjectsResp.json()) as { projects: Array<{ id: string }> };
+    expect(personalProjects.projects.some((project) => project.id === shareBody.project.id)).toBe(false);
+
+    const workspaceProjectsResp = await fetch(`${baseUrl}/api/projects?workspaceId=${workspaceBody.workspace.id}`);
+    expect(workspaceProjectsResp.status).toBe(200);
+    const workspaceProjects = (await workspaceProjectsResp.json()) as { projects: Array<{ id: string }> };
+    expect(workspaceProjects.projects.some((project) => project.id === shareBody.project.id)).toBe(true);
 
     const filesResp = await fetch(
       `${baseUrl}/api/projects/${encodeURIComponent(shareBody.project.id)}/files`,
@@ -284,7 +362,7 @@ describe('Plan §8 e2e-3 (entry slice) — headless install → project → run'
     expect(contributeResp.status).toBe(200);
     const contributeBody = (await contributeResp.json()) as {
       ok: boolean;
-      project: { id: string };
+      project: { id: string; workspaceId: string };
       appliedPluginSnapshotId?: string;
       actionPluginId: string;
       sourcePluginId: string;
@@ -293,10 +371,25 @@ describe('Plan §8 e2e-3 (entry slice) — headless install → project → run'
     };
     expect(contributeBody.ok).toBe(true);
     expect(contributeBody.actionPluginId).toBe('od-plugin-contribute-open-design');
+    expect(contributeBody.project.workspaceId).toBe(workspaceBody.workspace.id);
     expect(contributeBody.sourcePluginId).toBe('sample-plugin');
     expect(contributeBody.appliedPluginSnapshotId).toBeTruthy();
     expect(contributeBody.stagedPath).toBe('plugin-source/sample-plugin');
     expect(contributeBody.prompt).toContain('/api/projects/$OD_PROJECT_ID/plugins/contribute-open-design');
+
+    const personalProjectsAfterContributeResp = await fetch(`${baseUrl}/api/projects?workspaceId=local-personal`);
+    expect(personalProjectsAfterContributeResp.status).toBe(200);
+    const personalProjectsAfterContribute = (await personalProjectsAfterContributeResp.json()) as {
+      projects: Array<{ id: string }>;
+    };
+    expect(personalProjectsAfterContribute.projects.some((project) => project.id === contributeBody.project.id)).toBe(false);
+
+    const workspaceProjectsAfterContributeResp = await fetch(`${baseUrl}/api/projects?workspaceId=${workspaceBody.workspace.id}`);
+    expect(workspaceProjectsAfterContributeResp.status).toBe(200);
+    const workspaceProjectsAfterContribute = (await workspaceProjectsAfterContributeResp.json()) as {
+      projects: Array<{ id: string }>;
+    };
+    expect(workspaceProjectsAfterContribute.projects.some((project) => project.id === contributeBody.project.id)).toBe(true);
 
     const locator = process.platform === 'win32' ? 'where' : 'which';
     const realGit = ((await execFileP(locator, ['git'])).stdout as string)

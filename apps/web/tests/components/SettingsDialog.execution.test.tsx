@@ -348,6 +348,7 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
   it('renders BYOK protocol tabs and toggles API key visibility', () => {
     renderSettingsDialog();
 
+    expect(screen.getAllByText(/not shared with workspace members/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('tab', { name: 'Anthropic' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'OpenAI' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Azure OpenAI' })).toBeTruthy();
@@ -1640,6 +1641,26 @@ describe('SettingsDialog connectors interactions', () => {
 
     const getApiKeyLink = screen.getByRole('link', { name: /Get API Key/i }) as HTMLAnchorElement;
     expect(getApiKeyLink.href).toBe('https://app.composio.dev/');
+  });
+
+  it('describes Composio connectors as local profile credentials, not workspace-wide settings', () => {
+    renderSettingsDialog(
+      {
+        mode: 'daemon',
+        agentId: 'codex',
+        composio: {
+          apiKey: '',
+          apiKeyConfigured: true,
+          apiKeyTail: 'uQEg',
+        },
+      },
+      { initialSection: 'composio' },
+    );
+
+    expect(screen.getAllByText(/not shared with the workspace/i).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByText(/linked to this local profile/i)).toBeTruthy();
+    expect(screen.queryByText(/linked to this workspace/i)).toBeNull();
   });
 
   it('supports replacing a saved Composio key and saving the pending edit', async () => {

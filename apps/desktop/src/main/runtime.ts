@@ -377,7 +377,7 @@ export type PickAndImportFolderDeps = {
   baseDir: string;
   desktopAuthSecret: Buffer;
   fetchImpl?: typeof globalThis.fetch;
-  init?: { name?: string; skillId?: string | null; designSystemId?: string | null };
+  init?: { name?: string; workspaceId?: string; skillId?: string | null; designSystemId?: string | null };
   /** Round-5: lazy re-registration hook. Called once on 503. */
   registerDesktopAuth?: () => Promise<boolean>;
   /** Injected for tests; defaults to the production HMAC mint. */
@@ -397,6 +397,7 @@ export async function pickAndImportFolder(
   const requestBody = JSON.stringify({
     baseDir: deps.baseDir,
     ...(deps.init?.name == null ? {} : { name: deps.init.name }),
+    ...(deps.init?.workspaceId == null ? {} : { workspaceId: deps.init.workspaceId }),
     ...(deps.init?.skillId === undefined ? {} : { skillId: deps.init.skillId }),
     ...(deps.init?.designSystemId === undefined ? {} : { designSystemId: deps.init.designSystemId }),
   });

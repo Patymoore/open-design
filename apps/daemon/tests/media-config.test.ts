@@ -1,7 +1,9 @@
+import http from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 
 import {
   readAliasMap,
@@ -11,6 +13,7 @@ import {
   seedProviderIfMissing,
   writeConfig,
 } from '../src/media-config.js';
+import { startServer } from '../src/server.js';
 
 const TEST_NANOBANANA_BASE_URL = 'https://nano-banana-gateway.example.test';
 
@@ -20,6 +23,147 @@ const OPENAI_ENV_KEYS = [
   'AZURE_API_KEY',
   'AZURE_OPENAI_API_KEY',
 ];
+
+function rawHttpRequest(
+  url: string,
+  opts: { method?: string; headers?: http.OutgoingHttpHeaders; body?: string } = {},
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = http.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: opts.method ?? 'GET',
+        headers: opts.headers ?? {},
+      },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    if (opts.body) req.write(opts.body);
+    req.end();
+  });
+}
+
+describe('media-config origin guard', () => {
+  let server: http.Server | null = null;
+
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = null;
+    }
+  });
+
+  it('protects local media provider configuration from cross-origin requests', async () => {
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+    };
+    server = started.server;
+    const serverUrl = new URL(started.url);
+    const port = serverUrl.port;
+
+    const sameOrigin = await rawHttpRequest(`${started.url}/api/media/config`, {
+      headers: { Host: `127.0.0.1:${port}` },
+    });
+    expect(sameOrigin.status).toBe(200);
+
+    const rejectedGet = await rawHttpRequest(`${started.url}/api/media/config`, {
+      headers: {
+        Host: `127.0.0.1:${port}`,
+        Origin: 'https://evil.example',
+      },
+    });
+    expect(rejectedGet.status).toBe(403);
+
+    const rejectedPut = await rawHttpRequest(`${started.url}/api/media/config`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Host: `127.0.0.1:${port}`,
+        Origin: 'https://evil.example',
+      },
+      body: JSON.stringify({ providers: { openai: { apiKey: 'stolen' } } }),
+    });
+    expect(rejectedPut.status).toBe(403);
+  });
+
+  it('requires workspace manager access for media provider credentials', async () => {
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+    const started = await startServer({ port: 0, returnServer: true }) as {
+      url: string;
+      server: http.Server;
+    };
+    server = started.server;
+
+    const ownerResp = await fetch(`${started.url}/api/workspaces`);
+    expect(ownerResp.status).toBe(200);
+    const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+
+    const workspaceResp = await fetch(`${started.url}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Media Access ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+    const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+    const memberUserId = `media-member-${Date.now()}`;
+    const sqlite = new Database(path.join(dataDir, 'app.sqlite'));
+    try {
+      sqlite.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspaceBody.workspace.id, memberUserId, Date.now());
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(memberUserId);
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES (?, ?)`)
+        .run(`currentWorkspaceId:${memberUserId}`, workspaceBody.workspace.id);
+    } finally {
+      sqlite.close();
+    }
+
+    try {
+      const getResp = await fetch(`${started.url}/api/media/config`);
+      expect(getResp.status).toBe(403);
+      const getBody = (await getResp.json()) as { error?: { code?: string; message?: string } };
+      expect(getBody.error?.code).toBe('FORBIDDEN');
+      expect(getBody.error?.message).toMatch(/admin role/i);
+
+      const putResp = await fetch(`${started.url}/api/media/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providers: { openai: { apiKey: 'member-token' } } }),
+      });
+      expect(putResp.status).toBe(403);
+      const putBody = (await putResp.json()) as { error?: { code?: string; message?: string } };
+      expect(putBody.error?.code).toBe('FORBIDDEN');
+      expect(putBody.error?.message).toMatch(/admin role/i);
+
+      const voicesResp = await fetch(`${started.url}/api/media/providers/elevenlabs/voices`);
+      expect(voicesResp.status).toBe(403);
+      const voicesBody = (await voicesResp.json()) as { error?: { code?: string; message?: string } };
+      expect(voicesBody.error?.code).toBe('FORBIDDEN');
+      expect(voicesBody.error?.message).toMatch(/admin role/i);
+    } finally {
+      const restoreDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(ownerBody.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+  });
+});
 
 describe('media-config OpenAI OAuth fallback', () => {
   let homeDir: string;

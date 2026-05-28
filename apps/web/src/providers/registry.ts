@@ -8,9 +8,11 @@ import type {
   ConnectorStatusResponse,
   ImportGitHubDesignSystemRequest,
   ImportGitHubDesignSystemResponse,
-  OpenDesignGithubLatestReleaseResponse,
   ImportLocalDesignSystemRequest,
   ImportLocalDesignSystemResponse,
+  LiveArtifactShareResponse,
+  OpenDesignGithubLatestReleaseResponse,
+  PublicLiveArtifactShareResponse,
   ReplaceProjectWorkingDirResponse,
 } from '@open-design/contracts';
 import type {
@@ -1393,6 +1395,60 @@ export type LiveArtifactPreviewVariant = 'rendered' | 'template' | 'rendered-sou
 export function liveArtifactPreviewUrl(projectId: string, artifactId: string, variant: LiveArtifactPreviewVariant = 'rendered'): string {
   const variantQuery = variant === 'rendered' ? '' : `&variant=${encodeURIComponent(variant)}`;
   return `/api/live-artifacts/${encodeURIComponent(artifactId)}/preview?projectId=${encodeURIComponent(projectId)}${variantQuery}`;
+}
+
+export async function createLiveArtifactShare(
+  projectId: string,
+  artifactId: string,
+): Promise<LiveArtifactShareResponse['share'] | null> {
+  try {
+    const resp = await fetch(
+      `/api/live-artifacts/${encodeURIComponent(artifactId)}/shares?projectId=${encodeURIComponent(projectId)}`,
+      { method: 'POST' },
+    );
+    if (!resp.ok) {
+      const errorBody = await readApiErrorBody(resp);
+      throw new Error(errorBody.message);
+    }
+    const json = (await resp.json()) as LiveArtifactShareResponse;
+    if (!json.share) return null;
+    if (typeof window === 'undefined' || !json.share.shareUrl) return json.share;
+    const shareUrl = new URL(json.share.shareUrl, window.location.origin);
+    return { ...json.share, shareUrl: `${window.location.origin}${shareUrl.pathname}${shareUrl.search}${shareUrl.hash}` };
+  } catch (err) {
+    if (err instanceof Error) throw err;
+    return null;
+  }
+}
+
+export async function fetchPublicLiveArtifactShare(
+  token: string,
+): Promise<PublicLiveArtifactShareResponse | null> {
+  const result = await fetchPublicLiveArtifactShareResult(token);
+  return result.ok ? result.value : null;
+}
+
+export type PublicLiveArtifactShareResult =
+  | { ok: true; value: PublicLiveArtifactShareResponse }
+  | { ok: false; error: string; status?: number };
+
+export async function fetchPublicLiveArtifactShareResult(
+  token: string,
+): Promise<PublicLiveArtifactShareResult> {
+  try {
+    const resp = await fetch(`/api/shares/live-artifacts/${encodeURIComponent(token)}`);
+    if (!resp.ok) {
+      const errorBody = await readApiErrorBody(resp);
+      return { ok: false, error: errorBody.message, status: resp.status };
+    }
+    return { ok: true, value: (await resp.json()) as PublicLiveArtifactShareResponse };
+  } catch {
+    return { ok: false, error: 'Could not load viewer link.' };
+  }
+}
+
+export function publicLiveArtifactSharePreviewUrl(token: string): string {
+  return `/api/shares/live-artifacts/${encodeURIComponent(token)}/preview`;
 }
 
 export async function fetchLiveArtifactCode(

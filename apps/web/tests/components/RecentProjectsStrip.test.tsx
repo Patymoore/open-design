@@ -38,6 +38,7 @@ function project(overrides: Partial<Project>): Project {
     updatedAt: 2,
     status: { value: 'not_started' },
     ...overrides,
+    workspaceId: overrides.workspaceId ?? 'workspace-1',
   };
 }
 

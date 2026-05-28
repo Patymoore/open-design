@@ -127,6 +127,7 @@ const config: AppConfig = {
 
 const baseProject: Project = {
   id: 'project-1',
+  workspaceId: 'workspace-1',
   name: 'Project 1',
   skillId: null,
   designSystemId: null,

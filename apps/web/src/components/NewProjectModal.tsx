@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ConnectorDetail } from '@open-design/contracts';
+import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
 import type {
   DesignSystemSummary,
   MediaProviderCredentials,
@@ -25,6 +26,7 @@ interface Props {
   skills: SkillSummary[];
   designSystems: DesignSystemSummary[];
   defaultDesignSystemId: string | null;
+  currentWorkspaceId?: string;
   templates: ProjectTemplate[];
   onDeleteTemplate?: (id: string) => Promise<boolean>;
   promptTemplates: PromptTemplateSummary[];
@@ -33,8 +35,9 @@ interface Props {
   connectorsLoading?: boolean;
   loading?: boolean;
   onCreate: (input: CreateInput & { requestId?: string }) => Promise<boolean> | boolean | void;
-  onImportClaudeDesign?: (file: File) => Promise<void> | void;
+  onImportClaudeDesign?: (file: File, workspaceId?: string) => Promise<void> | void;
   onImportFolder?: (baseDir: string) => Promise<void> | void;
+  onImportFolderResponse?: (response: OpenDesignHostProjectImportSuccess) => Promise<void> | void;
   onOpenConnectorsTab?: () => void;
   onClose: () => void;
   initialTab?: CreateTab;
@@ -45,6 +48,7 @@ export function NewProjectModal({
   skills,
   designSystems,
   defaultDesignSystemId,
+  currentWorkspaceId,
   templates,
   onDeleteTemplate,
   promptTemplates,
@@ -55,6 +59,7 @@ export function NewProjectModal({
   onCreate,
   onImportClaudeDesign,
   onImportFolder,
+  onImportFolderResponse,
   onOpenConnectorsTab,
   onClose,
   initialTab,
@@ -139,6 +144,7 @@ export function NewProjectModal({
             skills={skills}
             designSystems={designSystems}
             defaultDesignSystemId={defaultDesignSystemId}
+            {...(currentWorkspaceId ? { currentWorkspaceId } : {})}
             templates={templates}
             {...(onDeleteTemplate ? { onDeleteTemplate } : {})}
             promptTemplates={promptTemplates}
@@ -151,6 +157,7 @@ export function NewProjectModal({
             }}
             {...(onImportClaudeDesign ? { onImportClaudeDesign } : {})}
             {...(onImportFolder ? { onImportFolder } : {})}
+            {...(onImportFolderResponse ? { onImportFolderResponse } : {})}
             {...(onOpenConnectorsTab ? { onOpenConnectorsTab } : {})}
             {...(initialTab ? { initialTab } : {})}
           />

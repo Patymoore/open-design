@@ -1,5 +1,7 @@
 import { request as httpRequest, type Server } from 'node:http';
+import path from 'node:path';
 
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { COMPOSIO_LOGO_CACHE_MAX_ENTRIES } from '../src/connectors/routes.js';
@@ -262,7 +264,24 @@ async function putWithHostHeader(url: string, host: string, body: JsonObject): P
   return requestWithHostHeader('PUT', url, host, body);
 }
 
-function mintConnectorToolToken(projectId = 'connector-route-project', runId = 'connector-route-run', overrides: Partial<Parameters<typeof toolTokenRegistry.mint>[0]> = {}): string {
+async function ensureConnectorToolProject(projectId: string): Promise<void> {
+  const response = await jsonFetch(`${baseUrl}/api/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: projectId,
+      name: projectId,
+      skillId: null,
+      designSystemId: null,
+    }),
+  });
+  if (response.status !== 200 && response.status !== 400) {
+    throw new Error(`Could not create connector tool project ${projectId}: ${response.status}`);
+  }
+}
+
+async function mintConnectorToolToken(projectId = 'connector-route-project', runId = 'connector-route-run', overrides: Partial<Parameters<typeof toolTokenRegistry.mint>[0]> = {}): Promise<string> {
+  await ensureConnectorToolProject(projectId);
   return toolTokenRegistry.mint({
     projectId,
     runId,
@@ -477,6 +496,59 @@ describe('connector routes', () => {
     expect(readComposioConfig().apiKey).toBe('cmp_test');
   });
 
+  it('requires workspace manager access for Composio config reads and updates', async () => {
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+
+    const ownerResp = await jsonFetch<{ currentUserId: string }>(`${baseUrl}/api/workspaces`);
+    expect(ownerResp.status).toBe(200);
+
+    const workspaceResp = await jsonFetch<{ workspace: { id: string } }>(`${baseUrl}/api/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `Connector Access ${Date.now()}` }),
+    });
+    expect(workspaceResp.status).toBe(200);
+
+    const memberUserId = `connector-member-${Date.now()}`;
+    const sqlite = new Database(path.join(dataDir, 'app.sqlite'));
+    try {
+      sqlite.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, ?, 'member', ?)`,
+      ).run(workspaceResp.body.workspace.id, memberUserId, Date.now());
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(memberUserId);
+      sqlite.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES (?, ?)`)
+        .run(`currentWorkspaceId:${memberUserId}`, workspaceResp.body.workspace.id);
+    } finally {
+      sqlite.close();
+    }
+
+    try {
+      const getConfig = await jsonFetch(`${baseUrl}/api/connectors/composio/config`);
+      expect(getConfig.status).toBe(403);
+      expect(getConfig.body.error?.code).toBe('FORBIDDEN');
+      expect(getConfig.body.error?.message).toMatch(/admin role/i);
+
+      const putConfig = await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: 'cmp_member' }),
+      });
+      expect(putConfig.status).toBe(403);
+      expect(putConfig.body.error?.code).toBe('FORBIDDEN');
+      expect(putConfig.body.error?.message).toMatch(/admin role/i);
+      expect(readComposioConfig().apiKey).toBe('cmp_test');
+    } finally {
+      const restoreDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(ownerResp.body.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+  });
+
   it('clears Composio connector credentials when rotating to a key with the same tail', async () => {
     const connect = await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
 
@@ -517,7 +589,7 @@ describe('connector routes', () => {
     expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 1, createdAuthConfigs: 1, toolkits: 0, tools: 0 });
     expect(readComposioConfig().authConfigIds.slack).toBe('ac_slack');
 
-    const token = mintConnectorToolToken('connector-auto-auth-project', 'connector-auto-auth-run');
+    const token = await mintConnectorToolToken('connector-auto-auth-project', 'connector-auto-auth-run');
     const tools = await jsonFetch(`${baseUrl}/api/tools/connectors/list`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -1093,7 +1165,7 @@ describe('connector routes', () => {
 
   it('lists connected Composio tools through run-scoped tool auth', async () => {
     await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
-    const token = mintConnectorToolToken();
+    const token = await mintConnectorToolToken();
     composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
 
     const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list`, {
@@ -1127,7 +1199,7 @@ describe('connector routes', () => {
       body: JSON.stringify({ apiKey: 'cmp_test' }),
     });
     await jsonFetch(`${baseUrl}/api/connectors/notion/connect`, { method: 'POST' });
-    const token = mintConnectorToolToken('connector-partial-preview-project', 'connector-partial-preview-run');
+    const token = await mintConnectorToolToken('connector-partial-preview-project', 'connector-partial-preview-run');
     composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
 
     const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list`, {
@@ -1167,7 +1239,7 @@ describe('connector routes', () => {
       body: JSON.stringify({ apiKey: 'cmp_test' }),
     });
     await jsonFetch(`${baseUrl}/api/connectors/slack/connect`, { method: 'POST' });
-    const token = mintConnectorToolToken();
+    const token = await mintConnectorToolToken();
 
     const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list?useCase=personal_daily_digest`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1184,7 +1256,7 @@ describe('connector routes', () => {
   });
 
   it('rejects invalid connector tool useCase filters', async () => {
-    const token = mintConnectorToolToken();
+    const token = await mintConnectorToolToken();
 
     const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list?useCase=invalid`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1194,9 +1266,48 @@ describe('connector routes', () => {
     expect(response.body.error.code).toBe('BAD_REQUEST');
   });
 
+  it('rejects connector tool tokens when the local user no longer belongs to the token project workspace', async () => {
+    const projectId = `connector-private-${Date.now()}`;
+    const token = await mintConnectorToolToken(projectId, 'connector-private-run');
+    const ownerResp = await jsonFetch<{ currentUserId: string }>(`${baseUrl}/api/workspaces`);
+    const dataDir = process.env.OD_DATA_DIR;
+    if (!dataDir) throw new Error('OD_DATA_DIR is required for connector route tests');
+    const db = new Database(path.join(dataDir, 'app.sqlite'));
+    try {
+      db.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(`connector-outsider-${Date.now()}`);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const listResponse = await jsonFetch(`${baseUrl}/api/tools/connectors/list`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(listResponse.status).toBe(403);
+      expect(listResponse.body.error.code).toBe('FORBIDDEN');
+      expect(listResponse.body.error.message).toMatch(/workspace membership/i);
+
+      const executeResponse = await jsonFetch(`${baseUrl}/api/tools/connectors/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ connectorId: 'github', toolName: 'github.github_search_repositories', input: { query: 'open-design' } }),
+      });
+      expect(executeResponse.status).toBe(403);
+      expect(executeResponse.body.error.code).toBe('FORBIDDEN');
+      expect(executeResponse.body.error.message).toMatch(/workspace membership/i);
+    } finally {
+      const restoreDb = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        restoreDb.prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`).run(ownerResp.body.currentUserId);
+      } finally {
+        restoreDb.close();
+      }
+    }
+  });
+
   it('executes connected Composio tools through run-scoped tool auth', async () => {
     await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
-    const token = mintConnectorToolToken('connector-execute-project', 'connector-execute-run');
+    const token = await mintConnectorToolToken('connector-execute-project', 'connector-execute-run');
 
     const response = await jsonFetch(`${baseUrl}/api/tools/connectors/execute`, {
       method: 'POST',
@@ -1210,7 +1321,7 @@ describe('connector routes', () => {
   });
 
   it('rejects connector tool requests outside token scope', async () => {
-    const listOnlyToken = mintConnectorToolToken('connector-scope-project', 'connector-scope-run', {
+    const listOnlyToken = await mintConnectorToolToken('connector-scope-project', 'connector-scope-run', {
       allowedEndpoints: ['/api/tools/connectors/list'],
       allowedOperations: ['connectors:list'],
     });

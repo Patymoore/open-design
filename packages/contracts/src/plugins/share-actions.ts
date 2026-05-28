@@ -15,6 +15,7 @@ export const PLUGIN_SHARE_ACTION_PLUGIN_IDS: Record<PluginShareAction, string> =
 export interface CreatePluginShareProjectRequest {
   action: PluginShareAction;
   locale?: string;
+  workspaceId?: string;
 }
 
 export interface CreatePluginShareProjectResponse {

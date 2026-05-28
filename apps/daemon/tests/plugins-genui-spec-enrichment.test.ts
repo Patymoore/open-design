@@ -29,6 +29,8 @@ let server: http.Server | undefined;
 let baseUrl: string;
 let pluginRoot: string;
 const cleanupRows: string[] = [];
+const cleanupRunIds: string[] = [];
+const cleanupWorkspaceIds: string[] = [];
 
 const PLUGIN_ID = `phase2a5-form-${Date.now()}`;
 
@@ -114,16 +116,25 @@ afterEach(async () => {
     const db = new Database(dbPath);
     db.prepare('DELETE FROM applied_plugin_snapshots WHERE plugin_id = ?').run(PLUGIN_ID);
     db.prepare('DELETE FROM installed_plugins WHERE id = ?').run(PLUGIN_ID);
+    for (const runId of cleanupRunIds) {
+      db.prepare('DELETE FROM run_devloop_iterations WHERE run_id = ?').run(runId);
+    }
     for (const projectId of cleanupRows) {
       db.prepare('DELETE FROM genui_surfaces WHERE project_id = ?').run(projectId);
       db.prepare('DELETE FROM conversations WHERE project_id = ?').run(projectId);
       db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+    }
+    for (const workspaceId of cleanupWorkspaceIds) {
+      db.prepare('DELETE FROM workspace_memberships WHERE workspace_id = ?').run(workspaceId);
+      db.prepare('DELETE FROM workspaces WHERE id = ?').run(workspaceId);
     }
     db.close();
   } catch {
     // ignore — DB might be locked / not yet created in some failure modes
   }
   cleanupRows.length = 0;
+  cleanupRunIds.length = 0;
+  cleanupWorkspaceIds.length = 0;
 
   await rm(pluginRoot, { recursive: true, force: true });
 });
@@ -161,7 +172,9 @@ describe('GET /api/runs/:runId/genui/:surfaceId enriches with snapshot spec', ()
     const dbPath = path.join(serverRuntimeDataRoot, 'app.sqlite');
     const db = new Database(dbPath);
     const runId = `run-phase2a5-${Date.now()}`;
+    cleanupRunIds.push(runId);
     const surfaceRowId = `srf-phase2a5-${Date.now()}`;
+    db.prepare(`UPDATE applied_plugin_snapshots SET run_id = ? WHERE id = ?`).run(runId, snapshotId);
     db.prepare(
       `INSERT INTO genui_surfaces (
          id, project_id, conversation_id, run_id, plugin_snapshot_id,
@@ -177,6 +190,11 @@ describe('GET /api/runs/:runId/genui/:surfaceId enriches with snapshot spec', ()
       'discovery',
       Date.now(),
     );
+    db.prepare(
+      `INSERT INTO run_devloop_iterations
+         (id, run_id, stage_id, iteration, artifact_diff_summary, critique_summary, tokens_used, ended_at)
+       VALUES (?, ?, 'review', 1, 'private diff', 'private critique', 12, ?)`,
+    ).run(`iter-phase2a5-${Date.now()}`, runId, Date.now());
     db.close();
 
     const resp = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/genui/discovery`);
@@ -204,5 +222,98 @@ describe('GET /api/runs/:runId/genui/:surfaceId enriches with snapshot spec', ()
     expect(body.spec.schema?.required).toEqual(['topic']);
     expect(body.spec.schema?.properties?.topic).toBeDefined();
     expect(body.spec.schema?.properties?.audience?.enum).toEqual(['VC pitch', 'general']);
+
+    const devloopResp = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/devloop-iterations`);
+    expect(devloopResp.status).toBe(200);
+    const devloopBody = await devloopResp.json() as { iterations: Array<{ artifactDiffSummary?: string | null; critiqueSummary?: string | null }> };
+    expect(devloopBody.iterations).toHaveLength(1);
+    expect(devloopBody.iterations[0]).toMatchObject({
+      artifactDiffSummary: 'private diff',
+      critiqueSummary: 'private critique',
+    });
+
+    const privateWorkspaceId = `private-ws-phase2a5-${Date.now()}`;
+    const privateProjectId = `private-project-phase2a5-${Date.now()}`;
+    const privateSurfaceId = `srf-private-phase2a5-${Date.now()}`;
+    cleanupWorkspaceIds.push(privateWorkspaceId);
+    cleanupRows.push(privateProjectId);
+    const mixedDb = new Database(dbPath);
+    try {
+      mixedDb.prepare(
+        `INSERT INTO workspaces (id, name, kind, created_at, updated_at)
+         VALUES (?, 'private workspace', 'team', ?, ?)`,
+      ).run(privateWorkspaceId, Date.now(), Date.now());
+      mixedDb.prepare(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role, joined_at)
+         VALUES (?, 'private-owner', 'owner', ?)`,
+      ).run(privateWorkspaceId, Date.now());
+      mixedDb.prepare(
+        `INSERT INTO projects (
+           id, workspace_id, created_by_user_id, owned_by_user_id, name,
+           skill_id, design_system_id, pending_prompt, metadata_json,
+           created_at, updated_at
+         ) VALUES (?, ?, 'private-owner', 'private-owner', 'private project',
+           NULL, NULL, NULL, NULL, ?, ?)`,
+      ).run(privateProjectId, privateWorkspaceId, Date.now(), Date.now());
+      mixedDb.prepare(
+        `INSERT INTO genui_surfaces (
+           id, project_id, conversation_id, run_id, plugin_snapshot_id,
+           surface_id, kind, persist, schema_digest, value_json, status,
+           responded_by, requested_at, responded_at, expires_at
+         ) VALUES (?, ?, NULL, ?, ?, 'private-discovery', 'form', 'project', NULL, NULL,
+                   'pending', NULL, ?, NULL, NULL)`,
+      ).run(privateSurfaceId, privateProjectId, runId, snapshotId, Date.now() + 1);
+    } finally {
+      mixedDb.close();
+    }
+
+    const mixedListResp = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/genui`);
+    expect(mixedListResp.status).toBe(403);
+    const cleanupMixedDb = new Database(dbPath);
+    try {
+      cleanupMixedDb.prepare('DELETE FROM genui_surfaces WHERE id = ?').run(privateSurfaceId);
+    } finally {
+      cleanupMixedDb.close();
+    }
+
+    const workspacesResp = await fetch(`${baseUrl}/api/workspaces`);
+    expect(workspacesResp.status).toBe(200);
+    const workspacesBody = await workspacesResp.json() as { currentUserId: string };
+    const outsiderUserId = `user-genui-outsider-${Date.now()}`;
+    const restoreDb = new Database(dbPath);
+    try {
+      restoreDb
+        .prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`)
+        .run(outsiderUserId);
+    } finally {
+      restoreDb.close();
+    }
+
+    try {
+      const listForbidden = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/genui`);
+      expect(listForbidden.status).toBe(403);
+
+      const detailForbidden = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/genui/discovery`);
+      expect(detailForbidden.status).toBe(403);
+
+      const respondForbidden = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/genui/discovery/respond`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ value: { topic: 'private' } }),
+      });
+      expect(respondForbidden.status).toBe(403);
+
+      const devloopForbidden = await fetch(`${baseUrl}/api/runs/${encodeURIComponent(runId)}/devloop-iterations`);
+      expect(devloopForbidden.status).toBe(403);
+    } finally {
+      const dbRestore = new Database(dbPath);
+      try {
+        dbRestore
+          .prepare(`INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`)
+          .run(workspacesBody.currentUserId);
+      } finally {
+        dbRestore.close();
+      }
+    }
   });
 });

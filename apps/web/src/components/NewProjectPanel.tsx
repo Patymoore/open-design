@@ -118,11 +118,12 @@ interface Props {
   skills: SkillSummary[];
   designSystems: DesignSystemSummary[];
   defaultDesignSystemId: string | null;
+  currentWorkspaceId?: string;
   templates: ProjectTemplate[];
   onDeleteTemplate?: (id: string) => Promise<boolean>;
   promptTemplates: PromptTemplateSummary[];
   onCreate: (input: CreateInput & { requestId?: string }) => void;
-  onImportClaudeDesign?: (file: File) => Promise<void> | void;
+  onImportClaudeDesign?: (file: File, workspaceId?: string) => Promise<void> | void;
   // Web fallback: the user types an absolute baseDir into the manual
   // input and the renderer POSTs `/api/import/folder` itself. Browser
   // builds have no `shell.openPath` surface, so the renderer naming a
@@ -243,6 +244,7 @@ export function NewProjectPanel({
   skills,
   designSystems,
   defaultDesignSystemId,
+  currentWorkspaceId,
   templates,
   onDeleteTemplate,
   promptTemplates,
@@ -708,7 +710,7 @@ export function NewProjectPanel({
     if (!file || !onImportClaudeDesign) return;
     setImporting(true);
     try {
-      await onImportClaudeDesign(file);
+      await onImportClaudeDesign(file, currentWorkspaceId);
     } finally {
       setImporting(false);
     }
@@ -730,6 +732,7 @@ export function NewProjectPanel({
       setImportingFolder(true);
       try {
         const result = await pickAndImportHostProject({
+          ...(currentWorkspaceId ? { workspaceId: currentWorkspaceId } : {}),
           skillId: skillIdForTab,
         });
         if (!result) return;
@@ -1533,7 +1536,11 @@ function TemplatePicker({
                 key={tpl.id}
                 active={value === tpl.id}
                 onClick={() => onChange(tpl.id)}
-                onDelete={onDelete ? () => setConfirmDelete({ id: tpl.id, name: tpl.name }) : () => {}}
+                onDelete={
+                  onDelete && tpl.sourceProjectId
+                    ? () => setConfirmDelete({ id: tpl.id, name: tpl.name })
+                    : undefined
+                }
                 name={tpl.name}
                 description={tpl.description ?? fallbackDesc}
               />
@@ -1887,7 +1894,7 @@ function TemplateOption({
 }: {
   active: boolean;
   onClick: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   name: string;
   description: string;
 }) {
@@ -1905,15 +1912,17 @@ function TemplateOption({
           <span className="template-option-desc">{description}</span>
         </span>
       </button>
-      <button
-        type="button"
-        className="template-option-delete"
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        title="Delete template"
-        aria-label={`Delete template ${name}`}
-      >
-        ✕
-      </button>
+      {onDelete ? (
+        <button
+          type="button"
+          className="template-option-delete"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          title="Delete template"
+          aria-label={`Delete template ${name}`}
+        >
+          ✕
+        </button>
+      ) : null}
     </div>
   );
 }

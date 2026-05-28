@@ -251,6 +251,7 @@ interface Props {
   activePluginActionPaths?: Set<string>;
   hiddenPluginActionPaths?: Set<string>;
   forceStreamingMessageIds?: Set<string>;
+  canSharePluginFolders?: boolean;
   initialDraft?: string;
   // Question-form submissions become a normal user message; the parent
   // routes that text through onSend (no attachments).
@@ -328,6 +329,7 @@ export function ChatPane({
   activePluginActionPaths,
   hiddenPluginActionPaths,
   forceStreamingMessageIds,
+  canSharePluginFolders = true,
   initialDraft,
   onSubmitForm,
   onContinueRemainingTasks,
@@ -1007,6 +1009,7 @@ export function ChatPane({
                         onRequestPluginFolderAgentAction={onRequestPluginFolderAgentAction}
                         activePluginActionPaths={activePluginActionPaths}
                         hiddenPluginActionPaths={hiddenPluginActionPaths}
+                        canSharePluginFolders={canSharePluginFolders}
                         isLast={m.id === lastAssistantId}
                         nextUserContent={nextUserContentByAssistantId.get(m.id)}
                         suppressDirectionForms={hasActiveDesignSystem}

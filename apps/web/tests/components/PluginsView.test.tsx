@@ -627,6 +627,7 @@ describe('PluginsView', () => {
       ok: true as const,
       project: {
         id: 'share-project',
+        workspaceId: 'local-personal',
         name: 'Publish to GitHub: User Plugin',
         skillId: null,
         designSystemId: null,
@@ -673,5 +674,55 @@ describe('PluginsView', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('plugin-share-confirm-modal')).toBeNull(),
     );
+  });
+
+  it('hides plugin share actions when workspace plugin sharing is unavailable', async () => {
+    const onCreatePluginShareProject = vi.fn();
+    render(
+      <PluginsView
+        canSharePluginProjects={false}
+        onCreatePluginShareProject={onCreatePluginShareProject}
+      />,
+    );
+
+    await screen.findAllByText('User Plugin');
+    expect(screen.queryByTestId('plugins-home-publish-github-user-plugin')).toBeNull();
+    expect(screen.queryByTestId('plugins-home-contribute-open-design-user-plugin')).toBeNull();
+    expect(onCreatePluginShareProject).not.toHaveBeenCalled();
+  });
+
+  it('closes an open plugin share confirmation when workspace sharing access is lost', async () => {
+    mockedListPlugins.mockResolvedValue([
+      makePlugin('official-plugin', 'bundled', 'bundled'),
+      makePlugin('user-plugin', 'github', 'restricted'),
+      makePlugin(
+        'od-plugin-publish-github',
+        'bundled',
+        'bundled',
+        'Publish Plugin to GitHub',
+        'Creates a public GitHub repository for a local Open Design plugin using the GitHub CLI.',
+      ),
+    ]);
+    const onCreatePluginShareProject = vi.fn();
+    const { rerender } = render(
+      <PluginsView
+        onCreatePluginShareProject={onCreatePluginShareProject}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId('plugins-home-publish-github-user-plugin'));
+    expect(await screen.findByTestId('plugin-share-confirm-modal')).toBeTruthy();
+
+    rerender(
+      <PluginsView
+        canSharePluginProjects={false}
+        onCreatePluginShareProject={onCreatePluginShareProject}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('plugin-share-confirm-modal')).toBeNull(),
+    );
+    expect(onCreatePluginShareProject).not.toHaveBeenCalled();
   });
 });

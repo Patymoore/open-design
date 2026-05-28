@@ -215,6 +215,9 @@ interface Props {
   onTouchProject: () => void;
   onProjectChange: (next: Project) => void;
   onProjectsRefresh: () => void;
+  canCreateViewerLinks?: boolean;
+  canSaveWorkspaceTemplates?: boolean;
+  canDeployWorkspaceArtifacts?: boolean;
 }
 
 let liveArtifactEventSequence = 0;
@@ -483,6 +486,9 @@ export function ProjectView({
   onTouchProject,
   onProjectChange,
   onProjectsRefresh,
+  canCreateViewerLinks = true,
+  canSaveWorkspaceTemplates = true,
+  canDeployWorkspaceArtifacts = true,
 }: Props) {
   const { locale, t } = useI18n();
   const analytics = useAnalytics();
@@ -2827,6 +2833,7 @@ export function ProjectView({
   const handlePluginFolderAgentAction = useCallback(
     async (relativePath: string, action: PluginFolderAgentAction) => {
       if (currentConversationActionDisabled || !activeConversationId) return;
+      if (action !== 'install' && !canDeployWorkspaceArtifacts) return;
       setHiddenAssistantPluginActionPaths((prev) => new Set(prev).add(relativePath));
       if (action === 'install') {
         setActivePluginActionPaths((prev) => new Set(prev).add(relativePath));
@@ -3062,6 +3069,7 @@ export function ProjectView({
     [
       activeConversationId,
       appendConversationMessage,
+      canDeployWorkspaceArtifacts,
       currentConversationActionDisabled,
       pluginWorkflowAgentName,
       project.id,
@@ -4100,6 +4108,7 @@ export function ProjectView({
               activePluginActionPaths={activePluginActionPaths}
               hiddenPluginActionPaths={hiddenAssistantPluginActionPaths}
               forceStreamingMessageIds={forceStreamingPluginMessageIds}
+              canSharePluginFolders={canDeployWorkspaceArtifacts}
               initialDraft={chatInitialDraft}
               onSubmitForm={(text) => {
                 if (currentConversationActionDisabled) return;
@@ -4180,6 +4189,11 @@ export function ProjectView({
           onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
           onPluginFolderAgentAction={handlePluginFolderAgentAction}
           activePluginActionPaths={activePluginActionPaths}
+          hiddenPluginActionPaths={hiddenAssistantPluginActionPaths}
+          canSharePluginFolders={canDeployWorkspaceArtifacts}
+          canCreateViewerLinks={canCreateViewerLinks}
+          canSaveWorkspaceTemplates={canSaveWorkspaceTemplates}
+          canDeployWorkspaceArtifacts={canDeployWorkspaceArtifacts}
           focusMode={workspaceFocused}
           onFocusModeChange={setWorkspaceFocused}
           designSystemProject={designSystemProject}

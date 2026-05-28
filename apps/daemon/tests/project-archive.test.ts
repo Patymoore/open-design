@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 
 import { buildProjectArchive } from '../src/projects.js';
+import { startServer } from '../src/server.js';
 
 describe('buildProjectArchive', () => {
   let projectsRoot = '';
@@ -194,5 +196,88 @@ describe('buildProjectArchive', () => {
     expect(screenFiles).not.toContain('frames/device-shell.html');
     // but still present in sourceFiles.html
     expect(manifest.sourceFiles.html).toContain('frames/device-shell.html');
+  });
+});
+
+describe('project archive routes', () => {
+  it('requires workspace membership before exporting project archives', async () => {
+    const started = (await startServer({ port: 0, returnServer: true })) as {
+      url: string;
+      server: { close(cb: () => void): void };
+    };
+
+    try {
+      const workspaceResp = await fetch(`${started.url}/api/workspaces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `Archive private workspace ${Date.now()}` }),
+      });
+      expect(workspaceResp.status).toBe(200);
+      const workspaceBody = (await workspaceResp.json()) as { workspace: { id: string } };
+
+      const projectId = `proj-archive-private-${Date.now()}`;
+      const projectResp = await fetch(`${started.url}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: projectId,
+          workspaceId: workspaceBody.workspace.id,
+          name: 'Archive private route fixture',
+          skillId: null,
+          designSystemId: null,
+        }),
+      });
+      expect(projectResp.status).toBe(200);
+
+      const projectDir = path.join(process.env.OD_DATA_DIR!, 'projects', projectId);
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(path.join(projectDir, 'index.html'), '<!doctype html>private archive');
+
+      const ownerResp = await fetch(`${started.url}/api/workspaces`);
+      const ownerBody = (await ownerResp.json()) as { currentUserId: string };
+      const dataDir = process.env.OD_DATA_DIR;
+      if (!dataDir) throw new Error('OD_DATA_DIR is required for daemon route tests');
+      const db = new Database(path.join(dataDir, 'app.sqlite'));
+      try {
+        db.prepare(
+          `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+        ).run(`archive-outsider-${Date.now()}`);
+      } finally {
+        db.close();
+      }
+
+      try {
+        const archiveResp = await fetch(`${started.url}/api/projects/${encodeURIComponent(projectId)}/archive`);
+        expect(archiveResp.status).toBe(403);
+        const archiveBody = (await archiveResp.json()) as { error?: { code?: string; message?: string } };
+        expect(archiveBody.error).toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'workspace membership required',
+        });
+
+        const batchResp = await fetch(`${started.url}/api/projects/${encodeURIComponent(projectId)}/archive/batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ files: ['index.html'] }),
+        });
+        expect(batchResp.status).toBe(403);
+        const batchBody = (await batchResp.json()) as { error?: { code?: string; message?: string } };
+        expect(batchBody.error).toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'workspace membership required',
+        });
+      } finally {
+        const restoreDb = new Database(path.join(dataDir, 'app.sqlite'));
+        try {
+          restoreDb.prepare(
+            `INSERT OR REPLACE INTO local_identity (key, value) VALUES ('localUserId', ?)`,
+          ).run(ownerBody.currentUserId);
+        } finally {
+          restoreDb.close();
+        }
+      }
+    } finally {
+      await new Promise<void>((resolve) => started.server.close(resolve));
+    }
   });
 });

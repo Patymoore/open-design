@@ -118,6 +118,7 @@ interface Props {
   ) => Promise<{ message?: string; url?: string } | void> | { message?: string; url?: string } | void;
   activePluginActionPaths?: Set<string>;
   hiddenPluginActionPaths?: Set<string>;
+  canSharePluginFolders?: boolean;
   // True only for the most recent assistant message — gate question-form
   // interactivity on this so older forms render as a locked "answered"
   // capsule instead of being re-submittable.
@@ -156,6 +157,7 @@ export function AssistantMessage({
   onRequestPluginFolderAgentAction,
   activePluginActionPaths = new Set(),
   hiddenPluginActionPaths = new Set(),
+  canSharePluginFolders = true,
   isLast,
   nextUserContent,
   onSubmitForm,
@@ -330,6 +332,8 @@ export function AssistantMessage({
             folders={pluginActionFolders}
             onRequestOpenFile={onRequestOpenFile}
             onRequestPluginFolderAgentAction={onRequestPluginFolderAgentAction}
+            activePluginActionPaths={activePluginActionPaths}
+            canSharePluginFolders={canSharePluginFolders}
           />
         ) : null}
         {!streaming && unfinishedTodos.length > 0 ? (
@@ -1073,6 +1077,7 @@ function PluginActionPanel({
   onRequestOpenFile,
   onRequestPluginFolderAgentAction,
   activePluginActionPaths = new Set(),
+  canSharePluginFolders,
 }: {
   folders: PluginFolderCandidate[];
   onRequestOpenFile?: (name: string) => void;
@@ -1081,6 +1086,7 @@ function PluginActionPanel({
     action: PluginFolderAgentAction,
   ) => Promise<{ message?: string; url?: string } | void> | { message?: string; url?: string } | void;
   activePluginActionPaths?: Set<string>;
+  canSharePluginFolders: boolean;
 }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [noticeByFolder, setNoticeByFolder] = useState<Record<string, ActionNotice>>(
@@ -1092,6 +1098,7 @@ function PluginActionPanel({
     action: PluginFolderAgentAction,
   ) {
     if (busyKey || !onRequestPluginFolderAgentAction) return;
+    if (action !== "install" && !canSharePluginFolders) return;
     const key = `${action}:${folder.path}`;
     setBusyKey(key);
     setNoticeByFolder((prev) => {
@@ -1140,20 +1147,20 @@ function PluginActionPanel({
         {folders.map((folder) => {
           const actionBusy = activePluginActionPaths.has(folder.path);
           return (
-          <div
-            key={folder.path}
-            className="plugin-action-card"
-            data-testid={`assistant-plugin-actions-${folder.path}`}
-          >
-            <div className="plugin-action-card__main">
-              <span className="plugin-action-card__folder-icon" aria-hidden>
-                <Icon name="folder" size={14} />
-              </span>
-              <div className="plugin-action-card__copy">
-                <code className="plugin-action-card__path">{folder.path}</code>
-                <span>{folder.fileCount} files ready for My plugins</span>
+            <div
+              key={folder.path}
+              className="plugin-action-card"
+              data-testid={`assistant-plugin-actions-${folder.path}`}
+            >
+              <div className="plugin-action-card__main">
+                <span className="plugin-action-card__folder-icon" aria-hidden>
+                  <Icon name="folder" size={14} />
+                </span>
+                <div className="plugin-action-card__copy">
+                  <code className="plugin-action-card__path">{folder.path}</code>
+                  <span>{folder.fileCount} files ready for My plugins</span>
+                </div>
               </div>
-            </div>
               <div className="plugin-action-card__actions">
                 <button
                   type="button"
@@ -1170,38 +1177,42 @@ function PluginActionPanel({
                     {actionBusy && busyKey === `install:${folder.path}` ? "Sending..." : "Add to My plugins"}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className="plugin-action-button"
-                  data-testid={`assistant-plugin-publish-${folder.path}`}
-                  disabled={actionBusy || busyKey !== null || !onRequestPluginFolderAgentAction}
-                  onClick={() => void runAction(folder, "publish")}
-                >
-                  <Icon
-                    name={actionBusy && busyKey === `publish:${folder.path}` ? "spinner" : "github"}
-                    size={13}
-                  />
-                  <span>
-                    {actionBusy && busyKey === `publish:${folder.path}` ? "Sending..." : "Publish repo"}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="plugin-action-button"
-                  data-testid={`assistant-plugin-contribute-${folder.path}`}
-                  disabled={actionBusy || busyKey !== null || !onRequestPluginFolderAgentAction}
-                  onClick={() => void runAction(folder, "contribute")}
-                >
-                  <Icon
-                    name={actionBusy && busyKey === `contribute:${folder.path}` ? "spinner" : "share"}
-                    size={13}
-                  />
-                  <span>
-                    {actionBusy && busyKey === `contribute:${folder.path}`
-                      ? "Sending..."
-                      : "Open Design PR"}
-                  </span>
-                </button>
+                {canSharePluginFolders ? (
+                  <>
+                    <button
+                      type="button"
+                      className="plugin-action-button"
+                      data-testid={`assistant-plugin-publish-${folder.path}`}
+                      disabled={actionBusy || busyKey !== null || !onRequestPluginFolderAgentAction}
+                      onClick={() => void runAction(folder, "publish")}
+                    >
+                      <Icon
+                        name={actionBusy && busyKey === `publish:${folder.path}` ? "spinner" : "github"}
+                        size={13}
+                      />
+                      <span>
+                        {actionBusy && busyKey === `publish:${folder.path}` ? "Sending..." : "Publish repo"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="plugin-action-button"
+                      data-testid={`assistant-plugin-contribute-${folder.path}`}
+                      disabled={actionBusy || busyKey !== null || !onRequestPluginFolderAgentAction}
+                      onClick={() => void runAction(folder, "contribute")}
+                    >
+                      <Icon
+                        name={actionBusy && busyKey === `contribute:${folder.path}` ? "spinner" : "share"}
+                        size={13}
+                      />
+                      <span>
+                        {actionBusy && busyKey === `contribute:${folder.path}`
+                          ? "Sending..."
+                          : "Open Design PR"}
+                      </span>
+                    </button>
+                  </>
+                ) : null}
                 {onRequestOpenFile ? (
                   <button
                     type="button"
@@ -1214,13 +1225,14 @@ function PluginActionPanel({
                   </button>
                 ) : null}
               </div>
-            {noticeByFolder[folder.path] ? (
-              <div className="plugin-action-card__notice" role="status">
-                <ActionNoticeView notice={noticeByFolder[folder.path] ?? null} />
-              </div>
-            ) : null}
-          </div>
-        )})}
+              {noticeByFolder[folder.path] ? (
+                <div className="plugin-action-card__notice" role="status">
+                  <ActionNoticeView notice={noticeByFolder[folder.path] ?? null} />
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

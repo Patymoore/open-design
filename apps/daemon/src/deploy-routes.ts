@@ -5,14 +5,55 @@ export interface RegisterDeployRoutesDeps extends RouteDeps<'db' | 'http' | 'pat
 
 export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps) {
   const { db } = ctx;
-  const { sendApiError } = ctx.http;
+  const { sendApiError, isLocalSameOrigin, resolvedPortRef } = ctx.http;
   const { PROJECTS_DIR } = ctx.paths;
   const { randomUUID } = ctx.ids;
-  const { getProject } = ctx.projectStore;
+  const { getLocalUserId, getCurrentWorkspaceId, getProject, getWorkspaceMembership } = ctx.projectStore;
   const { VERCEL_PROVIDER_ID, CLOUDFLARE_PAGES_PROVIDER_ID, isDeployProviderId, publicDeployConfigForProvider, readDeployConfig, writeDeployConfig, listCloudflarePagesZones, DeployError, listDeployments, publicDeployments, getDeployment, buildDeployFileSet, cloudflarePagesProjectNameForDeploy, deployToCloudflarePages, deployToVercel, upsertDeployment, publicDeployment, cloudflarePagesDeploymentMetadata, prepareDeployPreflight } = ctx.deploy;
+  const getResolvedPort = () => resolvedPortRef.current;
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
+
+  function getManageableProject(projectId: string, res: any) {
+    const project = getAccessibleProject(projectId, res);
+    if (!project) return null;
+    const role = getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))?.role;
+    if (role !== 'owner' && role !== 'admin') {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+      return null;
+    }
+    return project;
+  }
+
+  function requireCurrentWorkspaceManager(res: any) {
+    const userId = getLocalUserId(db);
+    const workspaceId = getCurrentWorkspaceId(db, userId);
+    const role = getWorkspaceMembership(db, workspaceId, userId)?.role;
+    if (role !== 'owner' && role !== 'admin') {
+      sendApiError(res, 403, 'FORBIDDEN', role ? 'workspace admin role required' : 'workspace membership required');
+      return false;
+    }
+    return true;
+  }
+
   // ---- Deploy --------------------------------------------------------------
 
   app.get('/api/deploy/config', async (req, res) => {
+    if (!isLocalSameOrigin(req, getResolvedPort())) {
+      return res.status(403).json({ error: 'cross-origin request rejected' });
+    }
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const providerId =
         typeof req.query.providerId === 'string' ? req.query.providerId : VERCEL_PROVIDER_ID;
@@ -28,6 +69,10 @@ export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps
   });
 
   app.put('/api/deploy/config', async (req, res) => {
+    if (!isLocalSameOrigin(req, getResolvedPort())) {
+      return res.status(403).json({ error: 'cross-origin request rejected' });
+    }
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const input = req.body || {};
       const providerId =
@@ -43,7 +88,11 @@ export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps
     }
   });
 
-  app.get('/api/deploy/cloudflare-pages/zones', async (_req, res) => {
+  app.get('/api/deploy/cloudflare-pages/zones', async (req, res) => {
+    if (!isLocalSameOrigin(req, getResolvedPort())) {
+      return res.status(403).json({ error: 'cross-origin request rejected' });
+    }
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       /** @type {import('@open-design/contracts').CloudflarePagesZonesResponse} */
       const body = await listCloudflarePagesZones(await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID));
@@ -60,6 +109,7 @@ export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps
 
   app.get('/api/projects/:id/deployments', (req, res) => {
     try {
+      if (!getAccessibleProject(req.params.id, res)) return;
       /** @type {import('@open-design/contracts').ProjectDeploymentsResponse} */
       const body = { deployments: publicDeployments(listDeployments(db, req.params.id)) };
       res.json(body);
@@ -83,18 +133,18 @@ export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps
         return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
       }
 
+      const deployProject = getManageableProject(req.params.id, res);
+      if (!deployProject) return;
       const prior = getDeployment(db, req.params.id, fileName, providerId);
-      const deployProject = getProject(db, req.params.id);
       const files = await buildDeployFileSet(
         PROJECTS_DIR,
         req.params.id,
         fileName,
         { metadata: deployProject?.metadata },
       );
-      const project = getProject(db, req.params.id);
       const cloudflarePagesProjectName =
         providerId === CLOUDFLARE_PAGES_PROVIDER_ID
-          ? cloudflarePagesProjectNameForDeploy(db, req.params.id, project?.name, prior)
+          ? cloudflarePagesProjectNameForDeploy(db, req.params.id, deployProject.name, prior)
           : '';
       const result = providerId === CLOUDFLARE_PAGES_PROVIDER_ID
         ? await deployToCloudflarePages({
@@ -165,7 +215,8 @@ export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps
       if (typeof fileName !== 'string' || !fileName.trim()) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
       }
-      const preflightProject = getProject(db, req.params.id);
+      const preflightProject = getAccessibleProject(req.params.id, res);
+      if (!preflightProject) return;
       /** @type {import('@open-design/contracts').DeployPreflightResponse} */
       const body = await prepareDeployPreflight(
         PROJECTS_DIR,
@@ -194,17 +245,43 @@ export function registerDeployRoutes(app: Express, ctx: RegisterDeployRoutesDeps
 
 }
 
-export interface RegisterDeploymentCheckRoutesDeps extends RouteDeps<'db' | 'http' | 'deploy'> {}
+export interface RegisterDeploymentCheckRoutesDeps extends RouteDeps<'db' | 'http' | 'deploy' | 'projectStore'> {}
 
 export function registerDeploymentCheckRoutes(app: Express, ctx: RegisterDeploymentCheckRoutesDeps) {
   const { db } = ctx;
   const { sendApiError } = ctx.http;
+  const { getLocalUserId, getProject, getWorkspaceMembership } = ctx.projectStore;
   const { getDeploymentById, CLOUDFLARE_PAGES_PROVIDER_ID, cloudflarePagesProjectNameFromDeployment, checkCloudflarePagesDeploymentLinks, checkDeploymentUrl, upsertDeployment, publicDeployment } = ctx.deploy;
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
+
+  function getManageableProject(projectId: string, res: any) {
+    const project = getAccessibleProject(projectId, res);
+    if (!project) return null;
+    const role = getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))?.role;
+    if (role !== 'owner' && role !== 'admin') {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+      return null;
+    }
+    return project;
+  }
 
   app.post(
     '/api/projects/:id/deployments/:deploymentId/check-link',
     async (req, res) => {
       try {
+        if (!getManageableProject(req.params.id, res)) return;
         const existing = getDeploymentById(
           db,
           req.params.id,

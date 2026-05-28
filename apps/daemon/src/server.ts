@@ -324,13 +324,37 @@ import {
   deletePreviewComment,
   deleteProject as dbDeleteProject,
   deleteTemplate,
+  DEFAULT_WORKSPACE_ID,
+  clearCurrentWorkspaceForWorkspace,
+  clearCurrentWorkspaceIfMatches,
+  deleteWorkspace,
+  deleteWorkspaceInvite,
+  deleteWorkspaceMember,
+  countWorkspaceProjects,
+  countWorkspaceProjectsByCreator,
+  countWorkspaceProjectsByOwner,
+  countWorkspaceRoutines,
+  countWorkspaceRoutinesByCreator,
+  countWorkspaceRoutinesByOwner,
   getConversation,
   getDeployment,
   getDeploymentById,
+  acceptWorkspaceInvite,
   getProject,
+  getResourceShareByToken,
+  getCurrentWorkspaceId,
+  getLocalUserId,
+  getWorkspace,
+  getWorkspaceMembership,
+  getWorkspaceInviteById,
+  getWorkspaceInviteByToken,
   getTemplate,
   insertConversation,
+  insertWorkspaceActivity,
   insertProject,
+  insertLiveArtifactShare,
+  insertWorkspace,
+  insertWorkspaceInvite,
   insertRoutine,
   insertRoutineRun,
   insertTemplate,
@@ -345,16 +369,33 @@ import {
   listProjects,
   listRoutines,
   listRoutineRuns,
+  listReuseRoutinesForProject,
   listTabs,
   listTemplates,
+  listWorkspaceInvites,
+  listWorkspaceActivity,
+  listWorkspaceMembers,
+  listWorkspaceResourceShares,
+  listWorkspaces,
   getLatestRoutineRun,
   getRoutine,
   deleteRoutine as dbDeleteRoutine,
   openDatabase,
   setTabs,
+  setCurrentWorkspaceId,
   updateConversation,
   updatePreviewCommentStatus,
   updateProject,
+  updateReuseRoutinesWorkspaceForProject,
+  transferWorkspaceProjectsByOwner,
+  transferWorkspaceRoutinesByOwner,
+  transferWorkspaceOwner,
+  updateWorkspace,
+  updateWorkspaceMemberRole,
+  revokeLiveArtifactShares,
+  revokePendingWorkspaceInvitesByCreator,
+  revokeResourceShare,
+  revokeResourceSharesByCreator,
   updateRoutine,
   updateRoutineRun,
   upsertDeployment,
@@ -377,6 +418,7 @@ import {
 import { LiveArtifactRefreshUnavailableError, refreshLiveArtifact } from './live-artifacts/refresh-service.js';
 import { LiveArtifactRefreshAbortError } from './live-artifacts/refresh.js';
 import { registerConnectorRoutes } from './connectors/routes.js';
+import { registerWorkspaceRoutes } from './workspace-routes.js';
 import { registerActiveContextRoutes } from './active-context-routes.js';
 import { registerHostToolsRoutes } from './host-tools-routes.js';
 import { registerMcpRoutes } from './mcp-routes.js';
@@ -482,16 +524,6 @@ export function composeLiveInstructionPrompt({
     parts.push(override);
   }
   return parts.join('\n\n---\n\n');
-}
-
-function renderPluginBriefTemplate(template, inputs = {}) {
-  if (typeof template !== 'string' || template.length === 0) return '';
-  return template.replace(/\{\{\s*([a-zA-Z_][\w-]*)\s*\}\}/g, (full, key) => {
-    if (!Object.hasOwn(inputs, key)) return full;
-    const value = inputs[key];
-    if (value === undefined || value === null || value === '') return full;
-    return String(value);
-  });
 }
 
 export function resolveResearchCommandContract(research, message) {
@@ -3936,7 +3968,7 @@ export async function startServer({
   // version (the user_version PRAGMA we use for migrations), and
   // per-table row counts. Useful for ops sanity-checking
   // deployments + comparing 'expected' vs. 'actual' table rosters.
-  app.get('/api/daemon/db', async (_req, res) => {
+  app.get('/api/daemon/db', requireLocalDaemonRequest, async (_req, res) => {
     try {
       const { inspectSqliteDatabase } = await import('./storage/db-inspect.js');
       const file = path.join(RUNTIME_DATA_DIR, 'app.sqlite');
@@ -3950,7 +3982,7 @@ export async function startServer({
   // Plan §3.KK1 — non-SSE one-shot read of the event ring buffer.
   // Useful for dashboards + the `od plugin events snapshot` CLI
   // command that doesn't need a live tail.
-  app.get('/api/plugins/events/snapshot', async (req, res) => {
+  app.get('/api/plugins/events/snapshot', requireLocalDaemonRequest, async (req, res) => {
     const since = Number(typeof req.query.since === 'string' ? req.query.since : 0);
     const { pluginEventSnapshot } = await import('./plugins/events.js');
     const events = pluginEventSnapshot(Number.isFinite(since) && since > 0 ? since : 0);
@@ -3959,7 +3991,7 @@ export async function startServer({
 
   // Plan §3.KK2 — rolled-up stats over the buffer. Counts by kind +
   // pluginId + oldest/newest timestamps + id range.
-  app.get('/api/plugins/events/stats', async (_req, res) => {
+  app.get('/api/plugins/events/stats', requireLocalDaemonRequest, async (_req, res) => {
     const { pluginEventSnapshot, summarisePluginEvents } = await import('./plugins/events.js');
     res.json({
       stats: summarisePluginEvents(pluginEventSnapshot()),
@@ -3989,7 +4021,7 @@ export async function startServer({
   // entries (capped at the buffer's MAX), then forwards every
   // newly-recorded event as 'event: plugin' with the same shape.
   // Optional ?since=<id> trims the backlog.
-  app.get('/api/plugins/events', async (req, res) => {
+  app.get('/api/plugins/events', requireLocalDaemonRequest, async (req, res) => {
     const since = Number(typeof req.query.since === 'string' ? req.query.since : 0);
     const { pluginEventSnapshot, subscribePluginEvents } = await import('./plugins/events.js');
     res.setHeader('Content-Type', 'text/event-stream');
@@ -4125,9 +4157,35 @@ export async function startServer({
     }
   });
 
+  const requireToolProjectAccess = (projectId, res) => {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return false;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return false;
+    }
+    return true;
+  };
+
+  const requireCurrentWorkspaceManager = (res) => {
+    const userId = getLocalUserId(db);
+    const workspaceId = getCurrentWorkspaceId(db, userId);
+    const role = getWorkspaceMembership(db, workspaceId, userId)?.role;
+    if (role !== 'owner' && role !== 'admin') {
+      sendApiError(res, 403, 'FORBIDDEN', role ? 'workspace admin role required' : 'workspace membership required');
+      return false;
+    }
+    return true;
+  };
+
   registerConnectorRoutes(app, {
     sendApiError,
     authorizeToolRequest,
+    requireToolProjectAccess,
+    requireCurrentWorkspaceManager,
     projectsRoot: PROJECTS_DIR,
     requireLocalDaemonRequest,
     composio: composioConnectorProvider,
@@ -4947,9 +5005,50 @@ export async function startServer({
   const idDeps = { randomId, randomUUID };
   const uploadDeps = { upload, importUpload, handleProjectUpload };
   const projectStoreDeps = {
+    acceptWorkspaceInvite,
+    clearCurrentWorkspaceForWorkspace,
+    clearCurrentWorkspaceIfMatches,
+    getLocalUserId,
+    getCurrentWorkspaceId,
     getProject,
+    getResourceShareByToken,
+    getWorkspace,
+    getWorkspaceMembership,
+    getWorkspaceInviteById,
+    getWorkspaceInviteByToken,
     insertProject,
+    insertLiveArtifactShare,
+    insertWorkspace,
+    insertWorkspaceActivity,
+    insertWorkspaceInvite,
+    deleteWorkspace,
+    deleteWorkspaceInvite,
+    deleteWorkspaceMember,
+    countWorkspaceProjects,
+    countWorkspaceProjectsByCreator,
+    countWorkspaceProjectsByOwner,
+    countWorkspaceRoutines,
+    countWorkspaceRoutinesByCreator,
+    countWorkspaceRoutinesByOwner,
+    listWorkspaceInvites,
+    listWorkspaceActivity,
+    listWorkspaceMembers,
+    listWorkspaceResourceShares,
+    listWorkspaces,
+    listDeployments,
+    listReuseRoutinesForProject,
+    updateWorkspace,
+    updateWorkspaceMemberRole,
+    revokeLiveArtifactShares,
+    revokePendingWorkspaceInvitesByCreator,
+    revokeResourceShare,
+    revokeResourceSharesByCreator,
     updateProject,
+    updateReuseRoutinesWorkspaceForProject,
+    transferWorkspaceProjectsByOwner,
+    transferWorkspaceRoutinesByOwner,
+    transferWorkspaceOwner,
+    setCurrentWorkspaceId,
     dbDeleteProject,
     removeProjectDir,
     validateLinkedDirs,
@@ -5113,17 +5212,188 @@ export async function startServer({
     critiqueRunRegistry,
   };
 
+  function getAccessibleProjectForRoute(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
+
+  function getManageableProjectForRoute(projectId: string, res: any) {
+    const project = getAccessibleProjectForRoute(projectId, res);
+    if (!project) return null;
+    const membership = getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db));
+    if (membership?.role !== 'owner' && membership?.role !== 'admin') {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+      return null;
+    }
+    return project;
+  }
+
+  function projectIsAccessibleToLocalUser(projectId: string | null | undefined) {
+    if (!projectId) return true;
+    const project = getProject(db, projectId);
+    return !!project && !!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db));
+  }
+
+  function authorizeSnapshotReuseForLocalUser(snapshotId: string) {
+    const row = db
+      .prepare(`SELECT project_id FROM applied_plugin_snapshots WHERE id = ?`)
+      .get(snapshotId) as { project_id?: string | null } | undefined;
+    const projectId = row?.project_id ?? null;
+    if (!projectId || !getProject(db, projectId)) {
+      return {
+        ok: false as const,
+        status: 404,
+        exitCode: 65,
+        body: {
+          error: {
+            code: 'snapshot-project-not-found',
+            message: `Applied plugin snapshot ${snapshotId} is not linked to an existing project.`,
+            data: { snapshotId },
+          },
+        },
+      };
+    }
+    if (!projectIsAccessibleToLocalUser(projectId)) {
+      return {
+        ok: false as const,
+        status: 403,
+        exitCode: 65,
+        body: {
+          error: {
+            code: 'snapshot-project-forbidden',
+            message: `Workspace membership is required to reuse applied plugin snapshot ${snapshotId}.`,
+            data: { snapshotId, projectId },
+          },
+        },
+      };
+    }
+    return null;
+  }
+
+  function requireProjectAccessForRoute(projectId: unknown, res: any) {
+    if (typeof projectId !== 'string' || !projectId.trim()) return true;
+    return !!getAccessibleProjectForRoute(projectId.trim(), res);
+  }
+
+  function getAccessibleProjectForRunContext(input: { projectId?: unknown; conversationId?: unknown }, res: any) {
+    const projectId = typeof input.projectId === 'string' && input.projectId.trim()
+      ? input.projectId.trim()
+      : '';
+    const conversationId = typeof input.conversationId === 'string' && input.conversationId.trim()
+      ? input.conversationId.trim()
+      : '';
+    if (projectId) {
+      const project = getAccessibleProjectForRoute(projectId, res);
+      if (!project) return null;
+      if (!conversationId) return project;
+      const conversation = getConversation(db, conversationId);
+      if (!conversation) {
+        sendApiError(res, 404, 'CONVERSATION_NOT_FOUND', 'conversation not found');
+        return null;
+      }
+      const conversationProject = getAccessibleProjectForRoute(conversation.projectId, res);
+      if (!conversationProject) return null;
+      if (conversation.projectId !== project.id) {
+        sendApiError(res, 409, 'CONVERSATION_PROJECT_MISMATCH', 'conversation does not belong to project');
+        return null;
+      }
+      return project;
+    }
+    if (!conversationId) return undefined;
+    const conversation = getConversation(db, conversationId);
+    if (!conversation) {
+      sendApiError(res, 404, 'CONVERSATION_NOT_FOUND', 'conversation not found');
+      return null;
+    }
+    return getAccessibleProjectForRoute(conversation.projectId, res);
+  }
+
+  function getAccessibleRunForRoute(runId: string, res: any) {
+    const run = design.runs.get(runId);
+    if (!run) {
+      sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+      return null;
+    }
+    const runAccessProject = getAccessibleProjectForRunContext({
+      projectId: (run as { projectId?: string | null }).projectId ?? null,
+      conversationId: (run as { conversationId?: string | null }).conversationId ?? null,
+    }, res);
+    if (runAccessProject === null) return null;
+    return run;
+  }
+
+  function getAccessibleSnapshotForRoute(snapshotId: string, res: any) {
+    const snap = getSnapshot(db, snapshotId);
+    if (!snap) {
+      res.status(404).json({ error: 'snapshot not found' });
+      return null;
+    }
+    const row = db
+      .prepare(`SELECT project_id FROM applied_plugin_snapshots WHERE id = ?`)
+      .get(snapshotId) as { project_id?: string | null } | undefined;
+    const projectId = row?.project_id ?? null;
+    if (!projectId) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getAccessibleProjectForRoute(projectId, res)) return null;
+    return snap;
+  }
+
+  function persistedRunProjectId(runId: string) {
+    const surface = db.prepare(
+      `SELECT project_id FROM genui_surfaces
+        WHERE run_id = ?
+        ORDER BY requested_at DESC
+        LIMIT 1`,
+    ).get(runId) as { project_id?: string | null } | undefined;
+    if (surface?.project_id) return surface.project_id;
+    const snapshot = db.prepare(
+      `SELECT project_id FROM applied_plugin_snapshots
+        WHERE run_id = ?
+        ORDER BY applied_at DESC
+        LIMIT 1`,
+    ).get(runId) as { project_id?: string | null } | undefined;
+    return snapshot?.project_id ?? null;
+  }
+
+  function currentAccessibleWorkspaceIdForLocalUser() {
+    const userId = getLocalUserId(db);
+    const savedWorkspaceId = getCurrentWorkspaceId(db, userId);
+    if (getWorkspace(db, savedWorkspaceId) && getWorkspaceMembership(db, savedWorkspaceId, userId)) {
+      return savedWorkspaceId;
+    }
+    const fallbackWorkspaceId = listWorkspaces(db, { userId })[0]?.id ?? DEFAULT_WORKSPACE_ID;
+    setCurrentWorkspaceId(db, userId, fallbackWorkspaceId);
+    return fallbackWorkspaceId;
+  }
+
   // External services
   registerMcpRoutes(app, {
+    db,
     http: httpDeps,
     paths: pathDeps,
     mcp: { pendingAuth: mcpPendingAuth, daemonUrlRef },
+    projectStore: projectStoreDeps,
   });
   registerXaiRoutes(app, {
     http: httpDeps,
     paths: pathDeps,
   });
   // Project workspace
+  registerWorkspaceRoutes(app, {
+    db,
+    http: httpDeps,
+    projectStore: projectStoreDeps,
+  });
   registerActiveContextRoutes(app, {
     db,
     http: httpDeps,
@@ -5225,7 +5495,12 @@ export async function startServer({
     validation: validationDeps,
     handoff: handoffDeps,
   });
-  registerDeploymentCheckRoutes(app, { db, http: httpDeps, deploy: deployDeps });
+  registerDeploymentCheckRoutes(app, {
+    db,
+    http: httpDeps,
+    deploy: deployDeps,
+    projectStore: projectStoreDeps,
+  });
   app.use('/frames', express.static(FRAMES_DIR));
   registerProjectExportRoutes(app, {
     db,
@@ -5261,308 +5536,6 @@ export async function startServer({
     projectFiles: projectFileDeps,
     conversations: conversationDeps,
     research: researchDeps,
-  });
-
-  app.delete('/api/projects/:id', async (req, res) => {
-    try {
-      dbDeleteProject(db, req.params.id);
-      await removeProjectDir(PROJECTS_DIR, req.params.id).catch(() => {});
-      /** @type {import('@open-design/contracts').OkResponse} */
-      const body = { ok: true };
-      res.json(body);
-    } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', String(err));
-    }
-  });
-
-  // SSE stream of file-changed events for a project. Drives preview live-reload.
-  // Receipt of a `file-changed` event triggers a file-list refresh, which
-  // propagates new mtimes through to FileViewer iframes (the URL-load
-  // `?v=${mtime}` cache-bust from PR #384 then reloads the iframe automatically).
-  // Subscribers come and go as users open/close project tabs; the underlying
-  // chokidar watcher is refcounted in project-watchers.ts so we never hold
-  // descriptors for projects no UI is looking at.
-  app.get('/api/projects/:id/events', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'not found');
-    }
-    let sub;
-    try {
-      const sse = createSseResponse(res);
-      const projectEventSink = (payload) => {
-        sse.send(payload.type, payload);
-      };
-      let sinks = activeProjectEventSinks.get(req.params.id);
-      if (!sinks) {
-        sinks = new Set();
-        activeProjectEventSinks.set(req.params.id, sinks);
-      }
-      sinks.add(projectEventSink);
-      const watchProject = getProject(db, req.params.id);
-      sub = subscribeFileEvents(PROJECTS_DIR, req.params.id, (evt) => {
-        sse.send('file-changed', evt);
-      }, { metadata: watchProject?.metadata });
-      sub.ready.then(() => sse.send('ready', { projectId: req.params.id })).catch(() => {});
-      const cleanup = () => {
-        if (sub) {
-          const { unsubscribe } = sub;
-          sub = null;
-          Promise.resolve(unsubscribe()).catch(() => {});
-        }
-        const currentSinks = activeProjectEventSinks.get(req.params.id);
-        currentSinks?.delete(projectEventSink);
-        if (currentSinks?.size === 0) activeProjectEventSinks.delete(req.params.id);
-      };
-      res.on('close', cleanup);
-      res.on('finish', cleanup);
-    } catch (err) {
-      if (sub) Promise.resolve(sub.unsubscribe()).catch(() => {});
-      if (!res.headersSent) sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
-    }
-  });
-
-  // ---- Conversations --------------------------------------------------------
-
-  app.get('/api/projects/:id/conversations', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
-    res.json({ conversations: listConversations(db, req.params.id) });
-  });
-
-  app.post('/api/projects/:id/conversations', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
-    const { title } = req.body || {};
-    const now = Date.now();
-    const conv = insertConversation(db, {
-      id: randomId(),
-      projectId: req.params.id,
-      title: typeof title === 'string' ? title.trim() || null : null,
-      createdAt: now,
-      updatedAt: now,
-    });
-    res.json({ conversation: conv });
-  });
-
-  app.patch('/api/projects/:id/conversations/:cid', (req, res) => {
-    const conv = getConversation(db, req.params.cid);
-    if (!conv || conv.projectId !== req.params.id) {
-      return res.status(404).json({ error: 'not found' });
-    }
-    const updated = updateConversation(db, req.params.cid, req.body || {});
-    res.json({ conversation: updated });
-  });
-
-  app.delete('/api/projects/:id/conversations/:cid', (req, res) => {
-    const conv = getConversation(db, req.params.cid);
-    if (!conv || conv.projectId !== req.params.id) {
-      return res.status(404).json({ error: 'not found' });
-    }
-    deleteConversation(db, req.params.cid);
-    res.json({ ok: true });
-  });
-
-  // ---- Messages -------------------------------------------------------------
-
-  app.get('/api/projects/:id/conversations/:cid/messages', (req, res) => {
-    const conv = getConversation(db, req.params.cid);
-    if (!conv || conv.projectId !== req.params.id) {
-      return res.status(404).json({ error: 'conversation not found' });
-    }
-    res.json({ messages: listMessages(db, req.params.cid) });
-  });
-
-  app.put('/api/projects/:id/conversations/:cid/messages/:mid', (req, res) => {
-    const conv = getConversation(db, req.params.cid);
-    if (!conv || conv.projectId !== req.params.id) {
-      return res.status(404).json({ error: 'conversation not found' });
-    }
-    const m = req.body || {};
-    if (m.id && m.id !== req.params.mid) {
-      return res.status(400).json({ error: 'id mismatch' });
-    }
-    const saved = upsertMessage(db, req.params.cid, {
-      ...m,
-      id: req.params.mid,
-    });
-    // Bump the parent project's updatedAt so the project list re-orders.
-    updateProject(db, req.params.id, {});
-    res.json({ message: saved });
-  });
-
-  // ---- Preview comments ----------------------------------------------------
-
-  app.get('/api/projects/:id/conversations/:cid/comments', (req, res) => {
-    const conv = getConversation(db, req.params.cid);
-    if (!conv || conv.projectId !== req.params.id) {
-      return res.status(404).json({ error: 'conversation not found' });
-    }
-    res.json({
-      comments: listPreviewComments(db, req.params.id, req.params.cid),
-    });
-  });
-
-  app.post('/api/projects/:id/conversations/:cid/comments', (req, res) => {
-    const conv = getConversation(db, req.params.cid);
-    if (!conv || conv.projectId !== req.params.id) {
-      return res.status(404).json({ error: 'conversation not found' });
-    }
-    try {
-      const comment = upsertPreviewComment(
-        db,
-        req.params.id,
-        req.params.cid,
-        req.body || {},
-      );
-      updateProject(db, req.params.id, {});
-      res.json({ comment });
-    } catch (err) {
-      res.status(400).json({ error: String(err?.message || err) });
-    }
-  });
-
-  app.patch(
-    '/api/projects/:id/conversations/:cid/comments/:commentId',
-    (req, res) => {
-      const conv = getConversation(db, req.params.cid);
-      if (!conv || conv.projectId !== req.params.id) {
-        return res.status(404).json({ error: 'conversation not found' });
-      }
-      try {
-        const comment = updatePreviewCommentStatus(
-          db,
-          req.params.id,
-          req.params.cid,
-          req.params.commentId,
-          req.body?.status,
-        );
-        if (!comment)
-          return res.status(404).json({ error: 'comment not found' });
-        updateProject(db, req.params.id, {});
-        res.json({ comment });
-      } catch (err) {
-        res.status(400).json({ error: String(err?.message || err) });
-      }
-    },
-  );
-
-  app.delete(
-    '/api/projects/:id/conversations/:cid/comments/:commentId',
-    (req, res) => {
-      const conv = getConversation(db, req.params.cid);
-      if (!conv || conv.projectId !== req.params.id) {
-        return res.status(404).json({ error: 'conversation not found' });
-      }
-      const ok = deletePreviewComment(
-        db,
-        req.params.id,
-        req.params.cid,
-        req.params.commentId,
-      );
-      if (!ok) return res.status(404).json({ error: 'comment not found' });
-      updateProject(db, req.params.id, {});
-      res.json({ ok: true });
-    },
-  );
-
-  // ---- Tabs -----------------------------------------------------------------
-
-  app.get('/api/projects/:id/tabs', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
-    res.json(listTabs(db, req.params.id));
-  });
-
-  app.put('/api/projects/:id/tabs', (req, res) => {
-    if (!getProject(db, req.params.id)) {
-      return res.status(404).json({ error: 'project not found' });
-    }
-    const { tabs = [], active = null } = req.body || {};
-    if (!Array.isArray(tabs) || !tabs.every((t) => typeof t === 'string')) {
-      return res.status(400).json({ error: 'tabs must be string[]' });
-    }
-    const result = setTabs(
-      db,
-      req.params.id,
-      tabs,
-      typeof active === 'string' ? active : null,
-    );
-    res.json(result);
-  });
-
-  // ---- Templates ----------------------------------------------------------
-  // User-saved snapshots of a project's HTML files. Surfaced in the
-  // "From template" tab of the new-project panel so a user can spin up
-  // a fresh project pre-seeded with another project's design as a
-  // starting point. Created via the project's Share menu (snapshots
-  // every .html file in the project folder at the moment of save).
-
-  app.get('/api/templates', (_req, res) => {
-    res.json({ templates: listTemplates(db) });
-  });
-
-  app.get('/api/templates/:id', (req, res) => {
-    const t = getTemplate(db, req.params.id);
-    if (!t) return res.status(404).json({ error: 'not found' });
-    res.json({ template: t });
-  });
-
-  app.post('/api/templates', async (req, res) => {
-    try {
-      const { name, description, sourceProjectId } = req.body || {};
-      if (typeof name !== 'string' || !name.trim()) {
-        return res.status(400).json({ error: 'name required' });
-      }
-      if (typeof sourceProjectId !== 'string') {
-        return res.status(400).json({ error: 'sourceProjectId required' });
-      }
-      const sourceProject = getProject(db, sourceProjectId);
-      if (!sourceProject) {
-        return res.status(404).json({ error: 'source project not found' });
-      }
-      // Snapshot every HTML / sketch / text file in the source project.
-      // We deliberately skip binary uploads — templates are about the
-      // generated design, not the user's reference imagery.
-      const files = await listFiles(PROJECTS_DIR, sourceProjectId, {
-        metadata: sourceProject.metadata,
-      });
-      const snapshot = [];
-      for (const f of files) {
-        if (f.kind !== 'html' && f.kind !== 'text' && f.kind !== 'code')
-          continue;
-        const entry = await readProjectFile(
-          PROJECTS_DIR,
-          sourceProjectId,
-          f.name,
-          sourceProject.metadata,
-        );
-        if (entry && Buffer.isBuffer(entry.buffer)) {
-          snapshot.push({
-            name: f.name,
-            content: entry.buffer.toString('utf8'),
-          });
-        }
-      }
-      const t = insertTemplate(db, {
-        id: randomId(),
-        name: name.trim(),
-        description: typeof description === 'string' ? description : null,
-        sourceProjectId,
-        files: snapshot,
-        createdAt: Date.now(),
-      });
-      res.json({ template: t });
-    } catch (err) {
-      res.status(400).json({ error: String(err) });
-    }
-  });
-
-  app.delete('/api/templates/:id', (req, res) => {
-    deleteTemplate(db, req.params.id);
-    res.json({ ok: true });
   });
 
   app.get('/api/agents', async (_req, res) => {
@@ -5866,6 +5839,32 @@ export async function startServer({
     }
   });
 
+  // Plan §3.DD1 — `od plugin stats`. Aggregates the installed-
+  // plugin roster + the current user's accessible applied_plugin_snapshots
+  // roster into one health/inventory report.
+  app.get('/api/plugins/stats', async (_req, res) => {
+    try {
+      const { pluginInventoryStats, snapshotInventoryStats } = await import('./plugins/stats.js');
+      const installed = listInstalledPlugins(db);
+      const userId = getLocalUserId(db);
+      const inventoryRows = db.prepare(
+        `SELECT s.status, s.project_id, s.run_id, s.applied_at
+           FROM applied_plugin_snapshots s
+           JOIN projects p ON p.id = s.project_id
+           JOIN workspace_memberships wm
+             ON wm.workspace_id = p.workspace_id
+            AND wm.user_id = ?`,
+      ).all(userId) as Array<{ status: 'fresh' | 'stale'; project_id: string | null; run_id: string | null; applied_at: number }>;
+      res.json({
+        plugins:   pluginInventoryStats(installed),
+        snapshots: snapshotInventoryStats(inventoryRows),
+        generatedAt: Date.now(),
+      });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   app.get('/api/plugins/:id', async (req, res) => {
     try {
       const plugin = getInstalledPlugin(db, req.params.id);
@@ -5967,6 +5966,7 @@ export async function startServer({
   }
 
   app.post('/api/plugins/upload-zip', (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     pluginUpload.single('file')(req, res, async (err) => {
       if (err) return sendMulterError(res, err);
       try {
@@ -5993,6 +5993,7 @@ export async function startServer({
   });
 
   app.post('/api/plugins/upload-folder', (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     pluginUpload.array('files', 500)(req, res, async (err) => {
       if (err) return sendMulterError(res, err);
       const stagedFolder = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'od-plugin-folder-'));
@@ -6031,6 +6032,7 @@ export async function startServer({
   });
 
   app.post('/api/plugins/install', async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     let source = typeof body.source === 'string' ? body.source : '';
     let marketplaceResolution: {
@@ -6114,6 +6116,7 @@ export async function startServer({
   });
 
   app.post('/api/plugins/:id/uninstall', async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const result = await uninstallPlugin(db, req.params.id, PLUGIN_REGISTRY_ROOTS);
       if (!result.ok && !result.removedFolder) {
@@ -6136,6 +6139,7 @@ export async function startServer({
   // 'upgrade' a bundled plugin would silently overwrite the
   // daemon's authoritative copy and confuse the next boot.
   app.post('/api/plugins/:id/upgrade', async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     const id = req.params.id;
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const policy = body.policy === 'pinned' ? 'pinned' : 'latest';
@@ -6337,6 +6341,23 @@ export async function startServer({
       }
 
       const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const workspaceId =
+        typeof body.workspaceId === 'string' && body.workspaceId.trim()
+          ? body.workspaceId.trim()
+          : currentAccessibleWorkspaceIdForLocalUser();
+      if (!getWorkspace(db, workspaceId)) {
+        sendApiError(res, 404, 'WORKSPACE_NOT_FOUND', 'workspace not found');
+        return;
+      }
+      const membership = getWorkspaceMembership(db, workspaceId, getLocalUserId(db));
+      if (!membership) {
+        sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+        return;
+      }
+      if (membership.role !== 'owner' && membership.role !== 'admin') {
+        sendApiError(res, 403, 'FORBIDDEN', 'workspace admin role required');
+        return;
+      }
       const action = normalizePluginShareAction(body.action);
       if (!action) {
         sendApiError(res, 400, 'BAD_REQUEST', 'action must be publish-github or contribute-open-design');
@@ -6366,23 +6387,43 @@ export async function startServer({
         path.join(projectRoot, 'plugin-source', sourceSlug),
       );
 
-      insertProject(db, {
-        id,
-        name: `${PLUGIN_SHARE_ACTION_LABELS[action]}: ${sourcePlugin.title || sourcePlugin.id}`,
-        skillId: null,
-        designSystemId: null,
-        pendingPrompt: prompt,
-        metadata,
-        createdAt: now,
-        updatedAt: now,
-      });
-      insertConversation(db, {
-        id: cid,
-        projectId: id,
-        title: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const actorUserId = getLocalUserId(db);
+      const projectName = `${PLUGIN_SHARE_ACTION_LABELS[action]}: ${sourcePlugin.title || sourcePlugin.id}`;
+      db.transaction(() => {
+        insertProject(db, {
+          id,
+          name: projectName,
+          createdByUserId: actorUserId,
+          ownedByUserId: actorUserId,
+          skillId: null,
+          designSystemId: null,
+          pendingPrompt: prompt,
+          workspaceId,
+          metadata,
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertWorkspaceActivity(db, {
+          workspaceId,
+          actorUserId,
+          action: 'project.created',
+          targetType: 'project',
+          targetId: id,
+          metadata: {
+            projectName,
+            source: 'plugin-share',
+            sourcePluginId: sourcePlugin.id,
+            action,
+          },
+        });
+        insertConversation(db, {
+          id: cid,
+          projectId: id,
+          title: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      })();
 
       const registry = await loadPluginRegistryView();
       const resolved = resolvePluginSnapshot({
@@ -6401,6 +6442,7 @@ export async function startServer({
         projectId: id,
         conversationId: cid,
         registry,
+        authorizeSnapshotReuse: authorizeSnapshotReuseForLocalUser,
       });
       if (resolved && !resolved.ok) {
         res.status(resolved.status).json(resolved.body);
@@ -6448,6 +6490,7 @@ export async function startServer({
   // `grantCapabilities` / `revokeCapabilities` (the only writers of
   // `installed_plugins.capabilities_granted` outside of install).
   app.post('/api/plugins/:id/trust', async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const plugin = getInstalledPlugin(db, req.params.id);
       if (!plugin) return res.status(404).json({ error: 'plugin not found' });
@@ -7003,30 +7046,9 @@ export async function startServer({
 
   app.get('/api/applied-plugins/:snapshotId', (req, res) => {
     try {
-      const snap = getSnapshot(db, req.params.snapshotId);
-      if (!snap) return res.status(404).json({ error: 'snapshot not found' });
+      const snap = getAccessibleSnapshotForRoute(req.params.snapshotId, res);
+      if (!snap) return;
       res.json(snap);
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
-  // Plan §3.DD1 — `od plugin stats`. Aggregates the installed-
-  // plugin roster + the applied_plugin_snapshots roster into one
-  // health/inventory report. Pure helpers in plugins/stats.ts;
-  // the route wires the SQLite reads + merges on the way out.
-  app.get('/api/plugins/stats', async (_req, res) => {
-    try {
-      const { pluginInventoryStats, snapshotInventoryStats } = await import('./plugins/stats.js');
-      const installed = listInstalledPlugins(db);
-      const inventoryRows = db.prepare(
-        `SELECT status, project_id, run_id, applied_at FROM applied_plugin_snapshots`,
-      ).all() as Array<{ status: 'fresh' | 'stale'; project_id: string | null; run_id: string | null; applied_at: number }>;
-      res.json({
-        plugins:   pluginInventoryStats(installed),
-        snapshots: snapshotInventoryStats(inventoryRows),
-        generatedAt: Date.now(),
-      });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -7043,8 +7065,8 @@ export async function startServer({
   //   - Accept: text/plain : raw block body for shell pipes
   app.get('/api/applied-plugins/:snapshotId/canon', (req, res) => {
     try {
-      const snap = getSnapshot(db, req.params.snapshotId);
-      if (!snap) return res.status(404).json({ error: 'snapshot not found' });
+      const snap = getAccessibleSnapshotForRoute(req.params.snapshotId, res);
+      if (!snap) return;
       const block = pluginPromptBlock(snap);
       const accepts = String(req.headers['accept'] ?? '').toLowerCase();
       if (accepts.includes('text/plain')) {
@@ -7070,7 +7092,8 @@ export async function startServer({
     }
   });
 
-  app.post('/api/marketplaces', async (req, res) => {
+  app.post('/api/marketplaces', requireLocalDaemonRequest, async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const url = typeof body.url === 'string' ? body.url : '';
@@ -7107,7 +7130,8 @@ export async function startServer({
     }
   });
 
-  app.delete('/api/marketplaces/:id', async (req, res) => {
+  app.delete('/api/marketplaces/:id', requireLocalDaemonRequest, async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const { removeMarketplace } = await import('./plugins/marketplaces.js');
       const ok = removeMarketplace(db, req.params.id);
@@ -7118,7 +7142,8 @@ export async function startServer({
     }
   });
 
-  app.post('/api/marketplaces/:id/refresh', async (req, res) => {
+  app.post('/api/marketplaces/:id/refresh', requireLocalDaemonRequest, async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const { getMarketplace, refreshMarketplace } = await import('./plugins/marketplaces.js');
       const row = getMarketplace(db, req.params.id);
@@ -7153,7 +7178,8 @@ export async function startServer({
     }
   });
 
-  app.post('/api/marketplaces/:id/trust', async (req, res) => {
+  app.post('/api/marketplaces/:id/trust', requireLocalDaemonRequest, async (req, res) => {
+    if (!requireCurrentWorkspaceManager(res)) return;
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const trust = body.trust === 'trusted' || body.trust === 'restricted' || body.trust === 'official'
@@ -7186,9 +7212,19 @@ export async function startServer({
   // snapshots list` and the audit dashboard.
   app.get('/api/applied-plugins', (_req, res) => {
     try {
+      const userId = getLocalUserId(db);
       const rows = db
-        .prepare(`SELECT id FROM applied_plugin_snapshots ORDER BY applied_at DESC LIMIT 500`)
-        .all();
+        .prepare(`
+          SELECT s.id
+            FROM applied_plugin_snapshots s
+            JOIN projects p ON p.id = s.project_id
+            JOIN workspace_memberships wm
+              ON wm.workspace_id = p.workspace_id
+             AND wm.user_id = ?
+           ORDER BY s.applied_at DESC
+           LIMIT 500
+        `)
+        .all(userId);
       res.json({
         snapshots: rows.map((r) => getSnapshot(db, (r).id)).filter((x) => x !== null),
       });
@@ -7198,6 +7234,7 @@ export async function startServer({
   });
   app.get('/api/projects/:projectId/applied-plugins', (req, res) => {
     try {
+      if (!getAccessibleProjectForRoute(req.params.projectId, res)) return;
       const rows = db
         .prepare(`SELECT id FROM applied_plugin_snapshots WHERE project_id = ? ORDER BY applied_at DESC`)
         .all(req.params.projectId);
@@ -7229,6 +7266,12 @@ export async function startServer({
       if (!outDir) {
         return res.status(400).json({ error: 'outDir is required' });
       }
+      if (typeof body.projectId === 'string' && body.projectId.trim()) {
+        if (!getAccessibleProjectForRoute(body.projectId.trim(), res)) return;
+      }
+      if (typeof body.snapshotId === 'string' && body.snapshotId.trim()) {
+        if (!getAccessibleSnapshotForRoute(body.snapshotId.trim(), res)) return;
+      }
       const { exportPlugin, ExportError } = await import('./plugins/export.js');
       try {
         const result = await exportPlugin({
@@ -7256,7 +7299,7 @@ export async function startServer({
   // accepts `{ before: <unix-ms> }` to force-delete unreferenced rows
   // older than the cutoff. Referenced rows (run_id IS NOT NULL) stay
   // pinned forever per PB2 reproducibility-first.
-  app.post('/api/applied-plugins/prune', async (req, res) => {
+  app.post('/api/applied-plugins/prune', requireLocalDaemonRequest, async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const before = typeof body.before === 'number' ? body.before : undefined;
@@ -7288,6 +7331,16 @@ export async function startServer({
   app.get('/api/runs/:runId/genui', (req, res) => {
     try {
       const surfaces = listSurfacesForRun(db, req.params.runId);
+      const projectIds = new Set(
+        surfaces
+          .map((surface) => surface.projectId)
+          .filter((projectId): projectId is string => typeof projectId === 'string' && projectId.length > 0),
+      );
+      const persistedProjectId = persistedRunProjectId(req.params.runId);
+      if (persistedProjectId) projectIds.add(persistedProjectId);
+      for (const projectId of projectIds) {
+        if (!getAccessibleProjectForRoute(projectId, res)) return;
+      }
       res.json({ runId: req.params.runId, surfaces });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -7296,6 +7349,7 @@ export async function startServer({
 
   app.get('/api/projects/:projectId/genui', (req, res) => {
     try {
+      if (!getAccessibleProjectForRoute(req.params.projectId, res)) return;
       const surfaces = listSurfacesForProject(db, req.params.projectId);
       res.json({ projectId: req.params.projectId, surfaces });
     } catch (err) {
@@ -7314,14 +7368,16 @@ export async function startServer({
       // The CLI / web pass `surfaceId` (the plugin-declared id) — look up
       // the matching pending row scoped to the run, then write through.
       const stmt = db.prepare(
-        `SELECT id FROM genui_surfaces
+        `SELECT id, project_id
+          FROM genui_surfaces
           WHERE run_id = ? AND surface_id = ? AND status = 'pending'
           ORDER BY requested_at DESC LIMIT 1`,
       );
-      const row = stmt.get(req.params.runId, req.params.surfaceId) as { id?: string } | undefined;
+      const row = stmt.get(req.params.runId, req.params.surfaceId) as { id?: string; project_id?: string } | undefined;
       if (!row?.id) {
         return res.status(404).json({ error: 'no pending surface for runId/surfaceId' });
       }
+      if (!getAccessibleProjectForRoute(row.project_id ?? '', res)) return;
       const updated = respondSurfaceRow(db, { rowId: row.id, value, respondedBy });
 
       // Plan §3.R1 / spec §10.3 / §21.5 — auto-bridge for the
@@ -7367,6 +7423,7 @@ export async function startServer({
 
   app.post('/api/projects/:projectId/genui/:surfaceId/revoke', (req, res) => {
     try {
+      if (!getAccessibleProjectForRoute(req.params.projectId, res)) return;
       const changed = revokeProjectSurface(db, {
         projectId: req.params.projectId,
         surfaceId: req.params.surfaceId,
@@ -7379,6 +7436,7 @@ export async function startServer({
 
   app.post('/api/projects/:projectId/genui/prefill', (req, res) => {
     try {
+      if (!getAccessibleProjectForRoute(req.params.projectId, res)) return;
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const snapshotId = typeof body.snapshotId === 'string' ? body.snapshotId : '';
       const surfaceId  = typeof body.surfaceId  === 'string' ? body.surfaceId  : '';
@@ -7391,6 +7449,7 @@ export async function startServer({
       if (!snapshotId || !surfaceId) {
         return res.status(400).json({ error: 'snapshotId and surfaceId are required' });
       }
+      if (!getAccessibleSnapshotForRoute(snapshotId, res)) return;
       const row = prefillProjectSurface(db, {
         projectId:        req.params.projectId,
         pluginSnapshotId: snapshotId,
@@ -7410,11 +7469,12 @@ export async function startServer({
   app.get('/api/runs/:runId/genui/:surfaceId', (req, res) => {
     try {
       const row = db.prepare(
-        `SELECT id FROM genui_surfaces
+        `SELECT id, project_id FROM genui_surfaces
           WHERE run_id = ? AND surface_id = ?
           ORDER BY requested_at DESC LIMIT 1`,
-      ).get(req.params.runId, req.params.surfaceId) as { id?: string } | undefined;
+      ).get(req.params.runId, req.params.surfaceId) as { id?: string; project_id?: string } | undefined;
       if (!row?.id) return res.status(404).json({ error: 'surface not found' });
+      if (!getAccessibleProjectForRoute(row.project_id ?? '', res)) return;
       const surface = getSurface(db, row.id);
       if (!surface) return res.status(404).json({ error: 'surface not found' });
       // Plan §6 Phase 2A.5 — enrich the response with the surface
@@ -7439,7 +7499,14 @@ export async function startServer({
 
   app.get('/api/runs/:runId/devloop-iterations', (req, res) => {
     try {
+      const run = design.runs.get(req.params.runId);
+      const projectId = (run as { projectId?: string | null } | null)?.projectId
+        ?? persistedRunProjectId(req.params.runId);
+      if (projectId && !getAccessibleProjectForRoute(projectId, res)) return;
       const iterations = listIterationsForRun(db, req.params.runId);
+      if (!projectId && iterations.length > 0) {
+        return sendApiError(res, 404, 'RUN_PROJECT_NOT_FOUND', 'run project not found');
+      }
       res.json({ runId: req.params.runId, iterations });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -7468,6 +7535,7 @@ export async function startServer({
       }
       const snapshot = getSnapshot(db, snapshotId);
       if (!snapshot) return res.status(404).json({ error: 'snapshot not found' });
+      if (!getAccessibleSnapshotForRoute(snapshotId, res)) return;
       res.json({
         ok:        true,
         runId:     req.params.runId,
@@ -7778,493 +7846,7 @@ export async function startServer({
     }
   });
 
-  app.get('/api/live-artifacts', async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      const artifacts = await listLiveArtifacts({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-      });
-      res.json({ artifacts });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.options('/api/live-artifacts/:artifactId/preview', requireLocalDaemonRequest, (_req, res) => {
-    res.status(204).end();
-  });
-
-  app.get('/api/live-artifacts/:artifactId/preview', requireLocalDaemonRequest, async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      const variant = typeof req.query.variant === 'string' ? req.query.variant : 'rendered';
-      if (variant === 'template' || variant === 'rendered-source') {
-        const html = await readLiveArtifactCode({
-          projectsRoot: PROJECTS_DIR,
-          projectId,
-          artifactId: req.params.artifactId,
-          variant: variant === 'template' ? 'template' : 'rendered',
-        });
-        setLiveArtifactCodeHeaders(res);
-        return res.status(200).send(html);
-      }
-      if (variant !== 'rendered') {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'variant must be rendered, template, or rendered-source');
-      }
-
-      const record = await ensureLiveArtifactPreview({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-        artifactId: req.params.artifactId,
-      });
-      setLiveArtifactPreviewHeaders(res);
-      res.status(200).send(record.html);
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.get('/api/live-artifacts/:artifactId', async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      const record = await getLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-        artifactId: req.params.artifactId,
-      });
-      res.json({ artifact: record.artifact });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.get('/api/live-artifacts/:artifactId/refreshes', async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      const refreshes = await listLiveArtifactRefreshLogEntries({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-        artifactId: req.params.artifactId,
-      });
-      res.json({ refreshes });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.post('/api/tools/live-artifacts/create', async (req, res) => {
-    try {
-      const toolGrant = authorizeToolRequest(req, res, 'live-artifacts:create');
-      if (!toolGrant) return;
-      const { projectId, input, templateHtml, provenanceJson, createdByRunId } = req.body || {};
-      if (requestProjectOverride(projectId, toolGrant.projectId)) {
-        return sendApiError(res, 403, 'FORBIDDEN', 'projectId is derived from the tool token', {
-          details: { suppliedProjectId: projectId },
-        });
-      }
-      if (requestRunOverride(createdByRunId, toolGrant.runId)) {
-        return sendApiError(res, 403, 'FORBIDDEN', 'createdByRunId is derived from the tool token', {
-          details: { suppliedRunId: createdByRunId },
-        });
-      }
-
-      const record = await createLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId: toolGrant.projectId,
-        input: input ?? {},
-        templateHtml,
-        provenanceJson,
-        createdByRunId: toolGrant.runId,
-      });
-      emitLiveArtifactEvent(toolGrant, 'created', record.artifact);
-      res.json({ artifact: record.artifact });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.get('/api/tools/live-artifacts/list', async (req, res) => {
-    try {
-      const toolGrant = authorizeToolRequest(req, res, 'live-artifacts:list');
-      if (!toolGrant) return;
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (requestProjectOverride(projectId, toolGrant.projectId)) {
-        return sendApiError(res, 403, 'FORBIDDEN', 'projectId is derived from the tool token', {
-          details: { suppliedProjectId: projectId },
-        });
-      }
-
-      const artifacts = await listLiveArtifacts({
-        projectsRoot: PROJECTS_DIR,
-        projectId: toolGrant.projectId,
-      });
-      res.json({ artifacts });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.post('/api/tools/live-artifacts/update', async (req, res) => {
-    try {
-      const toolGrant = authorizeToolRequest(req, res, 'live-artifacts:update');
-      if (!toolGrant) return;
-      const { projectId, artifactId, input, templateHtml, provenanceJson } = req.body || {};
-      if (requestProjectOverride(projectId, toolGrant.projectId)) {
-        return sendApiError(res, 403, 'FORBIDDEN', 'projectId is derived from the tool token', {
-          details: { suppliedProjectId: projectId },
-        });
-      }
-      if (typeof artifactId !== 'string' || artifactId.length === 0) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'artifactId is required');
-      }
-
-      const record = await updateLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId: toolGrant.projectId,
-        artifactId,
-        input: input ?? {},
-        templateHtml,
-        provenanceJson,
-      });
-      emitLiveArtifactEvent(toolGrant, 'updated', record.artifact);
-      res.json({ artifact: record.artifact });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.post('/api/tools/live-artifacts/refresh', async (req, res) => {
-    try {
-      const toolGrant = authorizeToolRequest(req, res, 'live-artifacts:refresh');
-      if (!toolGrant) return;
-      const { projectId, artifactId } = req.body || {};
-      if (requestProjectOverride(projectId, toolGrant.projectId)) {
-        return sendApiError(res, 403, 'FORBIDDEN', 'projectId is derived from the tool token', {
-          details: { suppliedProjectId: projectId },
-        });
-      }
-      if (typeof artifactId !== 'string' || artifactId.length === 0) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'artifactId is required');
-      }
-
-      let result;
-      try {
-        result = await refreshLiveArtifact({
-          projectsRoot: PROJECTS_DIR,
-          projectId: toolGrant.projectId,
-          artifactId,
-          onStarted: ({ refreshId }) => {
-            emitLiveArtifactRefreshEvent(toolGrant, { phase: 'started', artifactId, refreshId });
-          },
-        });
-      } catch (refreshErr) {
-        emitLiveArtifactRefreshEvent(toolGrant, {
-          phase: 'failed',
-          artifactId,
-          error: refreshErr instanceof Error ? refreshErr.message : String(refreshErr),
-        });
-        throw refreshErr;
-      }
-      emitLiveArtifactRefreshEvent(toolGrant, {
-        phase: 'succeeded',
-        artifactId,
-        refreshId: result.refresh.id,
-        title: result.artifact.title,
-        refreshedSourceCount: result.refresh.refreshedSourceCount,
-      });
-      res.json(result);
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.patch('/api/live-artifacts/:artifactId', async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      const record = await updateLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-        artifactId: req.params.artifactId,
-        input: req.body ?? {},
-      });
-      emitLiveArtifactEvent({ projectId }, 'updated', record.artifact);
-      res.json({ artifact: record.artifact });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.delete('/api/live-artifacts/:artifactId', async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      const existing = await getLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-        artifactId: req.params.artifactId,
-      });
-      await deleteLiveArtifact({
-        projectsRoot: PROJECTS_DIR,
-        projectId,
-        artifactId: req.params.artifactId,
-      });
-      updateProject(db, projectId, {});
-      emitLiveArtifactEvent({ projectId }, 'deleted', existing.artifact);
-      res.json({ ok: true });
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
-  app.options('/api/live-artifacts/:artifactId/refresh', requireLocalDaemonRequest, (_req, res) => {
-    res.status(204).end();
-  });
-
-  app.post('/api/live-artifacts/:artifactId/refresh', requireLocalDaemonRequest, async (req, res) => {
-    try {
-      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-      if (!projectId) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'projectId query parameter is required');
-      }
-
-      let result;
-      try {
-        result = await refreshLiveArtifact({
-          projectsRoot: PROJECTS_DIR,
-          projectId,
-          artifactId: req.params.artifactId,
-          onStarted: ({ refreshId }) => {
-            emitLiveArtifactRefreshEvent({ projectId }, { phase: 'started', artifactId: req.params.artifactId, refreshId });
-          },
-        });
-      } catch (refreshErr) {
-        emitLiveArtifactRefreshEvent({ projectId }, {
-          phase: 'failed',
-          artifactId: req.params.artifactId,
-          error: refreshErr instanceof Error ? refreshErr.message : String(refreshErr),
-        });
-        throw refreshErr;
-      }
-      emitLiveArtifactRefreshEvent({ projectId }, {
-        phase: 'succeeded',
-        artifactId: req.params.artifactId,
-        refreshId: result.refresh.id,
-        title: result.artifact.title,
-        refreshedSourceCount: result.refresh.refreshedSourceCount,
-      });
-      res.json(result);
-    } catch (err) {
-      sendLiveArtifactRouteError(res, err);
-    }
-  });
-
   app.use('/artifacts', express.static(ARTIFACTS_DIR));
-
-  // ---- Deploy --------------------------------------------------------------
-
-  app.get('/api/deploy/config', async (req, res) => {
-    try {
-      const providerId =
-        typeof req.query.providerId === 'string' ? req.query.providerId : VERCEL_PROVIDER_ID;
-      if (!isDeployProviderId(providerId)) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'unsupported deploy provider');
-      }
-      /** @type {import('@open-design/contracts').DeployConfigResponse} */
-      const body = publicDeployConfigForProvider(providerId, await readDeployConfig(providerId));
-      res.json(body);
-    } catch (err) {
-      sendApiError(res, 500, 'INTERNAL_ERROR', String(err?.message || err));
-    }
-  });
-
-  app.put('/api/deploy/config', async (req, res) => {
-    try {
-      const input = req.body || {};
-      const providerId =
-        typeof input.providerId === 'string' ? input.providerId : VERCEL_PROVIDER_ID;
-      if (!isDeployProviderId(providerId)) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'unsupported deploy provider');
-      }
-      /** @type {import('@open-design/contracts').DeployConfigResponse} */
-      const body = await writeDeployConfig(providerId, input);
-      res.json(body);
-    } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
-    }
-  });
-
-  app.get('/api/deploy/cloudflare-pages/zones', async (_req, res) => {
-    try {
-      /** @type {import('@open-design/contracts').CloudflarePagesZonesResponse} */
-      const body = await listCloudflarePagesZones(await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID));
-      res.json(body);
-    } catch (err) {
-      const status = err instanceof DeployError ? err.status : 400;
-      const init =
-        err instanceof DeployError && err.details
-          ? { details: err.details }
-          : {};
-      sendApiError(res, status, 'BAD_REQUEST', String(err?.message || err), init);
-    }
-  });
-
-  app.get('/api/projects/:id/deployments', (req, res) => {
-    try {
-      /** @type {import('@open-design/contracts').ProjectDeploymentsResponse} */
-      const body = { deployments: publicDeployments(listDeployments(db, req.params.id)) };
-      res.json(body);
-    } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
-    }
-  });
-
-  app.post('/api/projects/:id/deploy', async (req, res) => {
-    try {
-      const { fileName, providerId = VERCEL_PROVIDER_ID, cloudflarePages } = req.body || {};
-      if (!isDeployProviderId(providerId)) {
-        return sendApiError(
-          res,
-          400,
-          'BAD_REQUEST',
-          'unsupported deploy provider',
-        );
-      }
-      if (typeof fileName !== 'string' || !fileName.trim()) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
-      }
-
-      const prior = getDeployment(db, req.params.id, fileName, providerId);
-      const deployProject = getProject(db, req.params.id);
-      const files = await buildDeployFileSet(
-        PROJECTS_DIR,
-        req.params.id,
-        fileName,
-        { metadata: deployProject?.metadata },
-      );
-      const project = getProject(db, req.params.id);
-      const cloudflarePagesProjectName =
-        providerId === CLOUDFLARE_PAGES_PROVIDER_ID
-          ? cloudflarePagesProjectNameForDeploy(db, req.params.id, project?.name, prior)
-          : '';
-      const result = providerId === CLOUDFLARE_PAGES_PROVIDER_ID
-        ? await deployToCloudflarePages({
-            config: {
-              ...await readDeployConfig(CLOUDFLARE_PAGES_PROVIDER_ID),
-              projectName: cloudflarePagesProjectName,
-            },
-            files,
-            projectId: req.params.id,
-            cloudflarePages,
-            priorMetadata: prior?.providerMetadata,
-          })
-        : await deployToVercel({
-            config: await readDeployConfig(VERCEL_PROVIDER_ID),
-            files,
-            projectId: req.params.id,
-          });
-      const now = Date.now();
-      /** @type {import('@open-design/contracts').DeployProjectFileResponse} */
-      const body = upsertDeployment(db, {
-        id: prior?.id ?? randomUUID(),
-        projectId: req.params.id,
-        fileName,
-        providerId,
-        url: result.url,
-        deploymentId: result.deploymentId,
-        deploymentCount: (prior?.deploymentCount ?? 0) + 1,
-        target: 'preview',
-        status: result.status,
-        statusMessage: result.statusMessage,
-        reachableAt: result.reachableAt,
-        cloudflarePages: result.cloudflarePages,
-        providerMetadata:
-          providerId === CLOUDFLARE_PAGES_PROVIDER_ID
-            ? (result.providerMetadata ?? cloudflarePagesDeploymentMetadata(cloudflarePagesProjectName))
-            : prior?.providerMetadata,
-        createdAt: prior?.createdAt ?? now,
-        updatedAt: now,
-      });
-      res.json(publicDeployment(body));
-    } catch (err) {
-      const status = err instanceof DeployError ? err.status : 400;
-      const init =
-        err instanceof DeployError && err.details
-          ? { details: err.details }
-          : {};
-      sendApiError(
-        res,
-        status,
-        status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        String(err?.message || err),
-        init,
-      );
-    }
-  });
-
-  app.post('/api/projects/:id/deploy/preflight', async (req, res) => {
-    try {
-      const { fileName, providerId = VERCEL_PROVIDER_ID } = req.body || {};
-      if (!isDeployProviderId(providerId)) {
-        return sendApiError(
-          res,
-          400,
-          'BAD_REQUEST',
-          'unsupported deploy provider',
-        );
-      }
-      if (typeof fileName !== 'string' || !fileName.trim()) {
-        return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
-      }
-      const preflightProject = getProject(db, req.params.id);
-      /** @type {import('@open-design/contracts').DeployPreflightResponse} */
-      const body = await prepareDeployPreflight(
-        PROJECTS_DIR,
-        req.params.id,
-        fileName,
-        { metadata: preflightProject?.metadata, providerId },
-      );
-      res.json(body);
-    } catch (err) {
-      // DeployError is a known/expected outcome (validation, missing file).
-      // Anything else points at a bug or an unexpected runtime state, so
-      // surface it in the daemon log without leaking internals to the
-      // client which still gets a generic 400.
-      if (!(err instanceof DeployError)) {
-        console.error('[deploy/preflight]', err);
-      }
-      const status = err instanceof DeployError ? err.status : 400;
-      sendApiError(
-        res,
-        status,
-        status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
-        String(err?.message || err),
-      );
-    }
-  });
 
   app.post('/api/projects/:id/finalize/anthropic', async (req, res) => {
     const { apiKey, baseUrl, model, maxTokens } = req.body || {};
@@ -8277,6 +7859,11 @@ export async function startServer({
       // attack vectors.
       if (!isSafeId(req.params.id)) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'invalid project id');
+      }
+
+      const project = getAccessibleProjectForRoute(req.params.id, res);
+      if (!project) {
+        return;
       }
 
       if (typeof apiKey !== 'string' || !apiKey.trim()) {
@@ -8301,11 +7888,6 @@ export async function startServer({
       }
       if (maxTokens !== undefined && (typeof maxTokens !== 'number' || maxTokens <= 0)) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'maxTokens must be a positive number when provided');
-      }
-
-      const project = getProject(db, req.params.id);
-      if (!project) {
-        return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
       }
 
       const result = await finalizeDesignPackage(
@@ -8361,96 +7943,16 @@ export async function startServer({
     }
   });
 
-  app.post(
-    '/api/projects/:id/deployments/:deploymentId/check-link',
-    async (req, res) => {
-      try {
-        const existing = getDeploymentById(
-          db,
-          req.params.id,
-          req.params.deploymentId,
-        );
-        if (!existing) {
-          return sendApiError(
-            res,
-            404,
-            'FILE_NOT_FOUND',
-            'deployment not found',
-          );
-        }
-        const stableCloudflareProjectName =
-          existing.providerId === CLOUDFLARE_PAGES_PROVIDER_ID
-            ? cloudflarePagesProjectNameFromDeployment(existing)
-            : '';
-        if (existing.providerId === CLOUDFLARE_PAGES_PROVIDER_ID && existing.cloudflarePages?.pagesDev?.url) {
-          const checked = await checkCloudflarePagesDeploymentLinks(existing);
-          const now = Date.now();
-          /** @type {import('@open-design/contracts').CheckDeploymentLinkResponse} */
-          const body = upsertDeployment(db, {
-            ...existing,
-            ...checked,
-            reachableAt: checked.status === 'ready' ? now : existing.reachableAt,
-            updatedAt: now,
-          });
-          return res.json(publicDeployment(body));
-        }
-        const checkUrl = stableCloudflareProjectName
-          ? `https://${stableCloudflareProjectName}.pages.dev`
-          : existing.url;
-        const result = await checkDeploymentUrl(checkUrl);
-        const now = Date.now();
-        /** @type {import('@open-design/contracts').CheckDeploymentLinkResponse} */
-        const body = upsertDeployment(db, {
-          ...existing,
-          url: checkUrl || existing.url,
-          status: result.reachable ? 'ready' : result.status || 'link-delayed',
-          statusMessage: result.reachable
-            ? 'Public link is ready.'
-            : result.statusMessage ||
-              'Vercel is still preparing the public link.',
-          reachableAt: result.reachable ? now : existing.reachableAt,
-          updatedAt: now,
-        });
-        res.json(publicDeployment(body));
-      } catch (err) {
-        sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
-      }
-    },
-  );
-
   // Shared device frames (iPhone, Android, iPad, MacBook, browser chrome).
   // Skills can compose multi-screen / multi-device layouts by pointing at
   // these files via `<iframe src="/frames/iphone-15-pro.html?screen=...">`.
   // No mtime-based caching — frames are static and small.
   app.use('/frames', express.static(FRAMES_DIR));
 
-  // Project files. Each project owns a flat folder under .od/projects/<id>/
-  // containing every file the user has uploaded, pasted, sketched, or that
-  // the agent has generated. Names are sanitized; paths are confined to the
-  // project's own folder (see apps/daemon/src/projects.ts).
-  app.get('/api/projects/:id/files', async (req, res) => {
-    try {
-      const since = Number(req.query?.since);
-      const project = getProject(db, req.params.id);
-      const files = await listFiles(PROJECTS_DIR, req.params.id, {
-        since: Number.isFinite(since) ? since : undefined,
-        metadata: project?.metadata,
-      });
-      /** @type {import('@open-design/contracts').ProjectFilesResponse} */
-      const body = { files };
-      res.json(body);
-    } catch (err) {
-      sendApiError(res, 400, 'BAD_REQUEST', String(err));
-    }
-  });
-
   app.post('/api/projects/:id/plugins/install-folder', async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
-      if (!project) {
-        sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
-        return;
-      }
+      const project = getAccessibleProjectForRoute(req.params.id, res);
+      if (!project) return;
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const relativePath = normalizeProjectPluginFolderPath(body.path);
       const projectRoot = resolveProjectDir(PROJECTS_DIR, req.params.id, project.metadata);
@@ -8487,11 +7989,8 @@ export async function startServer({
 
   app.post('/api/projects/:id/plugins/publish-github', async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
-      if (!project) {
-        sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
-        return;
-      }
+      const project = getManageableProjectForRoute(req.params.id, res);
+      if (!project) return;
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const relativePath = normalizeProjectPluginFolderPath(body.path);
       const projectRoot = resolveProjectDir(PROJECTS_DIR, req.params.id, project.metadata);
@@ -8526,11 +8025,8 @@ export async function startServer({
 
   app.post('/api/projects/:id/plugins/contribute-open-design', async (req, res) => {
     try {
-      const project = getProject(db, req.params.id);
-      if (!project) {
-        sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
-        return;
-      }
+      const project = getManageableProjectForRoute(req.params.id, res);
+      if (!project) return;
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       const relativePath = normalizeProjectPluginFolderPath(body.path);
       const projectRoot = resolveProjectDir(PROJECTS_DIR, req.params.id, project.metadata);
@@ -9319,6 +8815,10 @@ export async function startServer({
   // without a separate refetch.
   app.post(
     '/api/projects/:id/upload',
+    (req, res, next) => {
+      if (!getAccessibleProjectForRoute(req.params.id, res)) return;
+      next();
+    },
     handleProjectUpload,
     async (req, res) => {
       try {
@@ -9356,7 +8856,13 @@ export async function startServer({
   // main: file-upload routes lifted to a dedicated module. Keep alongside the
   // inline routes garnet still owns above; duplicate registrations resolve in
   // a follow-up after route-routes.ts vs garnet inline coverage is audited.
-  registerProjectUploadRoutes(app, { http: httpDeps, uploads: uploadDeps, node: nodeDeps });
+  registerProjectUploadRoutes(app, {
+    db,
+    http: httpDeps,
+    uploads: uploadDeps,
+    node: nodeDeps,
+    projectStore: projectStoreDeps,
+  });
 
   const composeDaemonSystemPrompt = async ({
     agentId,
@@ -9904,6 +9410,47 @@ export async function startServer({
         });
       } catch { /* ignore */ }
     });
+  };
+
+  const resolveRunPluginSnapshot = async (body) => {
+    if (typeof body?.projectId !== 'string' || !body.projectId) {
+      return null;
+    }
+    const registryView = await loadPluginRegistryView();
+    const explicitPlugin =
+      body && (body.pluginId || body.appliedPluginSnapshotId);
+    let runResolveBody = body;
+    if (!explicitPlugin) {
+      const projectRow = getProject(db, body.projectId);
+      const hasPin =
+        typeof projectRow?.appliedPluginSnapshotId === 'string'
+        && projectRow.appliedPluginSnapshotId.length > 0;
+      if (!hasPin) {
+        const fallbackPluginId = defaultScenarioPluginIdForKind(
+          projectRow?.metadata?.kind,
+        );
+        if (fallbackPluginId && getInstalledPlugin(db, fallbackPluginId)) {
+          runResolveBody = { ...body, pluginId: fallbackPluginId };
+        }
+      }
+    }
+    const resolved = resolvePluginSnapshot({
+      db,
+      body: runResolveBody,
+      projectId: body.projectId,
+      conversationId: typeof body.conversationId === 'string'
+        ? body.conversationId
+        : null,
+      registry: registryView,
+      authorizeSnapshotReuse: authorizeSnapshotReuseForLocalUser,
+    });
+    if (resolved && !resolved.ok && !explicitPlugin) {
+      console.warn(
+        `[plugins] default-scenario fallback skipped for run on project ${body.projectId}: ${resolved.body?.error?.code ?? 'unknown'}`,
+      );
+      return null;
+    }
+    return resolved;
   };
 
   const startChatRun = async (chatBody, run) => {
@@ -11420,28 +10967,43 @@ export async function startServer({
     const conversationId = `orbit-conv-${randomUUID()}`;
     const assistantMessageId = `orbit-assistant-${randomUUID()}`;
     const projectName = `Orbit · ${formatLocalProjectTimestamp(startedAt)}`;
+    const workspaceId = currentAccessibleWorkspaceIdForLocalUser();
 
     const orbitDesignSystemId = template?.designSystemRequired === false
       ? null
       : appConfig.designSystemId ?? null;
 
-    insertProject(db, {
-      id: projectId,
-      name: projectName,
-      skillId: 'live-artifact',
-      designSystemId: orbitDesignSystemId,
-      pendingPrompt: null,
-      metadata: { kind: 'orbit', trigger },
-      createdAt: now,
-      updatedAt: now,
-    });
-    insertConversation(db, {
-      id: conversationId,
-      projectId,
-      title: projectName,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const actorUserId = getLocalUserId(db);
+    db.transaction(() => {
+      insertProject(db, {
+        id: projectId,
+        name: projectName,
+        workspaceId,
+        createdByUserId: actorUserId,
+        ownedByUserId: actorUserId,
+        skillId: 'live-artifact',
+        designSystemId: orbitDesignSystemId,
+        pendingPrompt: null,
+        metadata: { kind: 'orbit', trigger },
+        createdAt: now,
+        updatedAt: now,
+      });
+      insertWorkspaceActivity(db, {
+        workspaceId,
+        actorUserId,
+        action: 'project.created',
+        targetType: 'project',
+        targetId: projectId,
+        metadata: { projectName, source: 'orbit', trigger },
+      });
+      insertConversation(db, {
+        id: conversationId,
+        projectId,
+        title: projectName,
+        createdAt: now,
+        updatedAt: now,
+      });
+    })();
 
     const run = design.runs.create({
       projectId,
@@ -11549,6 +11111,11 @@ export async function startServer({
     if (daemonShuttingDown) {
       return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
     }
+    const accessProject = getAccessibleProjectForRunContext({
+      projectId: req.body?.projectId,
+      conversationId: req.body?.conversationId,
+    }, res);
+    if (accessProject === null) return;
     // Plan §3.A1 / spec §11.5: resolve any pluginId / appliedPluginSnapshotId
     // before the run is created. The resolver returns null when the body
     // does not mention a plugin (legacy runs unchanged), an error envelope
@@ -11594,6 +11161,7 @@ export async function startServer({
           ? req.body.conversationId
           : null,
         registry: registryView,
+        authorizeSnapshotReuse: authorizeSnapshotReuseForLocalUser,
       });
       if (resolved && !resolved.ok) {
         if (!explicitPlugin) {
@@ -11608,6 +11176,7 @@ export async function startServer({
       }
     }
     const meta = { ...(req.body || {}) };
+    if (!meta.projectId && accessProject) meta.projectId = accessProject.id;
     if (resolvedSnapshot?.ok) {
       meta.appliedPluginSnapshotId = resolvedSnapshot.snapshotId;
       if (!meta.pluginId) meta.pluginId = resolvedSnapshot.snapshot.pluginId;
@@ -11925,21 +11494,33 @@ export async function startServer({
 
   app.get('/api/runs', (req, res) => {
     const { projectId, conversationId, status } = req.query;
+    if (typeof projectId === 'string' && projectId && !requireProjectAccessForRoute(projectId, res)) return;
+    if (typeof conversationId === 'string' && conversationId) {
+      const accessProject = getAccessibleProjectForRunContext({ conversationId }, res);
+      if (accessProject === null) return;
+    }
     const runs = design.runs.list({ projectId, conversationId, status });
     /** @type {import('@open-design/contracts').ChatRunListResponse} */
-    const body = { runs: runs.map(design.runs.statusBody) };
+    const body = { runs: runs.filter((run) => {
+      const runProjectId = typeof run.projectId === 'string' && run.projectId ? run.projectId : '';
+      if (runProjectId) return projectIsAccessibleToLocalUser(runProjectId);
+      const runConversationId = typeof run.conversationId === 'string' && run.conversationId ? run.conversationId : '';
+      if (!runConversationId) return true;
+      const conversation = getConversation(db, runConversationId);
+      return conversation ? projectIsAccessibleToLocalUser(conversation.projectId) : false;
+    }).map(design.runs.statusBody) };
     res.json(body);
   });
 
   app.get('/api/runs/:id', (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const run = getAccessibleRunForRoute(req.params.id, res);
+    if (!run) return;
     res.json(design.runs.statusBody(run));
   });
 
   app.get('/api/runs/:id/events', (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const run = getAccessibleRunForRoute(req.params.id, res);
+    if (!run) return;
     design.runs.stream(run, req, res);
   });
 
@@ -11951,8 +11532,8 @@ export async function startServer({
   // can't map are dropped; the SSE stream stays canonical even when
   // OD adds internal-only events later.
   app.get('/api/runs/:id/agui', async (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const run = getAccessibleRunForRoute(req.params.id, res);
+    if (!run) return;
     const { encodeOdEventForAgui } = await import('@open-design/agui-adapter');
     const sse = createSseResponse(res);
     const lastEventId = Number(req.get('Last-Event-ID') || req.query.after || 0);
@@ -11990,24 +11571,6 @@ export async function startServer({
       run.clients.delete(adapterClient);
       sse.cleanup?.();
     });
-  });
-
-  app.post('/api/runs/:id/cancel', (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
-    design.runs.cancel(run);
-    /** @type {import('@open-design/contracts').ChatRunCancelResponse} */
-    const body = { ok: true };
-    res.json(body);
-  });
-
-  app.post('/api/chat', (req, res) => {
-    if (daemonShuttingDown) {
-      return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
-    }
-    const run = design.runs.create();
-    design.runs.stream(run, req, res);
-    design.runs.start(run, () => startChatRun(req.body || {}, run));
   });
 
   // Each routine fire resolves an agent, prepares project/conversation state,
@@ -12050,44 +11613,75 @@ export async function startServer({
     const stamp = formatLocalProjectTimestamp(new Date(now).toISOString());
     let projectId;
     let projectName;
+    let newProjectWorkspaceId: string | null = null;
     if (routine.target.mode === 'reuse') {
       const project = getProject(db, routine.target.projectId);
       if (!project) throw new Error(`Routine target project ${routine.target.projectId} not found`);
+      if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+        throw new Error(`Routine target workspace ${project.workspaceId} membership required`);
+      }
       projectId = project.id;
       projectName = project.name;
     } else {
+      const workspaceId = routine.workspaceId || DEFAULT_WORKSPACE_ID;
+      if (!getWorkspace(db, workspaceId) || !getWorkspaceMembership(db, workspaceId, getLocalUserId(db))) {
+        throw new Error(`Routine workspace ${workspaceId} membership required`);
+      }
       projectId = `routine-${randomUUID()}`;
       projectName = `${routine.name} · ${stamp}`;
-      insertProject(db, {
-        id: projectId,
-        name: projectName,
-        skillId: routineSkillId,
-        designSystemId: appConfig.designSystemId ?? null,
-        pendingPrompt: null,
-        metadata: {
-          kind: 'other',
-          intent: 'automation',
-          automationId: routine.id,
-          routineId: routine.id,
-          trigger,
-          ...contextMetadata,
-        },
-        createdAt: now,
-        updatedAt: now,
-      });
+      newProjectWorkspaceId = workspaceId;
     }
 
     const conversationId = `routine-conv-${randomUUID()}`;
     const conversationTitle = routine.target.mode === 'reuse'
       ? `${routine.name} · ${stamp}`
       : projectName;
-    insertConversation(db, {
-      id: conversationId,
-      projectId,
-      title: conversationTitle,
-      createdAt: now,
-      updatedAt: now,
-    });
+    db.transaction(() => {
+      if (newProjectWorkspaceId) {
+        const actorUserId = getLocalUserId(db);
+        insertProject(db, {
+          id: projectId,
+          name: projectName,
+          workspaceId: newProjectWorkspaceId,
+          createdByUserId: routine.createdByUserId ?? actorUserId,
+          ownedByUserId: routine.ownedByUserId ?? routine.createdByUserId ?? actorUserId,
+          skillId: routine.skillId ?? null,
+          designSystemId: appConfig.designSystemId ?? null,
+          pendingPrompt: null,
+          metadata: {
+            kind: 'other',
+            intent: 'routine',
+            automationId: routine.id,
+            routineId: routine.id,
+            trigger,
+            ...contextMetadata,
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertWorkspaceActivity(db, {
+          workspaceId: newProjectWorkspaceId,
+          actorUserId,
+          action: 'project.created',
+          targetType: 'project',
+          targetId: projectId,
+          metadata: {
+            projectName,
+            source: 'routine',
+            routineId: routine.id,
+            routineName: routine.name,
+            trigger,
+          },
+        });
+      }
+      insertConversation(db, {
+        id: conversationId,
+        projectId,
+        title: conversationTitle,
+        createdAt: now,
+        updatedAt: now,
+      });
+    })();
 
     // Notify any open `ProjectView` watching this project so its
     // conversation list picks up the new routine conversation without
@@ -12279,7 +11873,7 @@ export async function startServer({
     validation: validationDeps,
     finalize: finalizeDeps,
     handoff: handoffDeps,
-    chat: { startChatRun, submitToolResultToRun },
+    chat: { startChatRun, submitToolResultToRun, resolveRunPluginSnapshot, firePipelineForRun },
     agents: agentDeps,
     critique: critiqueDeps,
     lifecycle: { isDaemonShuttingDown: () => daemonShuttingDown },
@@ -12304,12 +11898,14 @@ export async function startServer({
     design,
     http: httpDeps,
     paths: pathDeps,
-    chat: { startChatRun, submitToolResultToRun },
+    chat: { startChatRun, submitToolResultToRun, resolveRunPluginSnapshot, firePipelineForRun },
     agents: agentDeps,
     critique: critiqueDeps,
     validation: validationDeps,
     lifecycle: { isDaemonShuttingDown: () => daemonShuttingDown },
     telemetry: { reportFinalizedMessage, reportFeedback },
+    projectStore: projectStoreDeps,
+    conversations: conversationDeps,
   });
 
   registerStaticSpaFallback(app, STATIC_DIR);

@@ -67,6 +67,7 @@ interface Props {
 	onOpenLiveArtifact: (projectId: string, artifactId: string) => void;
 	onDelete: (id: string) => Promise<boolean | void> | boolean | void;
 	onRename?: (id: string, name: string) => void;
+	canManageProjects?: boolean;
 }
 
 export function DesignsTab({
@@ -77,6 +78,7 @@ export function DesignsTab({
 	onOpenLiveArtifact,
 	onDelete,
 	onRename,
+	canManageProjects = true,
 }: Props) {
 	const t = useT();
 	const analytics = useAnalytics();
@@ -110,8 +112,10 @@ export function DesignsTab({
 		title: string;
 		message: string;
 		confirmLabel: string;
-		onConfirm: () => void;
+		onConfirm: () => Promise<void> | void;
 	} | null>(null);
+	const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+	const [deletingProjectIds, setDeletingProjectIds] = useState<Set<string>>(() => new Set());
 	const [view, setView] = useState<ViewMode>(() => {
 		if (typeof window === "undefined") return "grid";
 		try {
@@ -255,6 +259,16 @@ export function DesignsTab({
 		if (view === "kanban" && selectMode) exitSelectMode();
 	}, [selectMode, view]);
 
+	useEffect(() => {
+		if (canManageProjects) return;
+		setMenuOpenId(null);
+		setRenameTarget(null);
+		setRenameInput("");
+		setConfirmTarget(null);
+		setSelected(new Set());
+		setSelectMode(false);
+	}, [canManageProjects]);
+
 	const filtered = useMemo(() => {
 		const q = filter.trim().toLowerCase();
 		let list: DesignListItem[] = projects
@@ -328,11 +342,12 @@ export function DesignsTab({
 		setSelected(new Set());
 	};
 	const handleRenameProject = (project: Project) => {
+		if (!canManageProjects) return;
 		setRenameTarget({ id: project.id, original: project.name });
 		setRenameInput(project.name);
 	};
 	const commitRename = () => {
-		if (!renameTarget) return;
+		if (!renameTarget || !canManageProjects) return;
 		const trimmed = renameInput.trim();
 		if (trimmed && trimmed !== renameTarget.original) {
 			onRename?.(renameTarget.id, trimmed);
@@ -344,15 +359,33 @@ export function DesignsTab({
 		setRenameTarget(null);
 		setRenameInput("");
 	};
+	const runDeleteProject = async (id: string) => {
+		if (deletingProjectIds.has(id)) return;
+		setDeleteNotice(null);
+		setDeletingProjectIds((current) => new Set(current).add(id));
+		try {
+			await onDelete(id);
+		} catch (error) {
+			setDeleteNotice(error instanceof Error ? error.message : "Could not delete project.");
+		} finally {
+			setDeletingProjectIds((current) => {
+				const next = new Set(current);
+				next.delete(id);
+				return next;
+			});
+		}
+	};
 	const handleDeleteProject = (project: Project) => {
+		if (!canManageProjects) return;
 		setConfirmTarget({
 			title: t("designs.deleteTitle"),
 			message: t("designs.deleteConfirm", { name: project.name }),
 			confirmLabel: t("designs.menuDelete"),
-			onConfirm: () => onDelete(project.id),
+			onConfirm: () => runDeleteProject(project.id),
 		});
 	};
 	const handleBatchDelete = () => {
+		if (!canManageProjects) return;
 		const ids = Array.from(selected);
 		if (ids.length === 0) return;
 		setConfirmTarget({
@@ -388,6 +421,7 @@ export function DesignsTab({
 		projectId: string,
 		artifact: LiveArtifactSummary,
 	) => {
+		if (!canManageProjects) return;
 		setConfirmTarget({
 			title: t("common.delete"),
 			message: `${t("common.delete")} "${artifact.title}"?`,
@@ -475,7 +509,8 @@ export function DesignsTab({
 							<button
 								type="button"
 								className="designs-select-delete"
-								disabled={selected.size === 0}
+								disabled={selected.size === 0 || !canManageProjects}
+								title={!canManageProjects ? "Admin or owner access required to delete projects." : undefined}
 								onClick={handleBatchDelete}
 							>
 								{t("designs.deleteSelected")}
@@ -492,7 +527,10 @@ export function DesignsTab({
 						<button
 							type="button"
 							className="designs-select-toggle"
+							disabled={!canManageProjects}
+							title={!canManageProjects ? "Admin or owner access required to delete projects." : undefined}
 							onClick={() => {
+								if (!canManageProjects) return;
 								trackProjectsListControlsClick(analytics.track, {
 									page_name: "projects",
 									area: "list_controls",
@@ -547,6 +585,11 @@ export function DesignsTab({
 					</div>
 				</div>
 			</div>
+			{deleteNotice ? (
+				<div className="designs-notice" role="status">
+					{deleteNotice}
+				</div>
+			) : null}
 			{filtered.length === 0 ? (
 				<div className="tab-empty">
 					{projects.length === 0
@@ -582,8 +625,10 @@ export function DesignsTab({
 										className="design-card-close"
 										title={t("common.delete")}
 										aria-label={`${t("common.delete")} ${artifact.title}`}
+										disabled={!canManageProjects}
 										onClick={(e) => {
 											e.stopPropagation();
+											if (!canManageProjects) return;
 											void handleDeleteLiveArtifact(p.id, artifact);
 										}}
 									>
@@ -710,7 +755,10 @@ export function DesignsTab({
 											<button
 												type="button"
 												role="menuitem"
+												disabled={!canManageProjects}
+												title={!canManageProjects ? "Admin or owner access required to rename projects." : undefined}
 												onClick={() => {
+													if (!canManageProjects) return;
 													const projectKind = projectKindToTracking(p.metadata?.kind);
 													trackProjectsMorePopoverClick(analytics.track, {
 														page_name: "projects",
@@ -730,7 +778,10 @@ export function DesignsTab({
 												type="button"
 												role="menuitem"
 												className="danger"
+												disabled={!canManageProjects || deletingProjectIds.has(p.id)}
+												title={!canManageProjects ? "Admin or owner access required to delete projects." : undefined}
 												onClick={() => {
+													if (!canManageProjects || deletingProjectIds.has(p.id)) return;
 													const projectKind = projectKindToTracking(p.metadata?.kind);
 													trackProjectsMorePopoverClick(analytics.track, {
 														page_name: "projects",
@@ -860,8 +911,10 @@ export function DesignsTab({
 														aria-label={t("designs.deleteAria", {
 															name: p.name,
 														})}
+														disabled={!canManageProjects || deletingProjectIds.has(p.id)}
 														onClick={(e) => {
 															e.stopPropagation();
+															if (!canManageProjects || deletingProjectIds.has(p.id)) return;
 															handleDeleteProject(p);
 														}}
 													>
@@ -964,7 +1017,7 @@ export function DesignsTab({
 								onClick={() => {
 									const run = confirmTarget.onConfirm;
 									setConfirmTarget(null);
-									run();
+									void run();
 								}}
 							>
 								{confirmTarget.confirmLabel}

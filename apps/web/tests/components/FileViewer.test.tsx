@@ -41,6 +41,7 @@ import type { Dict } from '../../src/i18n/types';
 
 afterEach(() => {
   cleanup();
+  saveTemplateMock.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, 'clipboard');
@@ -858,6 +859,42 @@ describe('FileViewer SVG artifacts', () => {
     expect(exportButton.classList.contains('export-ready-nudge')).toBe(false);
   });
 
+  it('disables deploy actions when the current user cannot manage workspace artifacts', async () => {
+    const file = baseFile({
+      name: 'index.html',
+      path: 'index.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'index.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+        canDeployWorkspaceArtifacts={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    const deployToVercel = screen.getByRole('menuitem', { name: /Deploy to Vercel/i }) as HTMLButtonElement;
+    const deployToCloudflare = screen.getByRole('menuitem', { name: /Deploy to Cloudflare Pages/i }) as HTMLButtonElement;
+    expect(deployToVercel.disabled).toBe(true);
+    expect(deployToCloudflare.disabled).toBe(true);
+
+    fireEvent.click(deployToCloudflare);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('nudges each exportable artifact once when the mounted viewer switches files', async () => {
     const firstFile = baseFile({
       name: 'nudge-first.html',
@@ -917,6 +954,72 @@ describe('FileViewer SVG artifacts', () => {
     await waitFor(() => {
       expect(secondExportButton.classList.contains('export-ready-nudge')).toBe(true);
     });
+  });
+
+  it('disables an open deploy dialog when workspace artifact access is lost', async () => {
+    const file = baseFile({
+      name: 'index.html',
+      path: 'index.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Page',
+        entry: 'index.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/projects/project-1/deployments') {
+        return new Response(JSON.stringify({ deployments: [] }), { status: 200 });
+      }
+      if (url === '/api/deploy/config?providerId=vercel-self') {
+        return new Response(JSON.stringify({
+          providerId: 'vercel-self',
+          configured: true,
+          tokenMask: 'saved-vercel-token',
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Deploy to Vercel/i }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+
+    rerender(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+        canDeployWorkspaceArtifacts={false}
+      />,
+    );
+
+    const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement;
+    const deploy = screen.getByRole('button', { name: /Deploy to Vercel/i }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(deploy.disabled).toBe(true);
+    fireEvent.click(save);
+    fireEvent.click(deploy);
+    expect(fetchMock.mock.calls.some(([input, init]) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      return url === '/api/projects/project-1/deploy' || init?.method === 'POST';
+    })).toBe(false);
   });
 
   it('keeps the explicitly selected deploy provider when another provider already has a deployment', async () => {
@@ -1385,6 +1488,86 @@ describe('FileViewer SVG artifacts', () => {
     );
     expect(promptSpy).not.toHaveBeenCalled();
     promptSpy.mockRestore();
+  });
+
+  it('disables saving workspace templates when the current user cannot manage workspace resources', () => {
+    const file = baseFile({
+      name: 'landing-page.html',
+      path: 'landing-page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Landing Page',
+        entry: 'landing-page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+        canSaveWorkspaceTemplates={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    const saveAsTemplate = screen.getByRole('menuitem', { name: /save as template/i }) as HTMLButtonElement;
+    expect(saveAsTemplate.disabled).toBe(true);
+
+    fireEvent.click(saveAsTemplate);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(saveTemplateMock).not.toHaveBeenCalled();
+  });
+
+  it('disables an open save-template dialog when workspace management access is lost', () => {
+    const file = baseFile({
+      name: 'landing-page.html',
+      path: 'landing-page.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Landing Page',
+        entry: 'landing-page.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+
+    const { rerender } = render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /share/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /save as template/i }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+
+    rerender(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml="<html><body><h1>Hello</h1></body></html>"
+        canSaveWorkspaceTemplates={false}
+      />,
+    );
+
+    const save = screen.getByRole('button', { name: /^save$/i }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(save);
+    expect(saveTemplateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -2563,6 +2746,202 @@ describe('LiveArtifactViewer', () => {
     await waitFor(() => {
       expect(container.querySelector('.live-artifact-viewer.is-tab-present')).toBeNull();
     });
+  });
+
+  it('creates and copies a workspace viewer link from the present menu', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/live-artifacts/la_1?projectId=proj_1') {
+        return new Response(JSON.stringify({ artifact: baseLiveArtifact() }), { status: 200 });
+      }
+      if (url === '/api/live-artifacts/la_1/refreshes?projectId=proj_1') {
+        return new Response(JSON.stringify({ refreshes: [] }), { status: 200 });
+      }
+      if (url === '/api/live-artifacts/la_1/shares?projectId=proj_1' && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          share: {
+            id: 'share-1',
+            token: 'share-token',
+            targetType: 'live_artifact',
+            projectId: 'proj_1',
+            artifactId: 'la_1',
+            role: 'viewer',
+            createdByUserId: 'owner-1',
+            createdAt: 1,
+            shareUrl: 'http://127.0.0.1:17456/share/live-artifact/share-token',
+          },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <LiveArtifactViewer
+        projectId="proj_1"
+        liveArtifact={baseLiveArtifactWorkspaceEntry()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /present/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy viewer link/i }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/share/live-artifact/share-token`);
+    });
+    expect(await screen.findByText('Viewer link copied.')).toBeTruthy();
+  });
+
+  it('ignores stale viewer link creation after switching artifacts', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    let resolveShare: (response: Response) => void = () => {};
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/live-artifacts/la_1?projectId=proj_1') {
+        return Promise.resolve(new Response(JSON.stringify({ artifact: baseLiveArtifact() }), { status: 200 }));
+      }
+      if (url === '/api/live-artifacts/la_2?projectId=proj_1') {
+        return Promise.resolve(new Response(JSON.stringify({
+          artifact: baseLiveArtifact({
+            id: 'la_2',
+            title: 'Roadmap Metrics',
+            slug: 'roadmap-metrics',
+          }),
+        }), { status: 200 }));
+      }
+      if (
+        url === '/api/live-artifacts/la_1/refreshes?projectId=proj_1' ||
+        url === '/api/live-artifacts/la_2/refreshes?projectId=proj_1'
+      ) {
+        return Promise.resolve(new Response(JSON.stringify({ refreshes: [] }), { status: 200 }));
+      }
+      if (url === '/api/live-artifacts/la_1/shares?projectId=proj_1' && init?.method === 'POST') {
+        return new Promise<Response>((resolve) => {
+          resolveShare = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify({}), { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(
+      <LiveArtifactViewer
+        projectId="proj_1"
+        liveArtifact={baseLiveArtifactWorkspaceEntry()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /present/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy viewer link/i }));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/live-artifacts/la_1/shares?projectId=proj_1', { method: 'POST' });
+    });
+
+    rerender(
+      <LiveArtifactViewer
+        projectId="proj_1"
+        liveArtifact={baseLiveArtifactWorkspaceEntry({
+          artifactId: 'la_2',
+          tabId: 'live:la_2',
+          title: 'Roadmap Metrics',
+          slug: 'roadmap-metrics',
+        })}
+      />,
+    );
+
+    resolveShare(new Response(JSON.stringify({
+      share: {
+        id: 'share-1',
+        token: 'share-token',
+        targetType: 'live_artifact',
+        projectId: 'proj_1',
+        artifactId: 'la_1',
+        role: 'viewer',
+        createdByUserId: 'owner-1',
+        createdAt: 1,
+        shareUrl: 'http://127.0.0.1:17456/share/live-artifact/share-token',
+      },
+    }), { status: 200 }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/live-artifacts/la_2?projectId=proj_1');
+    });
+    await waitFor(() => {
+      expect(writeText).not.toHaveBeenCalled();
+    });
+    expect(screen.queryByText('Viewer link copied.')).toBeNull();
+  });
+
+  it('surfaces workspace permission errors when viewer links cannot be created', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/live-artifacts/la_1?projectId=proj_1') {
+        return new Response(JSON.stringify({ artifact: baseLiveArtifact() }), { status: 200 });
+      }
+      if (url === '/api/live-artifacts/la_1/refreshes?projectId=proj_1') {
+        return new Response(JSON.stringify({ refreshes: [] }), { status: 200 });
+      }
+      if (url === '/api/live-artifacts/la_1/shares?projectId=proj_1' && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          error: { code: 'FORBIDDEN', message: 'workspace admin role required' },
+        }), { status: 403 });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <LiveArtifactViewer
+        projectId="proj_1"
+        liveArtifact={baseLiveArtifactWorkspaceEntry()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /present/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy viewer link/i }));
+
+    expect(await screen.findByText('workspace admin role required')).toBeTruthy();
+  });
+
+  it('disables viewer link creation for workspace members before calling the API', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+      if (url === '/api/live-artifacts/la_1?projectId=proj_1') {
+        return new Response(JSON.stringify({ artifact: baseLiveArtifact() }), { status: 200 });
+      }
+      if (url === '/api/live-artifacts/la_1/refreshes?projectId=proj_1') {
+        return new Response(JSON.stringify({ refreshes: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <LiveArtifactViewer
+        projectId="proj_1"
+        liveArtifact={baseLiveArtifactWorkspaceEntry()}
+        canCreateViewerLinks={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /present/i }));
+    const copyViewerLink = screen.getByRole('menuitem', { name: /copy viewer link/i }) as HTMLButtonElement;
+
+    expect(copyViewerLink.disabled).toBe(true);
+    expect(copyViewerLink.title).toBe('Admin or owner access required to create viewer links.');
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/live-artifacts/la_1/shares?projectId=proj_1',
+      { method: 'POST' },
+    );
   });
 
   it('keeps in-tab presentation off when fullscreen request fails', async () => {

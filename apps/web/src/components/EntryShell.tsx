@@ -13,6 +13,8 @@ import {
   defaultScenarioPluginIdForProjectMetadata,
   type ConnectorDetail,
   type InstalledPluginRecord,
+  type Workspace,
+  type WorkspaceInviteWithStatus,
 } from '@open-design/contracts';
 import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
 import type { DesignSystemGenerateSnapshot } from './DesignSystemFlow';
@@ -86,6 +88,7 @@ import type {
   PluginShareAction,
   PluginShareProjectOutcome,
 } from '../state/projects';
+import type { WorkspaceOperationResult } from '../state/workspaces';
 import { TasksView } from './TasksView';
 import {
   API_KEY_PLACEHOLDERS,
@@ -96,6 +99,7 @@ import { KNOWN_PROVIDERS } from '../state/config';
 import type { KnownProvider } from '../state/config';
 import { testApiProvider } from '../providers/connection-test';
 import { fetchProviderModels } from '../providers/provider-models';
+import { WorkspaceSettingsView } from './WorkspaceSettingsView';
 
 // The topbar chips (GitHub star, model switcher, Use everywhere)
 // collapse into the settings dropdown when the viewport gets
@@ -194,6 +198,9 @@ interface Props {
   designTemplates: SkillSummary[];
   designSystems: DesignSystemSummary[];
   projects: Project[];
+  workspaces: Workspace[];
+  currentWorkspaceId: string;
+  currentUserId: string | null;
   templates: ProjectTemplate[];
   onDeleteTemplate?: (id: string) => Promise<boolean>;
   promptTemplates: PromptTemplateSummary[];
@@ -240,6 +247,15 @@ interface Props {
     action: PluginShareAction,
     locale?: string,
   ) => Promise<PluginShareProjectOutcome>;
+  onWorkspaceChange: (workspaceId: string) => Promise<void> | void;
+  onWorkspaceCreated: (workspace: Workspace) => Promise<void> | void;
+  onWorkspaceRemoved: (workspaceId: string) => Promise<void> | void;
+  onWorkspaceUpdated: (workspace: Workspace) => Promise<void> | void;
+  onProjectsRefresh: () => Promise<void> | void;
+  onCreateWorkspaceInvite: (
+    workspaceId: string,
+    options?: { role?: 'admin' | 'member'; expiresInDays?: number },
+  ) => Promise<WorkspaceOperationResult<WorkspaceInviteWithStatus>>;
   onImportClaudeDesign: (file: File) => Promise<void> | void;
   onImportFolder?: (baseDir: string) => Promise<void> | void;
   onImportFolderResponse?: (response: OpenDesignHostProjectImportSuccess) => Promise<void> | void;
@@ -321,6 +337,9 @@ export function EntryShell({
   designTemplates,
   designSystems,
   projects,
+  workspaces,
+  currentWorkspaceId,
+  currentUserId,
   templates,
   onDeleteTemplate,
   promptTemplates,
@@ -345,6 +364,12 @@ export function EntryShell({
   onThemeChange,
   onCreateProject,
   onCreatePluginShareProject,
+  onWorkspaceChange,
+  onWorkspaceCreated,
+  onWorkspaceRemoved,
+  onWorkspaceUpdated,
+  onProjectsRefresh,
+  onCreateWorkspaceInvite,
   onImportClaudeDesign,
   onImportFolder,
   onImportFolderResponse,
@@ -375,6 +400,8 @@ export function EntryShell({
   const [integrationTab, setIntegrationTab] = useState<IntegrationTab>(integrationInitialTab);
   const [homePromptHandoff, setHomePromptHandoff] = useState<HomePromptHandoff | null>(null);
   const analytics = useAnalytics();
+  const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId) ?? null;
+  const canManageCurrentWorkspaceProjects = currentWorkspace?.currentUserRole === 'owner' || currentWorkspace?.currentUserRole === 'admin';
   function changeView(next: EntryViewKind) {
     const navElement = navElementForView(next);
     if (navElement) {
@@ -541,8 +568,12 @@ export function EntryShell({
       <div className="entry">
         <EntryNavRail
           view={view}
+          workspaces={workspaces}
+          currentWorkspaceId={currentWorkspaceId}
           onViewChange={changeView}
           onNewProject={() => openNewProject()}
+          onWorkspaceChange={onWorkspaceChange}
+          onCreateWorkspaceInvite={onCreateWorkspaceInvite}
         />
         <main className="entry-main entry-main--scroll">
           <div className="entry-main__topbar">
@@ -641,6 +672,7 @@ export function EntryShell({
                     onOpenLiveArtifact={onOpenLiveArtifact}
                     onDelete={onDeleteProject}
                     onRename={onRenameProject}
+                    canManageProjects={canManageCurrentWorkspaceProjects}
                   />
                 </div>
               )
@@ -657,7 +689,22 @@ export function EntryShell({
               <PluginsView
                 onCreatePlugin={startPluginAuthoring}
                 onUsePlugin={usePluginFromLibrary}
+                canSharePluginProjects={canManageCurrentWorkspaceProjects}
                 onCreatePluginShareProject={onCreatePluginShareProject}
+              />
+            ) : null}
+            {view === 'workspace' ? (
+              <WorkspaceSettingsView
+                workspaces={workspaces}
+                currentWorkspaceId={currentWorkspaceId}
+                currentUserId={currentUserId}
+                projects={projects}
+                onWorkspaceChange={onWorkspaceChange}
+                onWorkspaceCreated={onWorkspaceCreated}
+                onWorkspaceRemoved={onWorkspaceRemoved}
+                onWorkspaceUpdated={onWorkspaceUpdated}
+                onProjectsChanged={onProjectsRefresh}
+                onCreateWorkspaceInvite={onCreateWorkspaceInvite}
               />
             ) : null}
             {view === 'design-systems' ? (
@@ -704,8 +751,9 @@ export function EntryShell({
         skills={skills}
         designSystems={designSystems}
         defaultDesignSystemId={defaultDesignSystemId}
+        currentWorkspaceId={currentWorkspaceId}
         templates={templates}
-        {...(onDeleteTemplate ? { onDeleteTemplate } : {})}
+        {...(canManageCurrentWorkspaceProjects && onDeleteTemplate ? { onDeleteTemplate } : {})}
         promptTemplates={promptTemplates}
         mediaProviders={config.mediaProviders}
         connectors={connectors}

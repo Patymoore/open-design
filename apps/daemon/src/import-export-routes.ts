@@ -1,4 +1,8 @@
 import type { Express } from 'express';
+import type {
+  ImportClaudeDesignResponse,
+  ImportFolderResponse,
+} from '@open-design/contracts';
 import type { RouteDeps } from './server-context.js';
 import {
   InlineAssetsLimitError,
@@ -24,15 +28,56 @@ export function registerImportRoutes(app: Express, ctx: RegisterImportRoutesDeps
     pruneExpiredImportNonces,
     verifyDesktopImportToken,
   } = ctx.auth;
-  const { getProject, insertProject, updateProject } = ctx.projectStore;
+  const {
+    getLocalUserId,
+    getCurrentWorkspaceId,
+    getWorkspace,
+    getWorkspaceMembership,
+    getProject,
+    insertWorkspaceActivity,
+    insertProject,
+    listWorkspaces,
+    setCurrentWorkspaceId,
+    updateProject,
+  } = ctx.projectStore;
   const { insertConversation } = ctx.conversations;
   const { setTabs } = ctx.projectFiles;
   const { validateProjectDesignSystemId } = ctx.validation;
+
+  function currentAccessibleWorkspaceId() {
+    const userId = getLocalUserId(db);
+    const savedWorkspaceId = getCurrentWorkspaceId(db, userId);
+    if (getWorkspace(db, savedWorkspaceId) && getWorkspaceMembership(db, savedWorkspaceId, userId)) {
+      return savedWorkspaceId;
+    }
+    const fallbackWorkspaceId = listWorkspaces(db, { userId })[0]?.id ?? 'local-personal';
+    setCurrentWorkspaceId(db, userId, fallbackWorkspaceId);
+    return fallbackWorkspaceId;
+  }
+
+  function requireImportWorkspace(workspaceId: unknown, res: any) {
+    const targetWorkspaceId =
+      typeof workspaceId === 'string' && workspaceId.trim()
+        ? workspaceId.trim()
+        : currentAccessibleWorkspaceId();
+    if (!getWorkspace(db, targetWorkspaceId)) {
+      sendApiError(res, 404, 'WORKSPACE_NOT_FOUND', 'workspace not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, targetWorkspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return targetWorkspaceId;
+  }
+
   app.post(
     '/api/import/claude-design',
     importUpload.single('file'),
     async (req, res) => {
       try {
+        const workspaceId = requireImportWorkspace(req.body?.workspaceId, res);
+        if (!workspaceId) return;
         if (!req.file)
           return res.status(400).json({ error: 'zip file required' });
         const originalName =
@@ -43,6 +88,7 @@ export function registerImportRoutes(app: Express, ctx: RegisterImportRoutesDeps
         }
         const id = randomId();
         const now = Date.now();
+        const currentUserId = getLocalUserId(db);
         const baseName =
           originalName.replace(/\.zip$/i, '').trim() || 'Claude Design import';
         const imported = await importClaudeDesignZip(
@@ -51,36 +97,57 @@ export function registerImportRoutes(app: Express, ctx: RegisterImportRoutesDeps
         );
         fs.promises.unlink(req.file.path).catch(() => {});
 
-        const project = insertProject(db, {
-          id,
-          name: baseName,
-          skillId: null,
-          designSystemId: null,
-          pendingPrompt: `Imported from Claude Design ZIP: ${originalName}. Continue editing ${imported.entryFile}.`,
-          metadata: {
-            kind: 'prototype',
-            importedFrom: 'claude-design',
-            entryFile: imported.entryFile,
-            sourceFileName: originalName,
-          },
-          createdAt: now,
-          updatedAt: now,
-        });
         const cid = randomId();
-        insertConversation(db, {
-          id: cid,
-          projectId: id,
-          title: 'Imported Claude Design project',
-          createdAt: now,
-          updatedAt: now,
-        });
-        setTabs(db, id, [imported.entryFile], imported.entryFile);
-        res.json({
+        const project = db.transaction(() => {
+          const insertedProject = insertProject(db, {
+            id,
+            name: baseName,
+            skillId: null,
+            designSystemId: null,
+            pendingPrompt: `Imported from Claude Design ZIP: ${originalName}. Continue editing ${imported.entryFile}.`,
+            workspaceId,
+            createdByUserId: currentUserId,
+            ownedByUserId: currentUserId,
+            metadata: {
+              kind: 'prototype',
+              importedFrom: 'claude-design',
+              entryFile: imported.entryFile,
+              sourceFileName: originalName,
+            },
+            createdAt: now,
+            updatedAt: now,
+          });
+          insertWorkspaceActivity(db, {
+            workspaceId,
+            actorUserId: currentUserId,
+            action: 'project.imported',
+            targetType: 'project',
+            targetId: insertedProject.id,
+            metadata: {
+              projectName: insertedProject.name,
+              source: 'claude-design',
+              sourceFileName: originalName,
+              createdByUserId: currentUserId,
+              ownedByUserId: currentUserId,
+            },
+          });
+          insertConversation(db, {
+            id: cid,
+            projectId: id,
+            title: 'Imported Claude Design project',
+            createdAt: now,
+            updatedAt: now,
+          });
+          setTabs(db, id, [imported.entryFile], imported.entryFile);
+          return insertedProject;
+        })();
+        const body: ImportClaudeDesignResponse = {
           project,
           conversationId: cid,
           entryFile: imported.entryFile,
           files: imported.files,
-        });
+        };
+        res.json(body);
       } catch (err: any) {
         if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
         res.status(400).json({ error: String(err) });
@@ -200,7 +267,9 @@ export function registerImportRoutes(app: Express, ctx: RegisterImportRoutesDeps
 
   app.post('/api/import/folder', async (req, res) => {
     try {
-      const { baseDir, name, skillId, designSystemId } = req.body || {};
+      const { baseDir, name, skillId, designSystemId, workspaceId } = req.body || {};
+      const targetWorkspaceId = requireImportWorkspace(workspaceId, res);
+      if (!targetWorkspaceId) return;
       if (typeof baseDir !== 'string' || !baseDir.trim()) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'baseDir required');
       }
@@ -286,6 +355,7 @@ export function registerImportRoutes(app: Express, ctx: RegisterImportRoutesDeps
 
       const id = randomId();
       const now = Date.now();
+      const currentUserId = getLocalUserId(db);
       const projectName =
         typeof name === 'string' && name.trim()
           ? name.trim()
@@ -301,34 +371,52 @@ export function registerImportRoutes(app: Express, ctx: RegisterImportRoutesDeps
         );
       }
 
-      const project = insertProject(db, {
-        id,
-        name: projectName,
-        skillId: skillId ?? null,
-        designSystemId: designSystemValidation.id,
-        pendingPrompt: null,
-        metadata: {
-          kind: 'prototype',
-          baseDir: normalizedPath,
-          importedFrom: 'folder',
-          entryFile,
-          ...(trustedPickerImport ? { fromTrustedPicker: true as const } : {}),
-        },
-        createdAt: now,
-        updatedAt: now,
-      });
-
       const cid = randomId();
-      insertConversation(db, {
-        id: cid,
-        projectId: id,
-        title: `Imported from ${projectName}`,
-        createdAt: now,
-        updatedAt: now,
-      });
-      if (entryFile) setTabs(db, id, [entryFile], entryFile);
-      /** @type {import('@open-design/contracts').ImportFolderResponse} */
-      const body = { project, conversationId: cid, entryFile };
+      const project = db.transaction(() => {
+        const insertedProject = insertProject(db, {
+          id,
+          name: projectName,
+          skillId: skillId ?? null,
+          designSystemId: designSystemValidation.id,
+          pendingPrompt: null,
+          workspaceId: targetWorkspaceId,
+          createdByUserId: currentUserId,
+          ownedByUserId: currentUserId,
+          metadata: {
+            kind: 'prototype',
+            baseDir: normalizedPath,
+            importedFrom: 'folder',
+            entryFile,
+            ...(trustedPickerImport ? { fromTrustedPicker: true as const } : {}),
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertWorkspaceActivity(db, {
+          workspaceId: targetWorkspaceId,
+          actorUserId: currentUserId,
+          action: 'project.imported',
+          targetType: 'project',
+          targetId: insertedProject.id,
+          metadata: {
+            projectName: insertedProject.name,
+            source: 'folder',
+            baseDir: normalizedPath,
+            createdByUserId: currentUserId,
+            ownedByUserId: currentUserId,
+          },
+        });
+        insertConversation(db, {
+          id: cid,
+          projectId: id,
+          title: `Imported from ${projectName}`,
+          createdAt: now,
+          updatedAt: now,
+        });
+        if (entryFile) setTabs(db, id, [entryFile], entryFile);
+        return insertedProject;
+      })();
+      const body: ImportFolderResponse = { project, conversationId: cid, entryFile };
       res.json(body);
     } catch (err: any) {
       sendApiError(res, 400, 'BAD_REQUEST', String(err));
@@ -343,7 +431,7 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
   const { db } = ctx;
   const { sendApiError } = ctx.http;
   const { PROJECTS_DIR } = ctx.paths;
-  const { getProject } = ctx.projectStore;
+  const { getLocalUserId, getProject, getWorkspaceMembership } = ctx.projectStore;
   const { readProjectFile, resolveProjectFilePath } = ctx.projectFiles;
   const { isSafeId } = ctx.validation;
   const {
@@ -354,6 +442,20 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
     daemonUrlRef,
     sanitizeArchiveFilename,
   } = ctx.exports;
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
+
   // Streams a ZIP of the project's on-disk tree so the "Download as .zip"
   // share menu can hand the user the actual files they uploaded — e.g. the
   // imported `ui-design/` folder — instead of a one-file snapshot of the
@@ -362,7 +464,8 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
   app.get('/api/projects/:id/archive', async (req, res) => {
     try {
       const root = typeof req.query?.root === 'string' ? req.query.root : '';
-      const project = getProject(db, req.params.id);
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       const { buffer, baseName } = await buildProjectArchive(
         PROJECTS_DIR,
         req.params.id,
@@ -399,12 +502,13 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
   // those files. Used by the Design Files panel multi-select download.
   app.post('/api/projects/:id/archive/batch', async (req, res) => {
     try {
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
       const { files } = req.body || {};
       if (!Array.isArray(files) || files.length === 0) {
         sendApiError(res, 400, 'BAD_REQUEST', 'files must be a non-empty array');
         return;
       }
-      const project = getProject(db, req.params.id);
       const { buffer } = await buildBatchArchive(
         PROJECTS_DIR,
         req.params.id,
@@ -443,6 +547,7 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
       );
     }
     try {
+      if (!getAccessibleProject(req.params.id, res)) return;
       const { fileName, title, deck } = req.body || {};
       if (typeof fileName !== 'string' || fileName.length === 0) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
@@ -500,6 +605,9 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
         return sendApiError(res, 400, 'BAD_REQUEST', 'invalid project id');
       }
 
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) return;
+
       const inlineRaw =
         typeof req.query.inline === 'string' ? req.query.inline.trim().toLowerCase() : '';
       if (!['1', 'true', 'yes', 'on'].includes(inlineRaw)) {
@@ -511,7 +619,6 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
         );
       }
 
-      const project = getProject(db, req.params.id);
       const relPath = (req.params as any)[0];
 
       // PR #1312 round-5 (lefarcen P2): stat the owner file BEFORE
@@ -647,7 +754,7 @@ export function registerFinalizeRoutes(app: Express, ctx: RegisterFinalizeRoutes
   const { db } = ctx;
   const { sendApiError } = ctx.http;
   const { PROJECTS_DIR, DESIGN_SYSTEMS_DIR } = ctx.paths;
-  const { getProject } = ctx.projectStore;
+  const { getLocalUserId, getProject, getWorkspaceMembership } = ctx.projectStore;
   const { isSafeId, validateExternalApiBaseUrl } = ctx.validation;
   const {
     defaultBaseUrlForFinalizeProtocol,
@@ -657,6 +764,20 @@ export function registerFinalizeRoutes(app: Express, ctx: RegisterFinalizeRoutes
     isFinalizeProviderProtocol,
     redactSecrets,
   } = ctx.finalize;
+
+  function getAccessibleProject(projectId: string, res: any) {
+    const project = getProject(db, projectId);
+    if (!project) {
+      sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return null;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return null;
+    }
+    return project;
+  }
+
   app.post('/api/projects/:id/finalize/:provider', async (req, res) => {
     const { apiKey, baseUrl, model, maxTokens, apiVersion, protocol: bodyProtocol } = req.body || {};
     try {
@@ -681,6 +802,10 @@ export function registerFinalizeRoutes(app: Express, ctx: RegisterFinalizeRoutes
       }
       if (bodyProtocol !== undefined && bodyProtocol !== protocol) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'body protocol must match route provider');
+      }
+      const project = getAccessibleProject(req.params.id, res);
+      if (!project) {
+        return;
       }
 
       if (typeof apiKey !== 'string' || !apiKey.trim()) {
@@ -713,11 +838,6 @@ export function registerFinalizeRoutes(app: Express, ctx: RegisterFinalizeRoutes
       }
       if (apiVersion !== undefined && typeof apiVersion !== 'string') {
         return sendApiError(res, 400, 'BAD_REQUEST', 'apiVersion must be a string when provided');
-      }
-
-      const project = getProject(db, req.params.id);
-      if (!project) {
-        return sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
       }
 
       const finalizeAbort = new AbortController();

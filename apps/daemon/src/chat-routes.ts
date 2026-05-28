@@ -31,12 +31,14 @@ const FEEDBACK_REASON_ALLOWLIST: ReadonlySet<string> = new Set([
   'other',
 ]);
 
-export interface RegisterChatRoutesDeps extends RouteDeps<'db' | 'design' | 'http' | 'chat' | 'agents' | 'critique' | 'validation' | 'lifecycle' | 'paths' | 'telemetry'> {}
+export interface RegisterChatRoutesDeps extends RouteDeps<'db' | 'design' | 'http' | 'chat' | 'agents' | 'critique' | 'validation' | 'lifecycle' | 'paths' | 'telemetry' | 'projectStore' | 'conversations'> {}
 
 export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
   const { db, design } = ctx;
   const { sendApiError, createSseResponse } = ctx.http;
   const { startChatRun, submitToolResultToRun } = ctx.chat;
+  const { getLocalUserId, getProject, getWorkspaceMembership } = ctx.projectStore;
+  const { getConversation } = ctx.conversations;
   const { testProviderConnection, testAgentConnection, getAgentDef, isKnownModel, sanitizeCustomModel, listProviderModels } = ctx.agents;
   const {
     handleCritiqueArtifact,
@@ -64,6 +66,78 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     }
     return false;
   };
+  const projectIsAccessibleToLocalUser = (projectId: unknown, res?: any) => {
+    if (typeof projectId !== 'string' || !projectId.trim()) return true;
+    const project = getProject(db, projectId.trim());
+    if (!project) {
+      if (res) sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+      return false;
+    }
+    if (!getWorkspaceMembership(db, project.workspaceId, getLocalUserId(db))) {
+      if (res) sendApiError(res, 403, 'FORBIDDEN', 'workspace membership required');
+      return false;
+    }
+    return true;
+  };
+  const getAccessibleProjectForRunContext = (
+    input: { projectId?: unknown; conversationId?: unknown },
+    res: any,
+  ) => {
+    const projectId = typeof input.projectId === 'string' && input.projectId.trim()
+      ? input.projectId.trim()
+      : '';
+    const conversationId = typeof input.conversationId === 'string' && input.conversationId.trim()
+      ? input.conversationId.trim()
+      : '';
+    if (projectId) {
+      const project = getProject(db, projectId);
+      if (!project) {
+        sendApiError(res, 404, 'PROJECT_NOT_FOUND', 'project not found');
+        return null;
+      }
+      if (!projectIsAccessibleToLocalUser(project.id, res)) return null;
+      if (!conversationId) return project;
+      const conversation = getConversation(db, conversationId);
+      if (!conversation) {
+        sendApiError(res, 404, 'CONVERSATION_NOT_FOUND', 'conversation not found');
+        return null;
+      }
+      if (conversation.projectId !== project.id) {
+        sendApiError(res, 409, 'CONVERSATION_PROJECT_MISMATCH', 'conversation does not belong to project');
+        return null;
+      }
+      return projectIsAccessibleToLocalUser(conversation.projectId, res) ? project : null;
+    }
+    if (!conversationId) return undefined;
+    const conversation = getConversation(db, conversationId);
+    if (!conversation) {
+      sendApiError(res, 404, 'CONVERSATION_NOT_FOUND', 'conversation not found');
+      return null;
+    }
+    return projectIsAccessibleToLocalUser(conversation.projectId, res)
+      ? getProject(db, conversation.projectId)
+      : null;
+  };
+  const getAccessibleRunForRoute = (runId: string, res: any) => {
+    const run = design.runs.get(runId);
+    if (!run) {
+      sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+      return null;
+    }
+    const projectId = typeof run.projectId === 'string' && run.projectId ? run.projectId : '';
+    const conversationId = typeof run.conversationId === 'string' && run.conversationId ? run.conversationId : '';
+    const accessProject = getAccessibleProjectForRunContext({ projectId, conversationId }, res);
+    if (accessProject === null) return null;
+    return run;
+  };
+  const runStatusIsVisibleToLocalUser = (run: any) => {
+    const projectId = typeof run.projectId === 'string' && run.projectId ? run.projectId : '';
+    if (projectId) return projectIsAccessibleToLocalUser(projectId);
+    const conversationId = typeof run.conversationId === 'string' && run.conversationId ? run.conversationId : '';
+    if (!conversationId) return true;
+    const conversation = getConversation(db, conversationId);
+    return conversation ? projectIsAccessibleToLocalUser(conversation.projectId) : false;
+  };
 
   // The canonical POST /api/runs handler lives in `server.ts` — it ran
   // first in Express's registration order long before this file existed,
@@ -73,27 +147,32 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
 
   app.get('/api/runs', (req, res) => {
     const { projectId, conversationId, status } = req.query;
+    if (typeof projectId === 'string' && projectId && !projectIsAccessibleToLocalUser(projectId, res)) return;
+    if (typeof conversationId === 'string' && conversationId) {
+      const accessProject = getAccessibleProjectForRunContext({ conversationId }, res);
+      if (accessProject === null) return;
+    }
     const runs = design.runs.list({ projectId, conversationId, status });
     /** @type {import('@open-design/contracts').ChatRunListResponse} */
-    const body = { runs: runs.map(design.runs.statusBody) };
+    const body = { runs: runs.filter(runStatusIsVisibleToLocalUser).map(design.runs.statusBody) };
     res.json(body);
   });
 
   app.get('/api/runs/:id', (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const run = getAccessibleRunForRoute(req.params.id, res);
+    if (!run) return;
     res.json(design.runs.statusBody(run));
   });
 
   app.get('/api/runs/:id/events', (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const run = getAccessibleRunForRoute(req.params.id, res);
+    if (!run) return;
     design.runs.stream(run, req, res);
   });
 
   app.post('/api/runs/:id/cancel', (req, res) => {
-    const run = design.runs.get(req.params.id);
-    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    const run = getAccessibleRunForRoute(req.params.id, res);
+    if (!run) return;
     design.runs.cancel(run);
     /** @type {import('@open-design/contracts').ChatRunCancelResponse} */
     const body = { ok: true };
@@ -110,6 +189,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     if (typeof submitToolResultToRun !== 'function') {
       return sendApiError(res, 501, 'NOT_IMPLEMENTED', 'tool-result wiring is not available');
     }
+    if (!getAccessibleRunForRoute(req.params.id, res)) return;
     const body = (req.body || {}) as {
       toolUseId?: unknown;
       content?: unknown;
@@ -154,6 +234,7 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
   // as a detached promise inside the bridge.
   app.post('/api/runs/:id/feedback', async (req, res) => {
     const runId = req.params.id;
+    if (!getAccessibleRunForRoute(runId, res)) return;
     const body = (req.body ?? {}) as Partial<{
       projectId: string;
       conversationId: string;
@@ -213,9 +294,16 @@ export function registerChatRoutes(app: Express, ctx: RegisterChatRoutesDeps) {
     if (isDaemonShuttingDown()) {
       return sendApiError(res, 503, 'UPSTREAM_UNAVAILABLE', 'daemon is shutting down');
     }
-    const run = design.runs.create();
+    const accessProject = getAccessibleProjectForRunContext({
+      projectId: req.body?.projectId,
+      conversationId: req.body?.conversationId,
+    }, res);
+    if (accessProject === null) return;
+    const meta = { ...(req.body || {}) };
+    if (!meta.projectId && accessProject) meta.projectId = accessProject.id;
+    const run = design.runs.create(meta);
     design.runs.stream(run, req, res);
-    design.runs.start(run, () => startChatRun(req.body || {}, run));
+    design.runs.start(run, () => startChatRun(meta, run));
   });
 
   // ---- Connection tests (single-shot JSON; no SSE) ------------------------

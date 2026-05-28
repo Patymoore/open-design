@@ -27,6 +27,7 @@ import {
   fetchLiveArtifactRefreshes,
   checkDeploymentLink,
   CLOUDFLARE_PAGES_PROVIDER_ID,
+  createLiveArtifactShare,
   DEFAULT_DEPLOY_PROVIDER_ID,
   deployProjectFile,
   fetchCloudflarePagesZones,
@@ -230,6 +231,8 @@ const MARKDOWN_CODE_BLOCK_ATTR = 'data-markdown-code-block';
 const MARKDOWN_COPY_BLOCK_ATTR = 'data-copy-code-block';
 const MARKDOWN_COPY_BUTTON_CLASS = 'markdown-code-copy';
 const MARKDOWN_COPY_TOAST_CLASS = 'markdown-code-toast';
+const DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE =
+  'Admin or owner access required to deploy workspace artifacts.';
 
 const DEPLOY_PROVIDER_OPTIONS: DeployProviderOption[] = [
   {
@@ -614,6 +617,8 @@ interface Props {
   // atomic tab-state update. The React module pointer uses this to jump to the
   // HTML entry that renders a module and drop the dead-end module tab.
   onOpenFileReplacing?: (openName: string, closeName: string) => void;
+  canSaveWorkspaceTemplates?: boolean;
+  canDeployWorkspaceArtifacts?: boolean;
 }
 
 export function FileViewer({
@@ -631,6 +636,8 @@ export function FileViewer({
   onSendBoardCommentAttachments,
   onFileSaved,
   onOpenFileReplacing,
+  canSaveWorkspaceTemplates = true,
+  canDeployWorkspaceArtifacts = true,
 }: Props) {
   const rendererMatch = artifactRendererRegistry.resolve({
     file,
@@ -668,6 +675,8 @@ export function FileViewer({
         onRemovePreviewComment={onRemovePreviewComment}
         onSendBoardCommentAttachments={onSendBoardCommentAttachments}
         onFileSaved={onFileSaved}
+        canSaveWorkspaceTemplates={canSaveWorkspaceTemplates}
+        canDeployWorkspaceArtifacts={canDeployWorkspaceArtifacts}
       />
     );
   }
@@ -720,11 +729,13 @@ export function LiveArtifactViewer({
   liveArtifact,
   liveArtifactEvents = [],
   onRefreshArtifacts,
+  canCreateViewerLinks = true,
 }: {
   projectId: string;
   liveArtifact: LiveArtifactWorkspaceEntry;
   liveArtifactEvents?: LiveArtifactEventItem[];
   onRefreshArtifacts?: () => Promise<void> | void;
+  canCreateViewerLinks?: boolean;
 }) {
   const t = useT();
   const tabs = useMemo(() => liveArtifactViewerTabs(t), [t]);
@@ -741,10 +752,15 @@ export function LiveArtifactViewer({
   const [refreshSuccess, setRefreshSuccess] = useState<string | null>(null);
   const [refreshEvents, setRefreshEvents] = useState<LiveArtifactRefreshEvent[]>([]);
   const [refreshHistory, setRefreshHistory] = useState<LiveArtifactRefreshLogEntry[]>([]);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [creatingViewerLinkTarget, setCreatingViewerLinkTarget] = useState<string | null>(null);
   const [presentMenuOpen, setPresentMenuOpen] = useState(false);
   const [inTabPresent, setInTabPresent] = useState(false);
   const presentWrapRef = useRef<HTMLDivElement | null>(null);
   const [chromeActionsHost, setChromeActionsHost] = useState<HTMLElement | null>(null);
+  const viewerLinkTarget = `${projectId}:${liveArtifact.artifactId}`;
+  const viewerLinkTargetRef = useRef(viewerLinkTarget);
+  viewerLinkTargetRef.current = viewerLinkTarget;
   useEffect(() => {
     if (typeof document === 'undefined') return;
     setChromeActionsHost(document.getElementById(APP_CHROME_FILE_ACTIONS_ID));
@@ -771,6 +787,7 @@ export function LiveArtifactViewer({
   useEffect(() => {
     setRefreshError(null);
     setRefreshSuccess(null);
+    setShareNotice(null);
     setRefreshEvents([]);
   }, [projectId, liveArtifact.artifactId]);
 
@@ -939,6 +956,7 @@ export function LiveArtifactViewer({
   const dataPayload = detail?.document?.dataJson ?? null;
   const currentRefreshStatus = detail?.refreshStatus ?? liveArtifact.refreshStatus;
   const isRunning = refreshing || currentRefreshStatus === 'running';
+  const creatingViewerLink = creatingViewerLinkTarget === viewerLinkTarget;
 
   const presentInThisTab = () => {
     setPresentMenuOpen(false);
@@ -957,6 +975,32 @@ export function LiveArtifactViewer({
     setPresentMenuOpen(false);
     if (typeof window === 'undefined') return;
     window.open(liveArtifactPreviewUrl(projectId, liveArtifact.artifactId), '_blank', 'noopener,noreferrer');
+  };
+  const copyViewerLink = async () => {
+    if (!canCreateViewerLinks) {
+      setShareNotice('Admin or owner access required to create viewer links.');
+      return;
+    }
+    if (creatingViewerLink) return;
+    const target = viewerLinkTarget;
+    setPresentMenuOpen(false);
+    setCreatingViewerLinkTarget(target);
+    try {
+      const share = await createLiveArtifactShare(projectId, liveArtifact.artifactId);
+      if (viewerLinkTargetRef.current !== target) return;
+      if (!share?.shareUrl) {
+        setShareNotice('Could not create viewer link.');
+        return;
+      }
+      const copied = await copyTextToClipboard(share.shareUrl);
+      if (viewerLinkTargetRef.current !== target) return;
+      setShareNotice(copied ? 'Viewer link copied.' : share.shareUrl);
+    } catch (error) {
+      if (viewerLinkTargetRef.current !== target) return;
+      setShareNotice(error instanceof Error ? error.message : 'Could not create viewer link.');
+    } finally {
+      setCreatingViewerLinkTarget((current) => (current === target ? null : current));
+    }
   };
   useEffect(() => {
     if (!inTabPresent) return;
@@ -996,6 +1040,21 @@ export function LiveArtifactViewer({
               <button role="menuitem" onClick={presentNewTab}>
                 <span className="present-icon"><Icon name="share" size={13} /></span>{' '}
                 {t('fileViewer.presentNewTab')}
+              </button>
+              <button
+                role="menuitem"
+                disabled={!canCreateViewerLinks || creatingViewerLink}
+                title={
+                  !canCreateViewerLinks
+                    ? 'Admin or owner access required to create viewer links.'
+                    : creatingViewerLink
+                      ? 'Creating viewer link...'
+                      : undefined
+                }
+                onClick={() => void copyViewerLink()}
+              >
+                <span className="present-icon"><Icon name="link" size={13} /></span>{' '}
+                Copy viewer link
               </button>
             </div>
           ) : null}
@@ -1111,7 +1170,15 @@ export function LiveArtifactViewer({
         </div>
       </div>
       <div className="viewer-body" ref={previewBodyRef}>
-        {refreshError ? (
+        {shareNotice ? (
+          <LiveArtifactRefreshNotice
+            tone={shareNotice.startsWith('Could not') ? 'error' : 'success'}
+            message={shareNotice}
+            action="Workspace viewer access only"
+            onDismiss={() => setShareNotice(null)}
+            dismissLabel={t('common.close')}
+          />
+        ) : refreshError ? (
           <LiveArtifactRefreshNotice
             tone="error"
             message={refreshError}
@@ -3529,6 +3596,8 @@ function HtmlViewer({
   onRemovePreviewComment,
   onSendBoardCommentAttachments,
   onFileSaved,
+  canSaveWorkspaceTemplates = true,
+  canDeployWorkspaceArtifacts = true,
 }: {
   projectId: string;
   projectKind: TrackingProjectKind;
@@ -3543,6 +3612,8 @@ function HtmlViewer({
   onRemovePreviewComment?: (commentId: string) => Promise<void>;
   onSendBoardCommentAttachments?: (attachments: ChatCommentAttachment[]) => Promise<void> | void;
   onFileSaved?: () => Promise<void> | void;
+  canSaveWorkspaceTemplates?: boolean;
+  canDeployWorkspaceArtifacts?: boolean;
 }) {
   const t = useT();
   const analytics = useAnalytics();
@@ -5338,6 +5409,10 @@ function HtmlViewer({
 
   async function handleSaveAsTemplate() {
     const name = templateName.trim();
+    if (!canSaveWorkspaceTemplates) {
+      setTemplateSaveError('Admin or owner access required to save workspace templates.');
+      return;
+    }
     if (!name) return;
     setSavingTemplate(true);
     setTemplateNote(null);
@@ -5370,6 +5445,7 @@ function HtmlViewer({
   }
 
   async function openDeployModal(nextProviderId: WebDeployProviderId = deployProviderId) {
+    if (!canDeployWorkspaceArtifacts) return;
     setShareMenuOpen(false);
     setDeployModalOpen(true);
     setDeployError(null);
@@ -5386,6 +5462,10 @@ function HtmlViewer({
   }
 
   async function saveDeployConfig() {
+    if (!canDeployWorkspaceArtifacts) {
+      setDeployError(DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE);
+      return null;
+    }
     setSavingDeployConfig(true);
     setDeployError(null);
     try {
@@ -5433,6 +5513,10 @@ function HtmlViewer({
   }
 
   async function deployToSelectedProvider() {
+    if (!canDeployWorkspaceArtifacts) {
+      setDeployError(DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE);
+      return;
+    }
     setDeploying(true);
     setDeployPhase('deploying');
     setDeployError(null);
@@ -5483,6 +5567,10 @@ function HtmlViewer({
 
   async function retryDeploymentLink() {
     const current = deployResult || deployment;
+    if (!canDeployWorkspaceArtifacts) {
+      setDeployError(DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE);
+      return;
+    }
     if (!current?.id) return;
     setDeployError(null);
     setDeployPhase('preparing-link');
@@ -6270,8 +6358,10 @@ function HtmlViewer({
                     type="button"
                     className="share-menu-item"
                     role="menuitem"
-                    disabled={savingTemplate}
+                    disabled={savingTemplate || !canSaveWorkspaceTemplates}
+                    title={!canSaveWorkspaceTemplates ? 'Admin or owner access required to save workspace templates.' : undefined}
                     onClick={() => {
+                      if (!canSaveWorkspaceTemplates) return;
                       fireShareExport('template', () => {
                         openSaveAsTemplateModal();
                       });
@@ -6293,7 +6383,10 @@ function HtmlViewer({
                       type="button"
                       className="share-menu-item"
                       role="menuitem"
+                      disabled={!canDeployWorkspaceArtifacts}
+                      title={!canDeployWorkspaceArtifacts ? DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE : undefined}
                       onClick={() => {
+                        if (!canDeployWorkspaceArtifacts) return;
                         const format =
                           option.id === 'cloudflare-pages'
                             ? 'cloudflare_pages'
@@ -6766,7 +6859,8 @@ function HtmlViewer({
               <button
                 type="button"
                 className="viewer-action primary"
-                disabled={savingTemplate || !templateName.trim()}
+                disabled={savingTemplate || !templateName.trim() || !canSaveWorkspaceTemplates}
+                title={!canSaveWorkspaceTemplates ? 'Admin or owner access required to save workspace templates.' : undefined}
                 onClick={() => {
                   void handleSaveAsTemplate();
                 }}
@@ -6830,7 +6924,8 @@ function HtmlViewer({
                 <button
                   type="button"
                   className="ghost-link button-like"
-                  disabled={savingDeployConfig}
+                  disabled={savingDeployConfig || !canDeployWorkspaceArtifacts}
+                  title={!canDeployWorkspaceArtifacts ? DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE : undefined}
                   onClick={() => {
                     void saveDeployConfig();
                   }}
@@ -6969,7 +7064,8 @@ function HtmlViewer({
                                 <button
                                   type="button"
                                   className="viewer-action"
-                                  disabled={deployPhase === 'preparing-link'}
+                                  disabled={deployPhase === 'preparing-link' || !canDeployWorkspaceArtifacts}
+                                  title={!canDeployWorkspaceArtifacts ? DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE : undefined}
                                   onClick={() => {
                                     void retryDeploymentLink();
                                   }}
@@ -7019,7 +7115,8 @@ function HtmlViewer({
               <button
                 type="button"
                 className="viewer-action primary"
-                disabled={deploying || savingDeployConfig || deployPhase !== 'idle'}
+                disabled={deploying || savingDeployConfig || deployPhase !== 'idle' || !canDeployWorkspaceArtifacts}
+                title={!canDeployWorkspaceArtifacts ? DEPLOY_WORKSPACE_ARTIFACTS_PERMISSION_MESSAGE : undefined}
                 onClick={() => {
                   void deployToSelectedProvider();
                 }}

@@ -144,7 +144,7 @@ type DesktopDiagnosticsExportResult =
 
 const project = {
   pickAndImport: (
-    init?: { name?: string; skillId?: string | null; designSystemId?: string | null },
+    init?: { name?: string; workspaceId?: string; skillId?: string | null; designSystemId?: string | null },
   ): Promise<OpenDesignHostProjectImportResult> =>
     ipcRenderer.invoke('dialog:pick-and-import', init ?? null)
       .then(normalizeProjectImportResult)

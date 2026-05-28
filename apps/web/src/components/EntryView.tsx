@@ -3,6 +3,8 @@ import type { DesignSystemGenerateSnapshot } from './DesignSystemFlow';
 import type {
   ConnectorDetail,
   ConnectorStatusResponse,
+  Workspace,
+  WorkspaceInviteWithStatus,
 } from '@open-design/contracts';
 import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
 import {
@@ -39,6 +41,7 @@ import type {
   PluginShareAction,
   PluginShareProjectOutcome,
 } from '../state/projects';
+import type { WorkspaceOperationResult } from '../state/workspaces';
 
 interface Props {
   // Union of functional skills + design templates — used for id-based
@@ -51,6 +54,9 @@ interface Props {
   designTemplates: SkillSummary[];
   designSystems: DesignSystemSummary[];
   projects: Project[];
+  workspaces: Workspace[];
+  currentWorkspaceId: string;
+  currentUserId: string | null;
   templates: ProjectTemplate[];
   onDeleteTemplate: (id: string) => Promise<boolean>;
   promptTemplates: PromptTemplateSummary[];
@@ -101,12 +107,21 @@ interface Props {
     action: PluginShareAction,
     locale?: string,
   ) => Promise<PluginShareProjectOutcome>;
+  onWorkspaceChange: (workspaceId: string) => Promise<void> | void;
+  onWorkspaceCreated: (workspace: Workspace) => Promise<void> | void;
+  onWorkspaceRemoved: (workspaceId: string) => Promise<void> | void;
+  onWorkspaceUpdated: (workspace: Workspace) => Promise<void> | void;
+  onProjectsRefresh: () => Promise<void> | void;
+  onCreateWorkspaceInvite: (
+    workspaceId: string,
+    options?: { role?: 'admin' | 'member'; expiresInDays?: number },
+  ) => Promise<WorkspaceOperationResult<WorkspaceInviteWithStatus>>;
   onImportClaudeDesign: (file: File) => Promise<void> | void;
   onImportFolder?: (baseDir: string) => Promise<void> | void;
   onImportFolderResponse?: (response: OpenDesignHostProjectImportSuccess) => Promise<void> | void;
   onOpenProject: (id: string) => void;
   onOpenLiveArtifact: (projectId: string, artifactId: string) => void;
-  onDeleteProject: (id: string) => void;
+  onDeleteProject: (id: string) => Promise<boolean | void> | boolean | void;
   onRenameProject: (id: string, name: string) => void;
   onChangeDefaultDesignSystem: (id: string) => void;
   onCreateDesignSystem?: () => void;
@@ -247,6 +262,9 @@ export function EntryView({
   designTemplates,
   designSystems,
   projects,
+  workspaces,
+  currentWorkspaceId,
+  currentUserId,
   templates,
   onDeleteTemplate,
   promptTemplates,
@@ -270,6 +288,12 @@ export function EntryView({
   promptTemplatesLoading: _promptTemplatesLoading = false,
   onCreateProject,
   onCreatePluginShareProject,
+  onWorkspaceChange,
+  onWorkspaceCreated,
+  onWorkspaceRemoved,
+  onWorkspaceUpdated,
+  onProjectsRefresh,
+  onCreateWorkspaceInvite,
   onImportClaudeDesign,
   onImportFolder,
   onImportFolderResponse,
@@ -341,6 +365,9 @@ export function EntryView({
       designTemplates={designTemplates}
       designSystems={designSystems}
       projects={projects}
+      workspaces={workspaces}
+      currentWorkspaceId={currentWorkspaceId}
+      currentUserId={currentUserId}
       templates={templates}
       onDeleteTemplate={onDeleteTemplate}
       promptTemplates={promptTemplates}
@@ -365,6 +392,12 @@ export function EntryView({
       onThemeChange={onThemeChange}
       onCreateProject={onCreateProject}
       onCreatePluginShareProject={onCreatePluginShareProject}
+      onWorkspaceChange={onWorkspaceChange}
+      onWorkspaceCreated={onWorkspaceCreated}
+      onWorkspaceRemoved={onWorkspaceRemoved}
+      onWorkspaceUpdated={onWorkspaceUpdated}
+      onProjectsRefresh={onProjectsRefresh}
+      onCreateWorkspaceInvite={onCreateWorkspaceInvite}
       onImportClaudeDesign={onImportClaudeDesign}
       {...(onImportFolder ? { onImportFolder } : {})}
       {...(onImportFolderResponse ? { onImportFolderResponse } : {})}

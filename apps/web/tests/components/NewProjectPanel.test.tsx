@@ -50,6 +50,7 @@ const templates: ProjectTemplate[] = [
   {
     id: 'tmpl-landing',
     name: 'Landing Page',
+    sourceProjectId: 'project-template-source',
     description: 'A saved landing page starter.',
     files: [{ name: 'prototype/App.jsx', path: 'prototype/App.jsx' }],
     createdAt: '2026-05-07T00:00:00.000Z',
@@ -635,6 +636,33 @@ describe('NewProjectPanel design system defaults', () => {
 });
 
 describe('NewProjectPanel folder import feedback', () => {
+  it('passes the current workspace id when importing a Claude Design zip', async () => {
+    const onImportClaudeDesign = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        currentWorkspaceId="team-workspace-1"
+        templates={templates}
+        onDeleteTemplate={vi.fn()}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+        onImportClaudeDesign={onImportClaudeDesign}
+      />,
+    );
+
+    const file = new File(['zip-bytes'], 'claude-design.zip', { type: 'application/zip' });
+    const input = container.querySelector('input[type="file"]');
+    expect(input).toBeInstanceOf(HTMLInputElement);
+
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [file] },
+    });
+
+    expect(onImportClaudeDesign).toHaveBeenCalledWith(file, 'team-workspace-1');
+  });
+
   it('shows an error when manual folder import rejects with a daemon message', async () => {
     const onImportFolder = vi.fn().mockRejectedValue(new Error('folder not found'));
 
@@ -715,6 +743,22 @@ describe('NewProjectPanel template deletion', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
+  it('hides template delete buttons when template deletion is unavailable', async () => {
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={templates}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'From template' }));
+    expect(screen.queryByLabelText(/delete template/i)).toBeNull();
+  });
+
   it('keeps the confirm dialog open with an inline error when onDeleteTemplate returns false', async () => {
     const onDelete = vi.fn().mockResolvedValue(false);
     render(
@@ -737,6 +781,30 @@ describe('NewProjectPanel template deletion', () => {
     await screen.findByText('Could not delete this template. Please try again.');
     expect(screen.queryByRole('alertdialog')).not.toBeNull();
     expect(onDelete).toHaveBeenCalledWith('tmpl-landing');
+  });
+
+  it('hides delete buttons for legacy templates without a source project', async () => {
+    render(
+      <NewProjectPanel
+        skills={skills}
+        designSystems={designSystems}
+        defaultDesignSystemId="clay"
+        templates={[{
+          id: 'tmpl-legacy',
+          name: 'Legacy starter',
+          description: 'A read-only starter.',
+          files: [{ name: 'index.html', path: 'index.html' }],
+          createdAt: '2026-05-07T00:00:00.000Z',
+        }]}
+        promptTemplates={[]}
+        onCreate={vi.fn()}
+        onDeleteTemplate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'From template' }));
+    expect(screen.getByText('Legacy starter')).toBeTruthy();
+    expect(screen.queryByLabelText(/delete template/i)).toBeNull();
   });
 
   it('does not close the confirm dialog when the backdrop is clicked mid-delete', async () => {

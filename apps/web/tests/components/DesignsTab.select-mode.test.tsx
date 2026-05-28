@@ -18,6 +18,7 @@ vi.mock('../../src/providers/registry', () => ({
 
 const project: Project = {
   id: 'project-1',
+  workspaceId: 'workspace-1',
   name: 'Landing refresh',
   skillId: null,
   designSystemId: null,

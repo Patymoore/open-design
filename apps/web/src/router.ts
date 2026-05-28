@@ -15,6 +15,7 @@ export type EntryHomeView =
   | 'projects'
   | 'tasks'
   | 'plugins'
+  | 'workspace'
   | 'design-systems'
   | 'integrations';
 
@@ -22,6 +23,8 @@ export type Route =
   | { kind: 'home'; view: EntryHomeView }
   | { kind: 'design-system-create' }
   | { kind: 'design-system-detail'; designSystemId: string }
+  | { kind: 'shareLiveArtifact'; token: string }
+  | { kind: 'workspaceInvite'; token: string }
   | {
       kind: 'project';
       projectId: string;
@@ -43,6 +46,12 @@ export function parseRoute(pathname: string): Route {
   if (parts.length === 0) return { kind: 'home', view: 'home' };
   if (parts[0] === 'onboarding') {
     return { kind: 'home', view: 'onboarding' };
+  }
+  if (parts[0] === 'share' && parts[1] === 'live-artifact' && parts[2]) {
+    return { kind: 'shareLiveArtifact', token: decodeURIComponent(parts[2]) };
+  }
+  if (parts[0] === 'workspace-invites' && parts[1]) {
+    return { kind: 'workspaceInvite', token: decodeURIComponent(parts[1]) };
   }
   if (parts[0] === 'projects') {
     if (parts[1]) {
@@ -91,6 +100,9 @@ export function parseRoute(pathname: string): Route {
   if (parts[0] === 'integrations') {
     return { kind: 'home', view: 'integrations' };
   }
+  if (parts[0] === 'workspace') {
+    return { kind: 'home', view: 'workspace' };
+  }
   // Phase 2B / spec §11.6 — marketplace deep UI routes. Two paths:
   //   /marketplace            → catalog grid (MarketplaceView)
   //   /marketplace/<pluginId> → detail page (PluginDetailView)
@@ -111,9 +123,16 @@ export function buildPath(route: Route): string {
     if (route.view === 'projects') return '/projects';
     if (route.view === 'tasks') return '/automations';
     if (route.view === 'plugins') return '/plugins';
+    if (route.view === 'workspace') return '/workspace';
     if (route.view === 'design-systems') return '/design-systems';
     if (route.view === 'integrations') return '/integrations';
     return '/';
+  }
+  if (route.kind === 'shareLiveArtifact') {
+    return `/share/live-artifact/${encodeURIComponent(route.token)}`;
+  }
+  if (route.kind === 'workspaceInvite') {
+    return `/workspace-invites/${encodeURIComponent(route.token)}`;
   }
   if (route.kind === 'marketplace') return '/marketplace';
   if (route.kind === 'marketplace-detail') return `/marketplace/${encodeURIComponent(route.pluginId)}`;

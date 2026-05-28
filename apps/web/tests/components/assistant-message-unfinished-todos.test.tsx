@@ -290,4 +290,41 @@ describe('AssistantMessage unfinished todo state', () => {
     fireEvent.click(screen.getByTestId('assistant-plugin-open-manifest-generated-plugin'));
     expect(onOpen).toHaveBeenCalledWith('generated-plugin/open-design.json');
   });
+
+  it('hides generated plugin publish actions when external sharing is unavailable', () => {
+    const onPluginFolderAgentAction = vi.fn();
+
+    render(
+      <AssistantMessage
+        message={{
+          ...messageWithEvents([
+            {
+              kind: 'tool_result',
+              toolUseId: 'write-manifest',
+              content: 'ok',
+              isError: false,
+            },
+          ]),
+          content: 'The plugin is ready to publish.',
+        }}
+        streaming={false}
+        projectId="project-1"
+        projectFiles={[
+          workspaceFile('generated-plugin/open-design.json'),
+          workspaceFile('generated-plugin/SKILL.md'),
+          workspaceFile('generated-plugin/examples/demo.md'),
+        ]}
+        onRequestPluginFolderAgentAction={onPluginFolderAgentAction}
+        canSharePluginFolders={false}
+        isLast
+      />,
+    );
+
+    expect(screen.getByTestId('assistant-plugin-install-generated-plugin')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-plugin-publish-generated-plugin')).toBeNull();
+    expect(screen.queryByTestId('assistant-plugin-contribute-generated-plugin')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('assistant-plugin-install-generated-plugin'));
+    expect(onPluginFolderAgentAction).toHaveBeenCalledWith('generated-plugin', 'install');
+  });
 });
