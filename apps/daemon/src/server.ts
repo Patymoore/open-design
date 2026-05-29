@@ -1049,6 +1049,40 @@ export function resolveSafeProjectAttachments(cwd, attachments, opts = {}) {
   return out;
 }
 
+export function resolveSafePromptImagePaths(imagePaths, opts = {}) {
+  if (!Array.isArray(imagePaths) || imagePaths.length === 0) {
+    return { safeImages: [], oversizedImages: [] };
+  }
+  const pathImpl = opts.pathImpl ?? path;
+  const existsSync = opts.existsSync ?? fs.existsSync;
+  const statSync = opts.statSync ?? fs.statSync;
+  const uploadDir = pathImpl.resolve(opts.uploadDir ?? UPLOAD_DIR);
+  const maxBytes = Number.isFinite(opts.maxBytes)
+    ? Number(opts.maxBytes)
+    : MAX_CHAT_IMAGE_BYTES;
+  const safeImages = [];
+  const oversizedImages = [];
+
+  for (const inputPath of imagePaths) {
+    if (typeof inputPath !== 'string' || inputPath.length === 0) continue;
+    try {
+      const resolved = pathImpl.resolve(inputPath);
+      if (!isPathWithin(uploadDir, resolved) || !existsSync(resolved)) continue;
+      const stat = statSync(resolved);
+      if (!stat.isFile()) continue;
+      if (typeof stat.size === 'number' && stat.size > maxBytes) {
+        oversizedImages.push({ path: inputPath, sizeBytes: stat.size });
+        continue;
+      }
+      safeImages.push(inputPath);
+    } catch {
+      // Drop malformed paths; prompt images are advisory context.
+    }
+  }
+
+  return { safeImages, oversizedImages };
+}
+
 function resolveProcessResourcesPath() {
   if (
     typeof process.resourcesPath === 'string' &&
@@ -2973,6 +3007,24 @@ function openNativeFolderDialog() {
  */
 function createSseErrorPayload(code, message, init = {}) {
   return { message, error: createCompatApiError(code, message, init) };
+}
+
+const MAX_CHAT_IMAGE_BYTES = 1024 * 1024;
+
+function rewriteKnownAgentStreamError(agentId, message, failureText = '') {
+  const rawMessage =
+    typeof message === 'string' && message.trim()
+      ? message.trim()
+      : 'Agent stream error';
+  const combined = `${rawMessage}\n${failureText}`;
+  if (
+    /bufio\.scanner:\s*token too long/i.test(combined) &&
+    /opencode/i.test(combined) &&
+    (agentId === 'opencode' || agentId === 'amr' || /json-rpc id \d+/i.test(combined))
+  ) {
+    return 'The run failed due to an unknown upstream streaming error. Please retry.';
+  }
+  return rawMessage;
 }
 
 function createAmrModelUnavailablePayload(model, init = {}) {
@@ -10458,13 +10510,16 @@ export async function startServer({
     }
     if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
-    // Sanitise supplied image paths: must live under UPLOAD_DIR.
-    const safeImages = imagePaths.filter((p) => {
-      const resolved = path.resolve(p);
-      return (
-        resolved.startsWith(UPLOAD_DIR + path.sep) && fs.existsSync(resolved)
+    // Sanitise supplied image paths: must live under UPLOAD_DIR and stay
+    // below the prompt-image safety cap.
+    const { safeImages, oversizedImages } = resolveSafePromptImagePaths(imagePaths);
+    if (oversizedImages.length > 0) {
+      return design.runs.fail(
+        run,
+        'BAD_REQUEST',
+        'Image attachments must be 1 MB or smaller.',
       );
-    });
+    }
     const amrStagedImages =
       def.id === 'amr'
         ? await stageAmrImagePaths(cwd ?? PROJECT_ROOT, safeImages, UPLOAD_DIR)
@@ -11619,14 +11674,18 @@ export async function startServer({
     const sendAgentEvent = (ev) => {
       if (ev?.type === 'error') {
         if (agentStreamError) return;
-        agentStreamError = String(ev.message || 'Agent stream error');
-        clearInactivityWatchdog();
         const failureText = [
-          agentStreamError,
+          String(ev.message || 'Agent stream error'),
           typeof ev.raw === 'string' ? ev.raw : '',
           agentStdoutTail,
           agentStderrTail,
         ].join('\n');
+        agentStreamError = rewriteKnownAgentStreamError(
+          agentId,
+          String(ev.message || 'Agent stream error'),
+          failureText,
+        );
+        clearInactivityWatchdog();
         const authFailure = classifyAgentAuthFailure(agentId, failureText);
         if (authFailure?.status === 'missing') {
           send('error', createSseErrorPayload(
@@ -11948,6 +12007,19 @@ export async function startServer({
             detail || 'The model service returned an error.',
             { retryable: true },
           ));
+        } else {
+          const rewritten = rewriteKnownAgentStreamError(
+            def.id,
+            (agentStderrTail || agentStdoutTail || '').trim(),
+            `${agentStderrTail}\n${agentStdoutTail}`,
+          );
+          if (rewritten !== 'Agent stream error') {
+            send('error', createSseErrorPayload(
+              'AGENT_EXECUTION_FAILED',
+              rewritten,
+              { retryable: true },
+            ));
+          }
         }
       }
       // Reconcile any HTML artifacts that were written during this run
