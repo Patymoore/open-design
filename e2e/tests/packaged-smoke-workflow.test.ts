@@ -118,6 +118,16 @@ describe("packaged smoke workflow", () => {
     expect(workflow).toContain('OD_BETA_WINDOWS_SIGNING_ENABLED: ${{ steps.sign_probe.outputs.enabled }}');
     expect(workflow).toContain('OD_BETA_WINDOWS_SIGNING_PROBED: ${{ steps.sign_probe.outputs.probed }}');
     expect(workflow).toContain('OD_BETA_WINDOWS_SIGNTOOL_PATH: ${{ steps.sign_probe.outputs.signtool_path }}');
+    expect(workflow).toContain("Publish beta candidate platform to Nexu S3");
+    expect(workflow).toContain("publish-platform.ps1");
+    expect(workflow).toContain("Upload windows publish manifest");
+    expect(workflow).toContain("open-design-beta-win-publish-manifest");
+    expect(workflow).toContain("name: Publish beta metadata to Nexu S3");
+    expect(workflow).toContain("publish-beta-metadata.ps1");
+    expect(workflow).toContain("actions/download-artifact@v8");
+    expect(workflow).toContain('STATE_SOURCE: ${{ needs.metadata.outputs.state_source }}');
+    expect(workflow).toContain('probe-beta-public-read.ps1 -MetadataUrl "${{ steps.publish_metadata.outputs.metadata_url }}"');
+    expect(workflow).not.toContain("publish-beta.ps1 -IndexPath");
   });
 });
 

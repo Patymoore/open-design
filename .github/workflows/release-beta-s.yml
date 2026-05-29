@@ -146,8 +146,8 @@ jobs:
           @echo on
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\build-beta.ps1 -Platform win -Lane self-hosted -Namespace release-beta-win -ReleaseVersion "${{ inputs.release_version || needs.metadata.outputs.beta_version }}" -MetadataUrl "${{ inputs.s3_public_origin }}/beta/latest/metadata.json" -SmokeMode "${{ inputs.smoke_mode }}" -Target "${{ inputs.target }}" -SignMode "${{ inputs.sign_mode }}"
 
-      - name: Publish beta candidate to Nexu S3
-        id: publish
+      - name: Publish beta candidate platform to Nexu S3
+        id: publish_platform
         if: ${{ inputs.publish }}
         shell: cmd
         env:
@@ -159,14 +159,14 @@ jobs:
           S3_PUBLIC_ORIGIN: ${{ inputs.s3_public_origin || vars.NEXU_S3_PUBLIC_ORIGIN }}
         run: |
           @echo on
-          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\publish-beta.ps1 -IndexPath "C:\.tmp\runner\od-beta\win\index\index.json" -ChannelPrefix beta -Platform win -Probe -Publish
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\publish-platform.ps1 -IndexPath "C:\.tmp\runner\od-beta\win\index\index.json" -ChannelPrefix beta -Platform win -Probe -Publish
 
-      - name: Probe published beta candidate public read
+      - name: Upload windows publish manifest
         if: ${{ inputs.publish }}
-        shell: cmd
-        run: |
-          @echo on
-          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\probe-beta-public-read.ps1 -MetadataUrl "${{ steps.publish.outputs.metadata_url }}"
+        uses: actions/upload-artifact@v7
+        with:
+          name: open-design-beta-win-publish-manifest
+          path: C:\.tmp\runner\od-beta\win\publish\manifests\win.json
 
       - name: Publish local summary
         if: ${{ always() }}
@@ -178,3 +178,54 @@ jobs:
           echo runner_tool_cache=%RUNNER_TOOL_CACHE%
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "if ($env:GITHUB_WORKSPACE -like 'C:\Users\runner\Projects\*') { throw 'GITHUB_WORKSPACE must not point at the operator Projects directory' }"
           if exist "C:\.tmp\runner\od-beta\win\summary.md" echo local_summary=C:\.tmp\runner\od-beta\win\summary.md
+
+  publish:
+    name: Publish beta metadata to Nexu S3
+    needs:
+      - metadata
+      - build_win
+    if: >-
+      ${{
+        always() &&
+        !cancelled() &&
+        needs.metadata.result == 'success' &&
+        needs.build_win.result == 'success' &&
+        inputs.enable_win &&
+        inputs.publish
+      }}
+    runs-on: [self-hosted, Windows, X64, nexu-win, release-beta]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          clean: false
+          fetch-depth: 1
+          lfs: false
+
+      - name: Download windows publish manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: open-design-beta-win-publish-manifest
+          path: ${{ runner.temp }}\release-platform-manifests
+
+      - name: Publish beta metadata to Nexu S3
+        id: publish_metadata
+        shell: cmd
+        env:
+          S3_ENDPOINT: ${{ secrets.NEXU_S3_ENDPOINT }}
+          S3_REGION: ${{ secrets.NEXU_S3_REGION }}
+          S3_BUCKET: ${{ secrets.NEXU_S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.NEXU_S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.NEXU_S3_SECRET_ACCESS_KEY }}
+          S3_PUBLIC_ORIGIN: ${{ inputs.s3_public_origin || vars.NEXU_S3_PUBLIC_ORIGIN }}
+          STATE_SOURCE: ${{ needs.metadata.outputs.state_source }}
+        run: |
+          @echo on
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\publish-beta-metadata.ps1 -ManifestRoot "${{ runner.temp }}\release-platform-manifests" -ChannelPrefix beta -Publish
+
+      - name: Probe published beta candidate public read
+        shell: cmd
+        run: |
+          @echo on
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .github\scripts\release\probe-beta-public-read.ps1 -MetadataUrl "${{ steps.publish_metadata.outputs.metadata_url }}"
