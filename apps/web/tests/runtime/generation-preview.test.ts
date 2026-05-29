@@ -112,6 +112,94 @@ describe('generation preview helpers', () => {
     expect(state?.activityLabel).toBe('Sketching the hero section layout');
   });
 
+  it('derives a concrete sub-status and task count while generating', () => {
+    const assistant: ChatMessage = {
+      id: 'a1',
+      role: 'assistant',
+      content: '',
+      runStatus: 'running',
+      startedAt: Date.now(),
+      events: [
+        {
+          kind: 'tool_use',
+          id: 't1',
+          name: 'TodoWrite',
+          input: {
+            todos: [
+              { content: 'Plan layout', status: 'completed' },
+              { content: 'Write index.html', activeForm: 'Writing index.html', status: 'in_progress' },
+              { content: 'Self-check', status: 'pending' },
+            ],
+          },
+        },
+      ],
+    };
+    const state = buildGenerationPreviewState({
+      designSystemProject: false,
+      messages: [assistant],
+      streaming: true,
+      activeTab: null,
+      projectFiles: [],
+      liveArtifacts: [],
+    });
+    expect(state?.detailLabel).toBe('Writing index.html');
+    // The in-progress task counts toward `done`, matching the chat todo card.
+    expect(state?.todoProgress).toEqual({ done: 2, total: 3 });
+  });
+
+  it('falls back to the latest write target when no plan is present', () => {
+    const assistant: ChatMessage = {
+      id: 'a1',
+      role: 'assistant',
+      content: '',
+      runStatus: 'running',
+      startedAt: Date.now(),
+      events: [
+        { kind: 'text', text: 'Writing the page now.' },
+        { kind: 'tool_use', id: 't1', name: 'Write', input: { file_path: 'src/index.html' } },
+      ],
+    };
+    const state = buildGenerationPreviewState({
+      designSystemProject: false,
+      messages: [assistant],
+      streaming: true,
+      activeTab: null,
+      projectFiles: [],
+      liveArtifacts: [],
+    });
+    expect(state?.detailLabel).toBe('index.html');
+    expect(state?.todoProgress).toBeNull();
+  });
+
+  it('omits sub-status data once the run is no longer generating', () => {
+    const assistant: ChatMessage = {
+      id: 'a1',
+      role: 'assistant',
+      content: 'Partial work',
+      runStatus: 'canceled',
+      startedAt: Date.now(),
+      events: [
+        {
+          kind: 'tool_use',
+          id: 't1',
+          name: 'TodoWrite',
+          input: { todos: [{ content: 'Write index.html', status: 'in_progress' }] },
+        },
+      ],
+    };
+    const state = buildGenerationPreviewState({
+      designSystemProject: false,
+      messages: [assistant],
+      streaming: false,
+      activeTab: null,
+      projectFiles: [],
+      liveArtifacts: [],
+    });
+    expect(state?.phase).toBe('stopped');
+    expect(state?.detailLabel).toBeNull();
+    expect(state?.todoProgress).toBeNull();
+  });
+
   it('keeps a paused surface when the run was stopped without a preview', () => {
     const assistant: ChatMessage = {
       id: 'a1',

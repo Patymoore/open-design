@@ -52,6 +52,11 @@ export function GenerationPreviewStage({ model, onRetry }: Props) {
   const markIcon =
     model.phase === 'failed' ? 'close' : model.phase === 'stopped' ? 'stop' : 'sparkles';
 
+  // Once concrete sub-status (current task + count) is available we let it
+  // carry the live signal and drop the higher-level narration line, so only
+  // one dynamic line shows at a time.
+  const showSubstatus = generating && Boolean(model.detailLabel || model.todoProgress);
+
   return (
     <section
       className={styles.stage}
@@ -64,9 +69,11 @@ export function GenerationPreviewStage({ model, onRetry }: Props) {
         <Icon name={markIcon} size={24} />
       </div>
       <h1 className={styles.title}>{title}</h1>
-      <p className={styles.lead} data-live={generating && Boolean(model.activityLabel)}>
-        {lead}
-      </p>
+      {showSubstatus ? null : (
+        <p className={styles.lead} data-live={generating && Boolean(model.activityLabel)}>
+          {lead}
+        </p>
+      )}
       <div
         className={styles.progress}
         data-active={generating}
@@ -96,6 +103,21 @@ export function GenerationPreviewStage({ model, onRetry }: Props) {
           </li>
         ))}
       </ol>
+      {generating && (model.detailLabel || model.todoProgress) ? (
+        <div
+          key={`${model.detailLabel ?? ''}-${model.todoProgress?.done ?? ''}`}
+          className={styles.substatus}
+        >
+          {model.detailLabel ? (
+            <span className={styles.substatusLabel}>{model.detailLabel}</span>
+          ) : null}
+          {model.todoProgress ? (
+            <span className={styles.substatusCount}>
+              {model.todoProgress.done}/{model.todoProgress.total}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {generating ? (
         <div className={styles.meta}>
           <span data-testid="generation-preview-elapsed">

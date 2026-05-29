@@ -1,5 +1,6 @@
 import type { AgentEvent, ChatMessage, LiveArtifactSummary, ProjectFile } from '../types';
 import { isLiveArtifactTabId, liveArtifactTabId } from '../types';
+import { isTodoWriteToolName, latestTodosFromEvents, type TodoItem } from './todos';
 
 export type GenerationStepStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -23,11 +24,28 @@ export interface GenerationPreviewModel {
    * shows real movement instead of a frozen card.
    */
   activityLabel: string | null;
+  /**
+   * Concrete sub-status for the long "generating" phase, e.g. the
+   * in-progress task ("Writing index.html") or the current write target.
+   * Lets the middle step show movement without splitting into more
+   * (less reliable) discrete steps. Only set while generating.
+   */
+  detailLabel: string | null;
+  /**
+   * Task counter derived from the agent's TodoWrite plan, e.g. 3/8. The
+   * in-progress task counts toward `done` to match the chat-side todo card.
+   * Only set while generating and when the agent emitted a plan.
+   */
+  todoProgress: { done: number; total: number } | null;
 }
 
 // Matches the inline forms the agent emits to ask the user clarifying
 // questions before continuing (see artifacts/question-form.ts).
 const QUESTION_FORM_RE = /<(question-form|ask-question)\b/i;
+
+// Tools that represent concrete generation work (writing/editing files,
+// running commands) as opposed to reads/plans.
+const WRITE_LIKE_TOOL_RE = /^(write|edit|multiedit|bash|run_terminal_cmd)$/i;
 
 const PREVIEWABLE_FILE = /\.(html?|jsx|tsx|svg|md|pdf|pptx?|key)$/i;
 
@@ -137,6 +155,18 @@ export function buildGenerationPreviewState(input: {
 
   const startedAt = latestAssistant.startedAt ?? latestAssistant.createdAt ?? Date.now();
 
+  const generating = phase === 'generating';
+  const todos = generating ? latestTodosFromEvents(events) : [];
+  const todoProgress =
+    todos.length > 0
+      ? {
+          done: todos.filter(
+            (todo) => todo.status === 'completed' || todo.status === 'in_progress',
+          ).length,
+          total: todos.length,
+        }
+      : null;
+
   return {
     startedAt,
     steps: derived.steps,
@@ -144,7 +174,9 @@ export function buildGenerationPreviewState(input: {
     failed,
     errorMessage: derived.errorMessage,
     progressPercent: derived.progressPercent,
-    activityLabel: phase === 'generating' ? latestActivityLabel(events) : null,
+    activityLabel: generating ? latestActivityLabel(events) : null,
+    detailLabel: generating ? generationDetailLabel(events, todos) : null,
+    todoProgress,
     retryTarget: failed ? latestAssistant : null,
   };
 }
@@ -256,6 +288,40 @@ function latestActivityLabel(events: AgentEvent[]): string | null {
 function truncateActivity(text: string): string {
   const collapsed = text.replace(/\s+/g, ' ').trim();
   return collapsed.length > 80 ? `${collapsed.slice(0, 79)}…` : collapsed;
+}
+
+// The concrete operation behind the "generating" step. Prefers the agent's
+// own in-progress task label (TodoWrite `activeForm`/content), then falls
+// back to the most recent write/edit target file so the middle phase still
+// shows movement when no plan was emitted.
+function generationDetailLabel(events: AgentEvent[], todos: TodoItem[]): string | null {
+  const active = todos.find((todo) => todo.status === 'in_progress');
+  if (active) {
+    const label = active.activeForm?.trim() || active.content.trim();
+    if (label) return truncateActivity(label);
+  }
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (
+      event.kind === 'tool_use'
+      && typeof event.name === 'string'
+      && !isTodoWriteToolName(event.name)
+      && WRITE_LIKE_TOOL_RE.test(event.name)
+    ) {
+      const target = toolTargetName(event.input);
+      if (target) return target;
+    }
+  }
+  return null;
+}
+
+function toolTargetName(input: unknown): string | null {
+  if (!input || typeof input !== 'object') return null;
+  const obj = input as Record<string, unknown>;
+  const raw = obj.file_path ?? obj.filePath ?? obj.path ?? obj.file;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const segments = raw.trim().split(/[\\/]/);
+  return segments[segments.length - 1] || raw.trim();
 }
 
 function eventsHaveStatus(events: AgentEvent[], labels: string[]): boolean {

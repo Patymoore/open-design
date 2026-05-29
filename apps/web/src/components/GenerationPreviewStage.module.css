@@ -142,6 +142,35 @@
   list-style: none;
 }
 
+/* Dynamic sub-status for the long "generating" step: the concrete task
+   plus a count, refreshed as the agent advances so the middle phase keeps
+   moving without splitting into more (less reliable) discrete steps. */
+.substatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  font-size: 12px;
+  color: var(--text-faint);
+  animation: leadFade 240ms ease-out;
+}
+
+.substatusLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.substatusCount {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .step {
   display: inline-flex;
   align-items: center;
@@ -222,7 +251,8 @@
   .progress[data-active='true']::after,
   .stepDot[data-running='true'],
   .lead[data-live='true'],
-  .step {
+  .step,
+  .substatus {
     animation: none;
   }
 }
