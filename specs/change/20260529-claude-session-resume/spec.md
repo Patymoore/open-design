@@ -210,10 +210,19 @@ turn N+1: resolveResumeDecision(conv, agent, epoch, forceFresh, caps)
 - `apps/daemon/src/server.ts`: `resolveResumeDecision()`, pin-on-success,
   resume-aware `skipTranscript`, anti-echo guard line, runtime-rejection
   fallback.
-- `apps/web/src/`: force-fresh control in the composer; bump the live
-  agent-scoped epoch on history edit/retry, scoped to the agent(s) whose
-  `scopeHistoryToAgent` slice the edited/truncated turn belongs to (so editing a
-  Codex-only turn does not invalidate Claude's pinned session).
+- `apps/web/src/`: force-fresh control in the composer; on a history
+  edit/truncate/retry, bump the live epoch of **every agent whose
+  `scopeHistoryToAgent` output changes** as a result of the mutation — defined by
+  diffing each agent's scoped slice before vs after, not by which agent's slice
+  literally contains the mutated turn. This matters because `scopeHistoryToAgent`
+  cuts each agent's slice at the most recent assistant turn from a *different*
+  agent (`apps/web/src/providers/daemon.ts:127-135`), so truncating or retrying
+  that foreign-agent boundary turn (or any of its descendants) shifts or removes
+  the active agent's resumed suffix even though the mutated turn is not inside the
+  active agent's slice — that case must bump the active agent's epoch too. The
+  diff-the-scoped-output rule still prevents a Codex-only edit that does not change
+  Claude's scoped slice (e.g. editing the *content* of a Codex turn that stays the
+  boundary) from invalidating Claude's pinned session.
 - `apps/daemon/src/cli.ts`: `--fresh-session` flag on the run path (dual-track).
 
 ### Design Decisions
@@ -248,9 +257,15 @@ turn N+1: resolveResumeDecision(conv, agent, epoch, forceFresh, caps)
    history — the actual prompt source — never changed, making the invalidation
    model stricter than the prompt source. The live epoch therefore lives in the
    new `conversation_agent_epoch` table keyed on `(conversationId, agentId)` (the
-   web edit/retry path issues the bump only for the agent(s) whose scoped slice
-   the mutation touches); the pinned `conversation_agent_session.historyEpoch`
-   records the epoch a session was produced under. At run start the daemon reads
+   web edit/retry path bumps the epoch of every agent whose `scopeHistoryToAgent`
+   output changes under the mutation — which includes the active agent when a
+   truncate/retry lands on the most recent *foreign-agent* boundary turn or its
+   descendants, since `scopeHistoryToAgent` cuts the slice at that boundary
+   (`apps/web/src/providers/daemon.ts:127-135`) and dropping/regenerating it shifts
+   or removes the active agent's resumed suffix even though the mutated turn sits
+   outside that agent's slice); the pinned
+   `conversation_agent_session.historyEpoch` records the epoch a session was
+   produced under. At run start the daemon reads
    `conversation_agent_epoch.history_epoch` for the active `(conversation, agent)`
    to form `currentHistoryEpoch`, then `resolveResumeDecision()` compares it
    against the pinned row; a mismatch invalidates resume (Claude's immutable
@@ -294,9 +309,18 @@ per `AGENTS.md`:
   full transcript present.
 - **History-edit epoch guard.** Editing a prior turn in the active agent's scoped
   history bumps that agent's epoch → no `--resume` AND full transcript present.
-  Conversely, editing a turn that belongs only to a *different* agent's scoped
-  history (e.g. a Codex-only turn) must NOT bump Claude's epoch → Claude still
-  resumes with `--resume`.
+  Conversely, editing the *content* of a turn that belongs only to a *different*
+  agent's scoped history without changing Claude's scoped slice (e.g. a Codex-only
+  turn that stays the boundary) must NOT bump Claude's epoch → Claude still resumes
+  with `--resume`.
+- **Cross-agent boundary retry/truncate guard.** History contains a Codex
+  (foreign-agent) assistant turn followed by later Claude turns, so Claude's
+  `scopeHistoryToAgent` slice starts just after that Codex boundary turn. A
+  retry-from-message or truncate **on the Codex boundary turn** (or its
+  descendants) drops or shifts Claude's resumed suffix, so it MUST bump Claude's
+  epoch → no `--resume` AND full transcript present — even though the mutated turn
+  sits outside Claude's own slice. (This is the case a "mutated turn is inside the
+  slice" rule would miss: Claude could otherwise resume against stale history.)
 - **Work-dir guard.** A pinned session whose `workDir` differs from the current
   run's (e.g. the conversation's project cwd moved) → no `--resume` AND full
   transcript present.
