@@ -629,6 +629,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+@media (max-width: 700px) {
+  .session-mode-toggle__option {
+    padding: 0 6px;
+  }
+  .session-mode-toggle__label {
+    display: none;
+  }
+}
 .composer-import {
   background: transparent;
   border: 1px solid var(--border);

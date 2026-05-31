@@ -7,6 +7,7 @@ import type {
   Conversation,
   ProjectFile,
 } from '../../types';
+import type { ChatSessionMode } from '@open-design/contracts';
 import { useConversationChat } from './useConversationChat';
 import styles from './SideChatTab.module.css';
 
@@ -28,6 +29,7 @@ interface Props {
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onRenameConversation?: (id: string, title: string) => void;
+  onSessionModeChange?: (id: string, mode: ChatSessionMode) => void;
   onNewConversation?: () => void;
   /** Forward produced-file / tool-card open requests to the workspace. */
   onRequestOpenFile?: (name: string) => void;
@@ -49,14 +51,19 @@ export function SideChatTab({
   onSelectConversation,
   onDeleteConversation,
   onRenameConversation,
+  onSessionModeChange,
   onNewConversation,
   onRequestOpenFile,
 }: Props) {
   const t = useT();
+  const sessionMode =
+    conversations.find((conversation) => conversation.id === conversationId)?.sessionMode
+    ?? 'design';
   const chat = useConversationChat(projectId, conversationId, {
     config,
     agentsById,
     locale,
+    sessionMode,
   });
 
   return (
@@ -73,6 +80,8 @@ export function SideChatTab({
           streaming={chat.streaming}
           error={chat.error}
           projectId={projectId}
+          sessionMode={sessionMode}
+          onSessionModeChange={(mode) => onSessionModeChange?.(conversationId, mode)}
           projectFiles={projectFiles}
           projectFileNames={projectFileNames}
           onEnsureProject={async () => projectId}

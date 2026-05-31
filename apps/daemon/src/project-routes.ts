@@ -323,13 +323,14 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
       });
       // Seed a default conversation so the UI always has somewhere to write.
       const cid = randomId();
+      const initialSessionMode = normalizeChatSessionMode(
+        req.body?.conversationMode ?? req.body?.sessionMode,
+      );
       insertConversation(db, {
         id: cid,
         projectId: id,
         title: null,
-        sessionMode: normalizeChatSessionMode(
-          req.body?.conversationMode ?? req.body?.sessionMode,
-        ),
+        sessionMode: initialSessionMode,
         createdAt: now,
         updatedAt: now,
       });
@@ -341,7 +342,7 @@ export function registerProjectRoutes(app: Express, ctx: RegisterProjectRoutesDe
             && req.body.appliedPluginSnapshotId.trim().length > 0;
       let resolveBody =
         explicitPlugin ? (req.body as Record<string, unknown>) : null;
-      if (!resolveBody) {
+      if (!resolveBody && initialSessionMode === 'design') {
         const fallbackPluginId = defaultScenarioPluginIdForProjectMetadata(projectMetadata);
         if (fallbackPluginId && getInstalledPlugin(db, fallbackPluginId)) {
           resolveBody = { ...(req.body || {}), pluginId: fallbackPluginId };

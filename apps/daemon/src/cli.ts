@@ -152,7 +152,7 @@ const PROJECT_STRING_FLAGS = new Set([
   'daemon-url', 'name', 'skill', 'design-system', 'plugin', 'metadata-json',
   'pending-prompt', 'project', 'conversation', 'message', 'path', 'as',
   'agent', 'model', 'snapshot-id', 'inputs', 'grant-caps', 'editor',
-  'title', 'against', 'seed-from',
+  'title', 'against', 'seed-from', 'mode',
 ]);
 const PROJECT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'follow']);
 // `od automation …` mirrors the Automations tab. Same surface, same
@@ -4319,6 +4319,14 @@ async function projectDaemonUrl(flags) {
   return cliDaemonUrl(flags);
 }
 
+function normalizeChatSessionModeFlag(value) {
+  if (value == null) return undefined;
+  const mode = String(value).trim().toLowerCase();
+  if (mode === 'design' || mode === 'chat') return mode;
+  console.error('--mode must be one of: design, chat');
+  process.exit(2);
+}
+
 function safeReadJsonFile(p) {
   try {
     const fs = (require ? require('node:fs') : null);
@@ -4335,6 +4343,7 @@ async function runProject(args) {
     console.log(`Usage:
   od project create [--name "<title>"] [--skill <id>] [--design-system <id>]
                     [--plugin <id>] [--inputs <json>] [--metadata-json <path|->]
+                    [--mode design|chat]
   od project import <baseDir> [--name "<title>"]
   od project list                         List projects.
   od project info <id>                    Print one project.
@@ -4406,6 +4415,8 @@ Common options:
         skillId:        flags.skill ?? null,
         designSystemId: flags['design-system'] ?? null,
       };
+      const conversationMode = normalizeChatSessionModeFlag(flags.mode);
+      if (conversationMode) body.conversationMode = conversationMode;
       if (flags['pending-prompt']) body.pendingPrompt = flags['pending-prompt'];
       if (flags['metadata-json']) {
         const mj = safeReadJsonFile(flags['metadata-json']);
@@ -5103,7 +5114,7 @@ function renderDiffLineContent(value) {
 async function runConversation(args) {
   if (args.length === 0 || args[0] === 'help' || args.includes('--help') || args.includes('-h')) {
     console.log(`Usage:
-  od conversation new  <projectId> [--title "<title>"] [--seed-from <cid>]
+  od conversation new  <projectId> [--title "<title>"] [--seed-from <cid>] [--mode design|chat]
                                            Create a conversation in a project.
                                            --seed-from copies another
                                            conversation's messages in (Side Chat).
@@ -5128,6 +5139,8 @@ Common options:
       }
       const body = {};
       if (typeof flags.title === 'string') body.title = flags.title;
+      const sessionMode = normalizeChatSessionModeFlag(flags.mode);
+      if (sessionMode) body.sessionMode = sessionMode;
       if (typeof flags['seed-from'] === 'string' && flags['seed-from']) {
         body.seedFromConversationId = flags['seed-from'];
       }
@@ -5139,7 +5152,8 @@ Common options:
       if (!resp.ok) return structuredHttpFailure(resp, 'project-not-found');
       const data = await resp.json();
       if (flags.json) return process.stdout.write(JSON.stringify(data, null, 2) + '\n');
-      console.log(`[conversation] created ${data.conversation?.id ?? '-'}`);
+      const conv = data.conversation;
+      console.log(`[conversation] created ${conv?.id ?? '-'} (mode ${conv?.sessionMode ?? sessionMode ?? 'design'})`);
       return;
     }
     case 'list': {
@@ -5185,7 +5199,7 @@ Common options:
 async function runChat(args) {
   if (args.length === 0 || args[0] === 'help' || args.includes('--help') || args.includes('-h')) {
     console.log(`Usage:
-  od chat new --project <id> [--seed-from <cid>] [--title "<title>"] [--json]
+  od chat new --project <id> [--seed-from <cid>] [--title "<title>"] [--mode design|chat] [--json]
                                            Create a Side Chat — a new conversation
                                            that copies in another conversation's
                                            context (--seed-from) so the new chat
@@ -5213,6 +5227,8 @@ Common options:
       }
       const body = {};
       if (typeof flags.title === 'string') body.title = flags.title;
+      const sessionMode = normalizeChatSessionModeFlag(flags.mode);
+      if (sessionMode) body.sessionMode = sessionMode;
       if (typeof flags['seed-from'] === 'string' && flags['seed-from']) {
         body.seedFromConversationId = flags['seed-from'];
       }
@@ -5228,7 +5244,7 @@ Common options:
       const seeded = body.seedFromConversationId
         ? ` (seeded from ${body.seedFromConversationId})`
         : '';
-      console.log(`[chat] created ${conv?.id ?? '-'}${conv?.title ? ` "${conv.title}"` : ''}${seeded}`);
+      console.log(`[chat] created ${conv?.id ?? '-'}${conv?.title ? ` "${conv.title}"` : ''}${seeded} (mode ${conv?.sessionMode ?? sessionMode ?? 'design'})`);
       return;
     }
     default:

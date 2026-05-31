@@ -193,7 +193,7 @@ export interface Conversation {
   id: string;
   projectId: string;
   title: string | null;
-  sessionMode: ChatSessionMode;
+  sessionMode?: ChatSessionMode;
   createdAt: number;
   updatedAt: number;
   latestRun?: {

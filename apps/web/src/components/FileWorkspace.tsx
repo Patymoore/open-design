@@ -6,6 +6,7 @@ import {
   type DragEvent as ReactDragEvent,
 } from 'react';
 import type { TrackingProjectKind } from '@open-design/contracts/analytics';
+import type { ChatSessionMode } from '@open-design/contracts';
 import { useAnalytics } from '../analytics/provider';
 import {
   trackFileManagerClick,
@@ -136,6 +137,7 @@ interface Props {
   onSelectConversation?: (id: string) => void;
   onDeleteConversation?: (id: string) => void;
   onRenameConversation?: (id: string, title: string) => void;
+  onConversationSessionModeChange?: (id: string, mode: ChatSessionMode) => void;
   onNewConversation?: () => void;
   /** Create a context-seeded conversation and resolve its id (backs the launcher). */
   onCreateSideChat?: (seedFromConversationId: string | null) => Promise<string | null>;
@@ -265,6 +267,7 @@ export function FileWorkspace({
   onSelectConversation,
   onDeleteConversation,
   onRenameConversation,
+  onConversationSessionModeChange,
   onNewConversation,
   onCreateSideChat,
 }: Props) {
@@ -1246,6 +1249,7 @@ export function FileWorkspace({
             onSelectConversation={onSelectConversation ?? (() => {})}
             onDeleteConversation={onDeleteConversation ?? (() => {})}
             onRenameConversation={onRenameConversation}
+            onSessionModeChange={onConversationSessionModeChange}
             onNewConversation={onNewConversation}
             onRequestOpenFile={openFile}
           />

@@ -18,6 +18,7 @@ import type {
   ChatCommentAttachment,
   ChatMessage,
 } from '../../types';
+import type { ChatSessionMode } from '@open-design/contracts';
 
 // ---------------------------------------------------------------------------
 // useConversationChat — drives a secondary ChatPane bound to a single
@@ -51,6 +52,7 @@ export interface ConversationChatContext {
   agentsById: Map<string, AgentInfo>;
   /** UI locale forwarded to the daemon so prompts compose in-language. */
   locale: string;
+  sessionMode: ChatSessionMode;
 }
 
 export interface UseConversationChatResult {
@@ -137,7 +139,12 @@ export function useConversationChat(
       commentAttachments: ChatCommentAttachment[],
       retryOfAssistantId?: string,
     ) => {
-      const { config: cfg, agentsById: agents, locale: loc } = ctxRef.current;
+      const {
+        config: cfg,
+        agentsById: agents,
+        locale: loc,
+        sessionMode,
+      } = ctxRef.current;
       if (cfg.mode !== 'daemon') {
         setError('Side Chat needs a local agent. Pick one in the top bar.');
         return;
@@ -277,6 +284,7 @@ export function useConversationChat(
         model: choice?.model ?? null,
         reasoning: choice?.reasoning ?? null,
         locale: loc,
+        sessionMode,
         onRunCreated: (runId) => {
           updateAssistant(assistantId, (prev) => ({
             ...prev,

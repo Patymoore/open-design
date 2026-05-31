@@ -107,7 +107,7 @@ import {
   type SaveMessageOptions,
   waitGeneratedPluginShareTask,
 } from '../state/projects';
-import type { AppliedPluginSnapshot } from '@open-design/contracts';
+import type { AppliedPluginSnapshot, ChatSessionMode } from '@open-design/contracts';
 import type {
   AgentEvent,
   AgentInfo,
@@ -115,7 +115,6 @@ import type {
   Artifact,
   ChatAttachment,
   ChatCommentAttachment,
-  ChatSessionMode,
   ChatMessage,
   ChatMessageFeedbackChange,
   Conversation,
@@ -1434,7 +1433,9 @@ export function ProjectView({
     return project.id;
   }, [project.id]);
 
-  const composedSystemPrompt = useCallback(async (): Promise<string> => {
+  const composedSystemPrompt = useCallback(async (
+    sessionModeOverride: ChatSessionMode = activeSessionMode,
+  ): Promise<string> => {
     let skillBody: string | undefined;
     let skillName: string | undefined;
     let skillMode: SkillSummary['mode'] | undefined;
@@ -1537,6 +1538,7 @@ export function ProjectView({
       audioVoiceOptions,
       audioVoiceOptionsError: audioVoiceOptionsLookupError,
       streamFormat: config.mode === 'api' ? 'plain' : undefined,
+      sessionMode: sessionModeOverride,
       locale,
       userInstructions: config.customInstructions,
       projectInstructions: project.customInstructions,
@@ -1551,6 +1553,7 @@ export function ProjectView({
     designSystems,
     config.mode,
     config.customInstructions,
+    activeSessionMode,
     locale,
   ]);
 
@@ -2267,6 +2270,7 @@ export function ProjectView({
     ) => {
       if (!activeConversationId) return;
       if (messagesConversationIdRef.current !== activeConversationId) return;
+      const runSessionMode = meta?.sessionMode ?? activeSessionMode;
       const retryTarget = meta?.retryOfAssistantId
         ? resolveRetryTarget(messages, meta.retryOfAssistantId)
         : null;
@@ -2285,7 +2289,7 @@ export function ProjectView({
           prompt,
           attachments,
           commentAttachments,
-          ...(meta === undefined ? {} : { meta }),
+          meta: { ...(meta ?? {}), sessionMode: runSessionMode },
           createdAt: Date.now(),
         });
         if (commentAttachments.length > 0) {
@@ -2770,6 +2774,7 @@ export function ProjectView({
           designSystemId: project.designSystemId ?? null,
           attachments: runAttachments.map((a) => a.path),
           commentAttachments: runCommentAttachments,
+          sessionMode: runSessionMode,
           research: meta?.research,
           mediaExecution: mediaExecutionPolicyForProjectMetadata(project.metadata),
           model: choice?.model ?? null,
@@ -2863,7 +2868,7 @@ export function ProjectView({
             // on the next event.
           }
         }
-        const systemPrompt = await composedSystemPrompt();
+        const systemPrompt = await composedSystemPrompt(runSessionMode);
         const apiHistory = await historyWithApiAttachmentContext(
           historyWithCommentAttachmentContext(nextHistory, userMsg.id),
           userMsg.id,
@@ -2911,6 +2916,7 @@ export function ProjectView({
     [
       attachedComments,
       activeConversationId,
+      activeSessionMode,
       currentConversationBusy,
       enqueueChatSend,
       messages,
@@ -3636,6 +3642,33 @@ export function ProjectView({
       await patchConversation(project.id, id, { title: trimmed });
     },
     [project.id],
+  );
+
+  const handleConversationSessionModeChange = useCallback(
+    async (id: string, sessionMode: ChatSessionMode) => {
+      setConversations((curr) =>
+        curr.map((conversation) =>
+          conversation.id === id ? { ...conversation, sessionMode } : conversation,
+        ),
+      );
+      const updated = await patchConversation(project.id, id, { sessionMode });
+      if (updated) {
+        setConversations((curr) =>
+          curr.map((conversation) =>
+            conversation.id === id ? { ...conversation, ...updated } : conversation,
+          ),
+        );
+      }
+    },
+    [project.id],
+  );
+
+  const handleActiveConversationSessionModeChange = useCallback(
+    (sessionMode: ChatSessionMode) => {
+      if (!activeConversationId) return;
+      void handleConversationSessionModeChange(activeConversationId, sessionMode);
+    },
+    [activeConversationId, handleConversationSessionModeChange],
   );
 
   // Side Chat launcher: create a NEW conversation seeded with the current
@@ -4480,6 +4513,8 @@ export function ProjectView({
               queuedItems={currentConversationQueuedItems}
               error={conversationLoadError ?? error ?? audioVoiceOptionsError}
               projectId={project.id}
+              sessionMode={activeSessionMode}
+              onSessionModeChange={handleActiveConversationSessionModeChange}
               projectKindForTracking={projectKindToTracking(project.metadata?.kind)}
               projectFiles={projectFiles}
               hasActiveDesignSystem={!!project.designSystemId}
@@ -4615,6 +4650,7 @@ export function ProjectView({
           onSelectConversation={handleSelectConversation}
           onDeleteConversation={handleDeleteConversation}
           onRenameConversation={handleRenameConversation}
+          onConversationSessionModeChange={handleConversationSessionModeChange}
           onNewConversation={handleNewConversation}
           onCreateSideChat={handleCreateSideChat}
         />
