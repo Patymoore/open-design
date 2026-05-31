@@ -1714,7 +1714,7 @@ describe('FileViewer SVG artifacts', () => {
     expect(screen.getAllByText('https://vercel.example').length).toBeGreaterThan(0);
   });
 
-  it('explains protected deployments instead of showing the deploy-first social share state', async () => {
+  it('shows social sharing with a warning for protected deployments', async () => {
     const file = baseFile({
       name: 'index.html',
       path: 'index.html',
@@ -1769,13 +1769,11 @@ describe('FileViewer SVG artifacts', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /share/i }));
-    const socialShareItem = await screen.findByRole('menuitem', {
-      name: /deployment protection enabled/i,
-    });
+    const socialShareItem = await screen.findByRole('menuitem', { name: /social share/i });
     fireEvent.click(socialShareItem);
 
     expect(await screen.findByRole('dialog')).toBeTruthy();
-    expect(screen.queryByRole('link', { name: 'X' })).toBeNull();
+    expect(await screen.findByRole('link', { name: 'X' })).toBeTruthy();
     expect(screen.getAllByText(/requiring authentication/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText('https://protected.vercel.example').length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /copy link/i }).length).toBeGreaterThan(0);

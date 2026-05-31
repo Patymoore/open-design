@@ -916,16 +916,16 @@ describe('FileWorkspace add-module menu', () => {
     expect(browserPanels[2]!.className).toContain('active');
   });
 
-  it('inserts a new browser tab after the active workspace tab', () => {
+  it('appends a new browser tab after existing workspace tabs', () => {
     render(
       <FileWorkspace
         projectId="project-1"
         projectKind="prototype"
-        files={[workspaceFile('analysis.html')]}
+        files={[workspaceFile('analysis.html'), workspaceFile('notes.html')]}
         liveArtifacts={[]}
         onRefreshFiles={vi.fn()}
         isDeck={false}
-        tabsState={{ tabs: ['analysis.html'], active: 'analysis.html' }}
+        tabsState={{ tabs: ['analysis.html', 'notes.html'], active: null }}
         onTabsStateChange={vi.fn()}
       />,
     );
@@ -941,7 +941,7 @@ describe('FileWorkspace add-module menu', () => {
     const tabLabels = screen
       .getAllByRole('tab')
       .map((tab) => tab.textContent?.trim() ?? '');
-    const fileIndex = tabLabels.findIndex((label) => label.includes('analysis.html'));
+    const fileIndex = tabLabels.findIndex((label) => label.includes('notes.html'));
     const browserIndex = tabLabels.findIndex((label) => label === 'Browser');
 
     expect(fileIndex).toBeGreaterThanOrEqual(0);

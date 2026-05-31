@@ -388,9 +388,10 @@ export function FileWorkspace({
     setUploadError(null);
     const nextIndex = browserTabSequenceRef.current + 1;
     browserTabSequenceRef.current = nextIndex;
+    const anchor = lastWorkspaceTabId(orderedWorkspaceTabs) ?? activeTab;
     const nextTab: BrowserWorkspaceTab = {
       id: `${BROWSER_TAB_PREFIX}${nextIndex}`,
-      insertAfter: activeTab,
+      insertAfter: anchor,
       label: nextIndex === 1 ? 'Browser' : `Browser ${nextIndex}`,
     };
     setBrowserTabs((current) => [...current, nextTab]);
@@ -2903,6 +2904,10 @@ function isBrowserTabId(tabId: string): boolean {
   return tabId.startsWith(BROWSER_TAB_PREFIX);
 }
 
+function lastWorkspaceTabId(tabs: WorkspaceOrderedTab[]): string | null {
+  return tabs[tabs.length - 1]?.id ?? null;
+}
+
 function orderWorkspaceTabs(
   fileTabNames: string[],
   browserTabs: BrowserWorkspaceTab[],
@@ -2921,7 +2926,7 @@ function orderWorkspaceTabs(
     };
     const anchor = browserTab.insertAfter;
     if (!anchor || anchor === DESIGN_FILES_TAB || anchor === DESIGN_SYSTEM_TAB) {
-      ordered.unshift(entry);
+      ordered.push(entry);
       continue;
     }
     const anchorIndex = ordered.findIndex((candidate) => candidate.id === anchor);

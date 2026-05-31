@@ -263,6 +263,7 @@ export function DesignFilesPanel({
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
   const [currentDir, setCurrentDir] = useState<string>('');
+  const [optimisticFolderPaths, setOptimisticFolderPaths] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
 
@@ -283,8 +284,9 @@ export function DesignFilesPanel({
         dirs.add(parts.slice(0, i).join('/'));
       }
     }
+    for (const folderPath of optimisticFolderPaths) addAncestors(`${folderPath}/`);
     return [...dirs].sort((a, b) => a.localeCompare(b));
-  }, [files, folders]);
+  }, [files, folders, optimisticFolderPaths]);
 
   const folderPathSet = useMemo(() => new Set(folderPaths), [folderPaths]);
 
@@ -715,6 +717,9 @@ export function DesignFilesPanel({
     const folder = await onCreateFolder(targetPath);
     const createdPath = folder?.path || targetPath;
     if (createdPath) {
+      setOptimisticFolderPaths((current) =>
+        current.includes(createdPath) ? current : [...current, createdPath],
+      );
       setSearchQuery('');
       setCurrentDir(createdPath);
     }

@@ -6490,17 +6490,19 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const deployedEntries = DEPLOY_PROVIDER_OPTIONS
     .map((option) => deploymentsByProvider[option.id])
     .filter((item): item is WebDeploymentInfo => Boolean(item?.url?.trim()));
-  const socialShareBlockedDeployment =
-    deployedEntries.find((item) => deployResultState(item.status) === 'protected' && !publicShareUrlForDeployment(item)) ??
-    deployedEntries.find((item) => !publicShareUrlForDeployment(item)) ??
-    null;
-  const socialShareBlockedState = socialShareBlockedDeployment
-    ? deployResultState(socialShareBlockedDeployment.status)
-    : null;
   const shareableDeploymentUrl =
     DEPLOY_PROVIDER_OPTIONS.map((option) => deploymentsByProvider[option.id])
       .map((item) => publicShareUrlForDeployment(item))
       .find(Boolean) ?? '';
+  const socialShareBlockedDeployment =
+    shareableDeploymentUrl
+      ? null
+      : deployedEntries.find((item) => deployResultState(item.status) === 'protected' && !publicShareUrlForDeployment(item)) ??
+        deployedEntries.find((item) => !publicShareUrlForDeployment(item)) ??
+        null;
+  const socialShareBlockedState = socialShareBlockedDeployment
+    ? deployResultState(socialShareBlockedDeployment.status)
+    : null;
   const socialShareDisplayUrl =
     shareableDeploymentUrl || socialShareBlockedDeployment?.url?.trim() || activeDeployedUrl;
   const socialShareUnavailableMessage =
@@ -6510,7 +6512,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
         ? t('fileViewer.deployLinkDelayed')
         : t('socialShare.deployFirst');
   const projectSocialShareRequest = useMemo<SocialShareRequest | null>(() => {
-    if (!shareableDeploymentUrl) return null;
+    if (!socialShareDisplayUrl) return null;
     const title = t('socialShare.projectTitle', { title: exportTitle });
     const text = t('socialShare.projectText', {
       title: exportTitle,
@@ -6519,16 +6521,16 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
     return {
       kind: 'project-html',
       locale,
-      url: shareableDeploymentUrl,
+      url: socialShareDisplayUrl,
       title,
       text,
       copyText: t('socialShare.projectCopyText', {
         title: exportTitle,
-        url: shareableDeploymentUrl,
+        url: socialShareDisplayUrl,
         repo: OPEN_DESIGN_GITHUB_REPO_URL,
       }),
     };
-  }, [exportTitle, locale, shareableDeploymentUrl, t]);
+  }, [exportTitle, locale, socialShareDisplayUrl, t]);
   const projectSocialShareFallback = useMemo(
     () => (projectSocialShareRequest ? buildSocialSharePayload(projectSocialShareRequest) : null),
     [projectSocialShareRequest],
@@ -7690,61 +7692,60 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
                 <p className="subtitle">{t('fileViewer.deployModalSubtitle')}</p>
               </div>
               <div className="deploy-form">
-              <div className={`deploy-social-share${activeProjectSocialShare ? '' : ' is-locked'}${socialShareBlockedState ? ` is-${socialShareBlockedState}` : ''}`}>
-                <div className="deploy-social-share__head">
-                  <div className="deploy-social-share__label">
-                    {t('socialShare.projectSection')}
+                <div className={`deploy-social-share${activeProjectSocialShare ? '' : ' is-locked'}${socialShareBlockedState ? ` is-${socialShareBlockedState}` : ''}`}>
+                  <div className="deploy-social-share__head">
+                    <div className="deploy-social-share__label">
+                      {t('socialShare.projectSection')}
+                    </div>
+                    {socialShareDisplayUrl ? (
+                      <a
+                        className="deploy-social-share__url"
+                        href={socialShareDisplayUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {socialShareDisplayUrl}
+                      </a>
+                    ) : null}
                   </div>
-                  {socialShareDisplayUrl ? (
-                    <a
-                      className="deploy-social-share__url"
-                      href={socialShareDisplayUrl}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      {socialShareDisplayUrl}
-                    </a>
-                  ) : null}
-                </div>
-                {activeProjectSocialShare ? (
-                  <SocialShareGrid
-                    share={activeProjectSocialShare}
-                    onAfterShare={() => setDeployModalOpen(false)}
-                  />
-                ) : (
-                  <>
+                  {!activeProjectSocialShare || socialShareBlockedState ? (
                     <p className="hint">{socialShareUnavailableMessage}</p>
-                    {socialShareBlockedDeployment?.url ? (
-                      <div className="deploy-social-share__actions">
+                  ) : null}
+                  {activeProjectSocialShare ? (
+                    <SocialShareGrid
+                      share={activeProjectSocialShare}
+                      onAfterShare={() => setDeployModalOpen(false)}
+                    />
+                  ) : null}
+                  {socialShareBlockedDeployment?.url ? (
+                    <div className="deploy-social-share__actions">
+                      <button
+                        type="button"
+                        className="viewer-action"
+                        onClick={() => {
+                          void copyDeployLink(socialShareBlockedDeployment.url);
+                        }}
+                      >
+                        <Icon name="copy" size={14} />
+                        <span>{copyDeployLabel(socialShareBlockedDeployment.url)}</span>
+                      </button>
+                      {activeDeployment?.id === socialShareBlockedDeployment.id ? (
                         <button
                           type="button"
                           className="viewer-action"
+                          disabled={deployPhase === 'preparing-link'}
                           onClick={() => {
-                            void copyDeployLink(socialShareBlockedDeployment.url);
+                            void retryDeploymentLink();
                           }}
                         >
-                          <Icon name="copy" size={14} />
-                          <span>{copyDeployLabel(socialShareBlockedDeployment.url)}</span>
+                          {deployPhase === 'preparing-link'
+                            ? t('fileViewer.preparingPublicLink')
+                            : t('fileViewer.retryLink')}
                         </button>
-                        {activeDeployment?.id === socialShareBlockedDeployment.id ? (
-                          <button
-                            type="button"
-                            className="viewer-action"
-                            disabled={deployPhase === 'preparing-link'}
-                            onClick={() => {
-                              void retryDeploymentLink();
-                            }}
-                          >
-                            {deployPhase === 'preparing-link'
-                              ? t('fileViewer.preparingPublicLink')
-                              : t('fileViewer.retryLink')}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </>
-                )}
-              </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               <label className="deploy-provider-field">
                 <span>{t('fileViewer.deployProviderLabel')}</span>
                 <select
