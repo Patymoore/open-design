@@ -1923,6 +1923,50 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     });
   });
 
+  it('does not repeatedly re-detect agents while signed-in AMR models stay empty', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url === '/api/integrations/vela/status') {
+        return new Response(
+          JSON.stringify({
+            loggedIn: true,
+            loginInFlight: false,
+            profile: 'local',
+            user: { id: 'u1', email: 'amr@example.com' },
+            configPath: '/Users/test/.amr/config.json',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const signedInEmptyAmr: AgentInfo = { ...amrAgent, models: [] };
+    const onRefreshAgents = vi.fn<OnRefreshAgents>(async () => [
+      { ...amrAgent, models: [] },
+    ]);
+
+    renderSettingsDialog(
+      { mode: 'daemon', agentId: 'amr' },
+      { agents: [signedInEmptyAmr], onRefreshAgents },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+
+    await waitFor(() => {
+      expect(onRefreshAgents).toHaveBeenCalledTimes(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    expect(onRefreshAgents).toHaveBeenCalledTimes(1);
+  });
+
   // The live `vela models` catalog lands a beat after sign-in. Rather than
   // leave the picker blank until then (the "appears seconds later" complaint),
   // the row renders immediately in a loading state.
