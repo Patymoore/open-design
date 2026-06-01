@@ -175,8 +175,11 @@ export type TrackingExportFormat =
   | 'pptx'
   | 'zip'
   | 'html'
+  | 'image'
   | 'markdown'
   | 'template'
+  | 'share_link'
+  | 'share_page'
   | 'vercel'
   | 'cloudflare_pages';
 
