@@ -20,6 +20,8 @@ import type {
   ChatSseEvent,
   ChatSseStartPayload,
   DaemonAgentPayload,
+  AmrModelsResponse,
+  MediaExecutionPolicy,
   ResearchOptions,
   RunContextSelection,
   SseErrorPayload,
@@ -509,6 +511,16 @@ export async function fetchVelaLoginStatus(): Promise<VelaLoginStatus | null> {
     const resp = await fetch('/api/integrations/vela/status');
     if (!resp.ok) return null;
     return (await resp.json()) as VelaLoginStatus;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchAmrModels(): Promise<AmrModelsResponse | null> {
+  try {
+    const resp = await fetch('/api/amr/models', { cache: 'no-store' });
+    if (!resp.ok) return null;
+    return (await resp.json()) as AmrModelsResponse;
   } catch {
     return null;
   }
