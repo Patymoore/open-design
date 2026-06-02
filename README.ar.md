@@ -1,3 +1,5 @@
+<div dir="rtl">
+
 <h1 align="center">Open Design: البديل مفتوح المصدر لـ Claude Design</h1>
 
 > 🔥 **‏Open Design 0.9.0 وصل: أنشئ دون أي إعداد.** [Model Router الرسمي](https://open-design.ai/amr) مدمج مباشرة في التطبيق — لا إعدادات إضافية، ولا CLI لتثبيته، ولا مفتاح API لتجهيزه. ما عليك سوى فتح التطبيق وتسجيل الدخول والبدء فورًا في التصميم والإنشاء. [حمّل 0.9.0](https://github.com/nexu-io/open-design/releases) · [انضم إلى النقاش](https://github.com/nexu-io/open-design/discussions/3524)
@@ -738,3 +740,5 @@ gh pr create --fill
 ## الترخيص
 
 ‏Apache-2.0. يحتفظ المجمَّع `design-templates/guizang-ppt/` بترخيصه الأصلي [LICENSE](design-templates/guizang-ppt/LICENSE) (MIT، [@op7418](https://github.com/op7418)). ويحتفظ المجمَّع `design-templates/html-ppt/` بترخيصه الأصلي [LICENSE](design-templates/html-ppt/LICENSE) (MIT، [@lewislulu](https://github.com/lewislulu)).
+
+</div>
