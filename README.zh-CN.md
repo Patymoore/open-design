@@ -2,14 +2,7 @@
 
 > 🔥 Open Design 0.8.0 已发布。这一版重点上线两件事：Plugin 体系，让模板和工作流像文件夹一样添加、复制、分享；Design System，支持导入品牌规范并沉淀为可复用的 [`DESIGN.md`](design-systems/)。[下载 0.8.0](https://github.com/nexu-io/open-design/releases) · [参与讨论](https://github.com/nexu-io/open-design/discussions/1727)
 
-> 🏅 **Open Design Fellow 计划正式开放。**
->
-> ▎如果你也相信，设计应该是开放的，<br/>
-> ▎欢迎成为 Open Design Fellow。<br/>
-> ▎和核心团队一起打磨产品，<br/>
-> ▎让更多人参与并定义设计的未来。
->
-> 详情 → [MAINTAINERS.md](MAINTAINERS.md) 与 [Discord](https://discord.gg/qhbcCH8Am4)。
+> 🏅 **Open Design Fellow 计划正式开放。** 如果你也相信设计应该是开放的，欢迎成为 Open Design Fellow，和核心团队一起打磨产品，让更多人参与并定义设计的未来。详情 → [MAINTAINERS.md](MAINTAINERS.md) 与 [Discord](https://discord.gg/qhbcCH8Am4)。
 
 <p align="center">
   <img src="docs/assets/banner-zh.png" alt="Open Design — The open-source Claude Design alternative · 150 Design Systems · 261 Plugins · 21 Coding Agents · 14 Media Providers" width="100%" />
