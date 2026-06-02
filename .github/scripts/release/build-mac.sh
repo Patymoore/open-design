@@ -79,6 +79,55 @@ prepare_mac_signing() {
   export CSC_KEY_PASSWORD="$APPLE_SIGNING_CERTIFICATE_PASSWORD"
 }
 
+preflight_mac_signing() {
+  local cert_path="$1"
+  local keychain_path="$RUNNER_TEMP/open-design-signing-preflight.keychain"
+  local keychain_password
+  keychain_password="$(uuidgen)"
+  local probe_bin="$RUNNER_TEMP/open-design-codesign-preflight"
+  local identities identity_hash
+  local current_keychains=()
+
+  while IFS= read -r line; do
+    line="${line#*\"}"
+    line="${line%\"*}"
+    if [ -n "$line" ]; then
+      current_keychains+=("$line")
+    fi
+  done < <(security list-keychains -d user 2>/dev/null || true)
+
+  cleanup_mac_signing_preflight() {
+    if [ "${#current_keychains[@]}" -gt 0 ]; then
+      security list-keychains -d user -s "${current_keychains[@]}" >/dev/null 2>&1 || true
+    fi
+    security delete-keychain "$keychain_path" >/dev/null 2>&1 || rm -f "$keychain_path"
+    rm -f "$probe_bin"
+  }
+  trap cleanup_mac_signing_preflight RETURN
+
+  echo "mac signing preflight: importing certificate into isolated keychain"
+  rm -f "$keychain_path" "$probe_bin"
+  security create-keychain -p "$keychain_password" "$keychain_path"
+  security unlock-keychain -p "$keychain_password" "$keychain_path"
+  security set-keychain-settings -lut 21600 "$keychain_path"
+  security list-keychains -d user -s "$keychain_path" "${current_keychains[@]}"
+  security import "$cert_path" -k "$keychain_path" -T /usr/bin/codesign -T /usr/bin/productbuild -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD"
+  security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+
+  identities="$(security find-identity -v -p codesigning "$keychain_path")"
+  printf '%s\n' "$identities"
+  identity_hash="$(printf '%s\n' "$identities" | awk '/Developer ID Application/ { print $2; exit }')"
+  if [ -z "$identity_hash" ]; then
+    echo "mac signing preflight failed: no Developer ID Application identity found after import" >&2
+    exit 1
+  fi
+
+  cp /bin/echo "$probe_bin"
+  codesign --sign "$identity_hash" --force --keychain "$keychain_path" --timestamp=none "$probe_bin"
+  codesign --verify --verbose "$probe_bin"
+  echo "mac signing preflight: codesign succeeded with identity $identity_hash"
+}
+
 capture_framework_diagnostics() {
   local namespace="$1"
   local output="${MAC_FRAMEWORK_DIAGNOSTICS_PATH:-$RUNNER_TEMP/mac-framework-diagnostics.txt}"
@@ -180,6 +229,7 @@ inspect_electron_framework_symlinks
 
 if [ "$sign_mode" = "on" ]; then
   prepare_mac_signing
+  preflight_mac_signing "$CSC_LINK"
 fi
 
 rm -rf "$tools_pack_dir"
