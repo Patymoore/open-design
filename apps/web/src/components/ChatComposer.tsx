@@ -250,6 +250,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // entries rather than ChatComposer remounts. See PR #2285 review
     // 2026-05-20 04:08 for the rationale.
     const [staged, setStaged] = useState<ChatAttachment[]>([]);
+    const nextAttachmentOrderRef = useRef(0);
     const [stagedVisualComments, setStagedVisualComments] = useState<ChatCommentAttachment[]>([]);
     const streamingAnnotationSendPendingRef = useRef(false);
     const [streamingAnnotationSendPending, setStreamingAnnotationSendPendingState] = useState(false);
@@ -647,7 +648,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         },
         restoreDraft: ({ text, attachments = [], commentAttachments = [], meta }) => {
           setDraft(text);
-          setStaged(attachments);
+          const orderedAttachments = normalizeChatAttachmentOrders(attachments);
+          setStaged(orderedAttachments);
+          nextAttachmentOrderRef.current = nextChatAttachmentOrder(orderedAttachments);
           setStagedVisualComments(commentAttachments);
           // Rebuild staged context from the queued turn's meta so the
           // plugin / connector / skill / MCP bindings (and their chips) come
@@ -695,6 +698,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     function reset() {
       setDraft("");
       setStaged([]);
+      nextAttachmentOrderRef.current = 0;
       setStagedVisualComments([]);
       setStagedSkills([]);
       setStagedMcpServers([]);
@@ -826,10 +830,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       // file_upload_result per surface so this path reports
       // `page_name='chat_panel'` / `area='chat_composer'`.
       const cohort = deriveUploadCohort(files);
+      const orderStart = nextAttachmentOrderRef.current;
+      nextAttachmentOrderRef.current += files.length;
       try {
         const result = await uploadProjectFiles(id, files);
         if (result.uploaded.length > 0) {
-          setStaged((s) => [...s, ...result.uploaded]);
+          const orderedUploaded = assignChatAttachmentOrders(result.uploaded, orderStart);
+          setStaged((s) => sortChatAttachmentsByOrder([...s, ...orderedUploaded]));
         }
         const partial = result.failed.length > 0;
         if (partial) {
@@ -912,6 +919,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               (f): f is File => Boolean(f),
             );
             if (annotationFiles.length > 0) {
+              const orderStart = nextAttachmentOrderRef.current;
+              nextAttachmentOrderRef.current += annotationFiles.length;
               const id = await ensureProject();
               if (!id) {
                 ack({ ok: false, message: t('chat.annotationProjectCreateFailed') });
@@ -920,7 +929,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               setUploading(true);
               const result = await uploadProjectFiles(id, annotationFiles);
               if (result.uploaded.length > 0) {
-                uploaded = result.uploaded;
+                uploaded = assignChatAttachmentOrders(result.uploaded, orderStart);
                 const screenshot = detail.file ? uploaded[0] : null;
                 if (screenshot && detail.markKind && detail.bounds) {
                   visualAttachmentInput = {
@@ -959,7 +968,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
             setUploading(false);
 
             const appendAnnotationToComposer = () => {
-              if (uploaded.length > 0) setStaged((s) => [...s, ...uploaded]);
+              if (uploaded.length > 0) {
+                setStaged((s) => sortChatAttachmentsByOrder([...s, ...uploaded]));
+              }
               if (visualAttachmentInput) {
                 setStagedVisualComments((current) => [
                   ...current,
@@ -2004,6 +2015,53 @@ function buildComposerMentionEntities({
     });
   }
   return entities;
+}
+
+function isFiniteAttachmentOrder(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function normalizeChatAttachmentOrders(attachments: ChatAttachment[]): ChatAttachment[] {
+  let fallbackOrder = 0;
+  return attachments.map((attachment) => {
+    if (isFiniteAttachmentOrder(attachment.order)) {
+      fallbackOrder = Math.max(fallbackOrder, Math.floor(attachment.order) + 1);
+      return { ...attachment, order: Math.floor(attachment.order) };
+    }
+    const order = fallbackOrder;
+    fallbackOrder += 1;
+    return { ...attachment, order };
+  });
+}
+
+function assignChatAttachmentOrders(
+  attachments: ChatAttachment[],
+  orderStart: number,
+): ChatAttachment[] {
+  return attachments.map((attachment, index) => ({
+    ...attachment,
+    order: orderStart + index,
+  }));
+}
+
+function nextChatAttachmentOrder(attachments: ChatAttachment[]): number {
+  return attachments.reduce(
+    (max, attachment, index) =>
+      Math.max(max, isFiniteAttachmentOrder(attachment.order) ? Math.floor(attachment.order) + 1 : index + 1),
+    0,
+  );
+}
+
+function sortChatAttachmentsByOrder(attachments: ChatAttachment[]): ChatAttachment[] {
+  return attachments
+    .map((attachment, index) => ({ attachment, index }))
+    .sort((a, b) => {
+      const aOrder = isFiniteAttachmentOrder(a.attachment.order) ? a.attachment.order : a.index;
+      const bOrder = isFiniteAttachmentOrder(b.attachment.order) ? b.attachment.order : b.index;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.attachment);
 }
 
 function StagedAttachments({

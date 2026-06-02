@@ -531,7 +531,8 @@ function isStoredChatAttachment(value: unknown): value is ChatAttachment {
     typeof record.name === 'string' &&
     record.name.length > 0 &&
     (record.kind === 'image' || record.kind === 'file') &&
-    (record.size === undefined || typeof record.size === 'number')
+    (record.size === undefined || typeof record.size === 'number') &&
+    (record.order === undefined || typeof record.order === 'number')
   );
 }
 
@@ -2592,6 +2593,7 @@ export function ProjectView({
         ...(meta?.appliedPluginSnapshot
           ? { appliedPluginSnapshot: meta.appliedPluginSnapshot }
           : {}),
+        ...(meta?.context ? { runContext: meta.context } : {}),
         attachments: effectiveAttachments.length > 0 ? effectiveAttachments : undefined,
         commentAttachments: commentAttachments.length > 0 ? commentAttachments : undefined,
       };

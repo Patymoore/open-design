@@ -112,7 +112,6 @@ function ModeDescriptionCard({
 export function SessionModeToggle({ mode, onChange, disabled = false }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
-  const [cardVisible, setCardVisible] = useState(false);
   const [previewMode, setPreviewMode] = useState<ChatSessionMode | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const cardId = useId();
@@ -128,12 +127,10 @@ export function SessionModeToggle({ mode, onChange, disabled = false }: Props) {
   const active = modes.find((item) => item.mode === mode) ?? modes[1]!;
   const preview = modes.find((item) => item.mode === (previewMode ?? mode)) ?? active;
   const disabledState = disabled || !onChange;
-  const showCard = cardVisible && !disabledState;
-  const showStandaloneCard = showCard && !open;
+  const showCard = open && !disabledState;
 
   const closeMenu = useCallback(() => {
     setOpen(false);
-    setCardVisible(false);
     setPreviewMode(null);
   }, []);
 
@@ -161,14 +158,10 @@ export function SessionModeToggle({ mode, onChange, disabled = false }: Props) {
       className="session-mode-toggle"
       ref={rootRef}
       onPointerLeave={() => {
-        if (!open) {
-          setCardVisible(false);
-          setPreviewMode(null);
-        }
+        if (!open) setPreviewMode(null);
       }}
       onBlur={(event) => {
         if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return;
-        setCardVisible(false);
         if (!open) setPreviewMode(null);
       }}
     >
@@ -177,24 +170,16 @@ export function SessionModeToggle({ mode, onChange, disabled = false }: Props) {
         className={`session-mode-toggle__trigger${open ? ' is-open' : ''}`}
         disabled={disabledState}
         aria-label={active.title}
-        aria-describedby={showStandaloneCard ? cardId : undefined}
         aria-haspopup="menu"
         aria-expanded={open}
         data-testid="session-mode-trigger"
-        onPointerEnter={() => {
-          if (disabledState) return;
-          setPreviewMode(mode);
-          setCardVisible(true);
-        }}
-        onFocus={() => {
-          if (disabledState) return;
-          setPreviewMode(mode);
-          setCardVisible(true);
-        }}
         onClick={() => {
-          setOpen(!open);
+          if (open) {
+            closeMenu();
+            return;
+          }
+          setOpen(true);
           setPreviewMode(mode);
-          setCardVisible(true);
         }}
       >
         <Icon name={active.icon} size={13} />
@@ -217,11 +202,9 @@ export function SessionModeToggle({ mode, onChange, disabled = false }: Props) {
                     aria-label={item.title}
                     onPointerEnter={() => {
                       setPreviewMode(item.mode);
-                      setCardVisible(true);
                     }}
                     onFocus={() => {
                       setPreviewMode(item.mode);
-                      setCardVisible(true);
                     }}
                     onClick={() => {
                       if (!itemActive) onChange?.(item.mode);
@@ -249,16 +232,6 @@ export function SessionModeToggle({ mode, onChange, disabled = false }: Props) {
             />
           ) : null}
         </div>
-      ) : null}
-      {showStandaloneCard ? (
-        <ModeDescriptionCard
-          item={preview}
-          bestForLabel={t('chat.mode.cardBestFor')}
-          tryLabel={t('chat.mode.cardTry')}
-          className="session-mode-toggle__hover-card"
-          id={cardId}
-          role="tooltip"
-        />
       ) : null}
     </div>
   );

@@ -239,6 +239,11 @@ export interface ChatAttachment {
   name: string;
   kind: 'image' | 'file';
   size?: number;
+  /**
+   * User-visible attachment order for this turn. Older messages may omit it;
+   * consumers should fall back to array position.
+   */
+  order?: number;
 }
 
 export interface ChatCommentAttachment {
@@ -317,6 +322,7 @@ export interface ChatMessage {
   startedAt?: number;
   endedAt?: number;
   sessionMode?: ChatSessionMode;
+  runContext?: RunContextSelection;
   appliedPluginSnapshot?: AppliedPluginSnapshot;
   attachments?: ChatAttachment[];
   commentAttachments?: ChatCommentAttachment[];

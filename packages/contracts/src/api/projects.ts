@@ -211,6 +211,7 @@ export interface Conversation {
   projectId: string;
   title: string | null;
   sessionMode?: ChatSessionMode;
+  messageCount?: number;
   createdAt: number;
   updatedAt: number;
   latestRun?: {

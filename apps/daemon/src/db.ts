@@ -99,6 +99,7 @@ function migrate(db: SqliteDb): void {
       feedback_json TEXT,
       pre_turn_file_names_json TEXT,
       session_mode TEXT,
+      run_context_json TEXT,
       applied_plugin_snapshot_json TEXT,
       started_at INTEGER,
       ended_at INTEGER,
@@ -259,6 +260,9 @@ function migrate(db: SqliteDb): void {
   }
   if (!messageCols.some((c: DbRow) => c.name === 'session_mode')) {
     db.exec(`ALTER TABLE messages ADD COLUMN session_mode TEXT`);
+  }
+  if (!messageCols.some((c: DbRow) => c.name === 'run_context_json')) {
+    db.exec(`ALTER TABLE messages ADD COLUMN run_context_json TEXT`);
   }
   if (!messageCols.some((c: DbRow) => c.name === 'applied_plugin_snapshot_json')) {
     db.exec(`ALTER TABLE messages ADD COLUMN applied_plugin_snapshot_json TEXT`);
@@ -753,11 +757,11 @@ export function listConversations(db: SqliteDb, projectId: string) {
             FROM conversations
            WHERE project_id = ?
         ),
-        latest_runs AS (
-          SELECT conversation_id AS conversationId,
-                 run_status AS latestRunStatus,
-                 started_at AS latestRunStartedAt,
-                 ended_at AS latestRunEndedAt,
+	        latest_runs AS (
+	          SELECT conversation_id AS conversationId,
+	                 run_status AS latestRunStatus,
+	                 started_at AS latestRunStartedAt,
+	                 ended_at AS latestRunEndedAt,
                  events_json AS latestRunEventsJson
             FROM (
               SELECT m.conversation_id,
@@ -773,27 +777,37 @@ export function listConversations(db: SqliteDb, projectId: string) {
                 JOIN project_conversations c ON c.id = m.conversation_id
                WHERE m.role = 'assistant'
                  AND m.run_status IS NOT NULL
-            )
-           WHERE rn = 1
-        )
-        SELECT c.id, c.projectId, c.title, c.sessionMode, c.createdAt, c.updatedAt,
-               lr.latestRunStatus, lr.latestRunStartedAt,
-               lr.latestRunEndedAt, lr.latestRunEventsJson
-          FROM project_conversations c
-          LEFT JOIN latest_runs lr ON lr.conversationId = c.id
-         ORDER BY c.updatedAt DESC`,
-    )
-    .all(projectId)).map(normalizeConversation);
+	           )
+	           WHERE rn = 1
+	        ),
+	        message_counts AS (
+	          SELECT m.conversation_id AS conversationId,
+	                 COUNT(*) AS messageCount
+	            FROM messages m
+	            JOIN project_conversations c ON c.id = m.conversation_id
+	           GROUP BY m.conversation_id
+	        )
+	        SELECT c.id, c.projectId, c.title, c.sessionMode, c.createdAt, c.updatedAt,
+	               COALESCE(mc.messageCount, 0) AS messageCount,
+	               lr.latestRunStatus, lr.latestRunStartedAt,
+	               lr.latestRunEndedAt, lr.latestRunEventsJson
+	          FROM project_conversations c
+	          LEFT JOIN latest_runs lr ON lr.conversationId = c.id
+	          LEFT JOIN message_counts mc ON mc.conversationId = c.id
+	         ORDER BY c.updatedAt DESC`,
+	    )
+	    .all(projectId)).map(normalizeConversation);
 }
 
 export function getConversation(db: SqliteDb, id: string) {
   const r = db
-    .prepare(
-      `SELECT id, project_id AS projectId, title, session_mode AS sessionMode,
-              created_at AS createdAt, updated_at AS updatedAt
-         FROM conversations WHERE id = ?`,
-    )
-    .get(id) as DbRow | undefined;
+	    .prepare(
+	      `SELECT id, project_id AS projectId, title, session_mode AS sessionMode,
+	              created_at AS createdAt, updated_at AS updatedAt,
+	              (SELECT COUNT(*) FROM messages WHERE conversation_id = conversations.id) AS messageCount
+	         FROM conversations WHERE id = ?`,
+	    )
+	    .get(id) as DbRow | undefined;
   if (!r) return null;
   return {
     ...normalizeConversation(r),
@@ -812,8 +826,9 @@ function normalizeConversation(r: DbRow) {
     id: r.id,
     projectId: r.projectId,
     title: r.title ?? null,
-    sessionMode: normalizeConversationSessionMode(r.sessionMode),
-    createdAt: Number(r.createdAt),
+	    sessionMode: normalizeConversationSessionMode(r.sessionMode),
+	    messageCount: Number(r.messageCount ?? 0),
+	    createdAt: Number(r.createdAt),
     updatedAt: Number(r.updatedAt),
     latestRun: latestRun ?? undefined,
   };
@@ -936,6 +951,7 @@ export function listMessages(db: SqliteDb, conversationId: string) {
               feedback_json AS feedbackJson,
               pre_turn_file_names_json AS preTurnFileNamesJson,
               session_mode AS sessionMode,
+              run_context_json AS runContextJson,
               applied_plugin_snapshot_json AS appliedPluginSnapshotJson,
               created_at AS createdAt, started_at AS startedAt, ended_at AS endedAt,
               position
@@ -960,7 +976,7 @@ export function upsertMessage(db: SqliteDb, conversationId: string, m: DbRow) {
               events_json = ?, attachments_json = ?, comment_attachments_json = ?,
               produced_files_json = ?, feedback_json = ?,
               pre_turn_file_names_json = ?,
-              session_mode = ?, applied_plugin_snapshot_json = ?,
+              session_mode = ?, run_context_json = ?, applied_plugin_snapshot_json = ?,
               started_at = ?, ended_at = ?
         WHERE id = ?`,
     ).run(
@@ -978,6 +994,7 @@ export function upsertMessage(db: SqliteDb, conversationId: string, m: DbRow) {
       m.feedback ? JSON.stringify(m.feedback) : null,
       m.preTurnFileNames ? JSON.stringify(m.preTurnFileNames) : null,
       normalizeMessageSessionModeForStorage(m.sessionMode),
+      m.runContext ? JSON.stringify(m.runContext) : null,
       m.appliedPluginSnapshot ? JSON.stringify(m.appliedPluginSnapshot) : null,
       m.startedAt ?? null,
       m.endedAt ?? null,
@@ -993,17 +1010,17 @@ export function upsertMessage(db: SqliteDb, conversationId: string, m: DbRow) {
     // 21 values: id, conversation_id, role, content, agent_id, agent_name,
     // run_id, run_status, last_run_event_id, events_json, attachments_json,
     // comment_attachments_json, produced_files_json, feedback_json,
-    // pre_turn_file_names_json, session_mode, applied_plugin_snapshot_json,
-    // started_at, ended_at, position, created_at.
+    // pre_turn_file_names_json, session_mode, run_context_json,
+    // applied_plugin_snapshot_json, started_at, ended_at, position, created_at.
     db.prepare(
       `INSERT INTO messages
          (id, conversation_id, role, content, agent_id, agent_name,
           run_id, run_status, last_run_event_id, events_json,
           attachments_json, comment_attachments_json, produced_files_json,
           feedback_json, pre_turn_file_names_json,
-          session_mode, applied_plugin_snapshot_json,
+          session_mode, run_context_json, applied_plugin_snapshot_json,
           started_at, ended_at, position, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       m.id,
       conversationId,
@@ -1021,6 +1038,7 @@ export function upsertMessage(db: SqliteDb, conversationId: string, m: DbRow) {
       m.feedback ? JSON.stringify(m.feedback) : null,
       m.preTurnFileNames ? JSON.stringify(m.preTurnFileNames) : null,
       normalizeMessageSessionModeForStorage(m.sessionMode),
+      m.runContext ? JSON.stringify(m.runContext) : null,
       m.appliedPluginSnapshot ? JSON.stringify(m.appliedPluginSnapshot) : null,
       m.startedAt ?? null,
       m.endedAt ?? null,
@@ -1045,6 +1063,7 @@ export function upsertMessage(db: SqliteDb, conversationId: string, m: DbRow) {
               feedback_json AS feedbackJson,
               pre_turn_file_names_json AS preTurnFileNamesJson,
               session_mode AS sessionMode,
+              run_context_json AS runContextJson,
               applied_plugin_snapshot_json AS appliedPluginSnapshotJson,
               created_at AS createdAt, started_at AS startedAt, ended_at AS endedAt,
               position
@@ -1393,6 +1412,7 @@ function normalizeMessage(row: DbRow) {
     feedback: parseJsonOrUndef(row.feedbackJson),
     preTurnFileNames: parseJsonOrUndef(row.preTurnFileNamesJson),
     sessionMode: normalizeMessageSessionMode(row.sessionMode),
+    runContext: parseJsonOrUndef(row.runContextJson),
     appliedPluginSnapshot: parseJsonOrUndef(row.appliedPluginSnapshotJson),
     createdAt: row.createdAt ?? undefined,
     startedAt: row.startedAt ?? undefined,

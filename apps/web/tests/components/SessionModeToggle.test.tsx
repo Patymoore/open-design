@@ -32,7 +32,7 @@ describe('SessionModeToggle', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('shows localized guidance cards for the trigger and menu options', () => {
+  it('shows localized guidance only after opening the menu', () => {
     render(
       <I18nProvider initial="zh-CN">
         <SessionModeToggle mode="chat" onChange={vi.fn()} />
@@ -42,11 +42,12 @@ describe('SessionModeToggle', () => {
     const trigger = screen.getByTestId('session-mode-trigger');
     fireEvent.pointerEnter(trigger);
 
-    const tooltip = screen.getByRole('tooltip');
-    expect(tooltip.textContent).toContain('Chat 模式');
-    expect(tooltip.textContent).toContain('总结这份稿子，并指出还缺什么。');
+    expect(screen.queryByRole('tooltip')).toBeNull();
 
     fireEvent.click(trigger);
+    expect(screen.getByRole('tooltip').textContent).toContain('Chat 模式');
+    expect(screen.getByRole('tooltip').textContent).toContain('总结这份稿子，并指出还缺什么。');
+
     const designOption = screen.getByRole('menuitemradio', { name: /Design Agent 模式/i });
     fireEvent.pointerEnter(designOption);
 
