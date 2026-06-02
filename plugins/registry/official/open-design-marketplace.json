@@ -4565,6 +4565,45 @@
       }
     },
     {
+      "name": "open-design/example-webgpu-hero",
+      "title": "WebGPU Hero",
+      "version": "0.1.0",
+      "source": "github:nexu-io/open-design@main/plugins/_official/examples/example-webgpu-hero",
+      "publisher": {
+        "id": "open-design",
+        "url": "https://open-design.ai"
+      },
+      "capabilitiesSummary": [
+        "prompt:inject",
+        "fs:write"
+      ],
+      "description": "Full-bleed WebGPU three.js hero/splash: a flock of mouse-reactive tube 'noodles' animated entirely on the GPU behind an editorial title block and minimal chrome.",
+      "tags": [
+        "example",
+        "first-party",
+        "prototype",
+        "webgpu",
+        "three.js",
+        "hero",
+        "splash",
+        "shader",
+        "generative",
+        "background"
+      ],
+      "homepage": "https://github.com/nexu-io/open-design/tree/main/plugins/_official/examples/example-webgpu-hero",
+      "license": "MIT",
+      "mode": "prototype",
+      "taskKind": "new-generation",
+      "title_i18n": {
+        "en": "WebGPU Hero",
+        "zh-CN": "WebGPU 英雄区"
+      },
+      "description_i18n": {
+        "en": "Full-bleed WebGPU three.js hero/splash: a flock of mouse-reactive tube 'noodles' animated entirely on the GPU behind an editorial title block and minimal chrome.",
+        "zh-CN": "全屏 WebGPU three.js 英雄区 / splash：GPU 计算驱动的鼠标交互「面条」管束动画，叠在编辑风标题与极简框架之上。"
+      }
+    },
+    {
       "name": "open-design/example-frame-logo-outro",
       "title": "Logo Outro Frame",
       "version": "0.1.0",

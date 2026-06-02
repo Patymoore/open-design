@@ -1,0 +1,125 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "example-webgpu-hero",
+  "title": "WebGPU Hero",
+  "title_i18n": {
+    "en": "WebGPU Hero",
+    "zh-CN": "WebGPU 英雄区",
+    "zh-TW": "WebGPU 主視覺",
+    "ja": "WebGPU ヒーロー",
+    "ko": "WebGPU 히어로",
+    "de": "WebGPU-Hero",
+    "fr": "Hero WebGPU",
+    "ru": "WebGPU-герой",
+    "es": "Hero WebGPU",
+    "pt-BR": "Hero WebGPU",
+    "it": "Hero WebGPU",
+    "vi": "Hero WebGPU",
+    "pl": "Hero WebGPU",
+    "id": "Hero WebGPU",
+    "nl": "WebGPU-hero",
+    "ar": "بطل WebGPU",
+    "tr": "WebGPU Hero",
+    "uk": "WebGPU-герой"
+  },
+  "version": "0.1.0",
+  "description": "Full-bleed WebGPU three.js hero/splash: a flock of mouse-reactive tube 'noodles' animated entirely on the GPU behind an editorial title block and minimal chrome.",
+  "description_i18n": {
+    "en": "Full-bleed WebGPU three.js hero/splash: a flock of mouse-reactive tube 'noodles' animated entirely on the GPU behind an editorial title block and minimal chrome.",
+    "zh-CN": "全屏 WebGPU three.js 英雄区 / splash：GPU 计算驱动的鼠标交互「面条」管束动画，叠在编辑风标题与极简框架之上。",
+    "zh-TW": "全螢幕 WebGPU three.js 主視覺／splash：GPU 運算驅動、可隨滑鼠互動的「麵條」管束動畫，疊在編輯風標題與極簡框架之上。",
+    "ja": "全画面 WebGPU three.js のヒーロー／スプラッシュ。GPU 計算で動くマウス反応型のチューブ「ヌードル」群を、エディトリアルなタイトルと最小限の装飾の背後に配置。",
+    "ko": "전체 화면 WebGPU three.js 히어로/스플래시. GPU 연산으로 움직이는 마우스 반응형 튜브 '누들' 무리를 편집형 타이틀과 미니멀한 프레임 뒤에 배치합니다.",
+    "de": "Vollflächiger WebGPU-three.js-Hero/Splash: ein Schwarm mausreaktiver Röhren-„Noodles\", vollständig auf der GPU animiert, hinter einem redaktionellen Titelblock und minimalem Rahmen.",
+    "fr": "Hero/splash WebGPU three.js plein écran : une nuée de tubes « nouilles » réactifs à la souris, animés entièrement sur le GPU, derrière un bloc-titre éditorial et un habillage minimal.",
+    "ru": "Полноэкранный WebGPU three.js герой/сплэш: стая трубчатых «лапшинок», реагирующих на мышь и анимированных полностью на GPU, за редакционным заголовком и минимальным оформлением.",
+    "es": "Hero/splash WebGPU three.js a pantalla completa: un enjambre de tubos «fideos» reactivos al ratón, animados completamente en la GPU, tras un bloque de título editorial y un marco minimalista.",
+    "pt-BR": "Hero/splash WebGPU three.js de tela cheia: um enxame de tubos \"macarrões\" reativos ao mouse, animados inteiramente na GPU, atrás de um bloco de título editorial e moldura minimalista.",
+    "it": "Hero/splash WebGPU three.js a tutto schermo: uno sciame di tubi \"spaghetti\" reattivi al mouse, animati interamente sulla GPU, dietro un blocco titolo editoriale e una cornice minimale.",
+    "vi": "Hero/splash WebGPU three.js toàn màn hình: một bầy ống \"mì\" phản ứng theo chuột, được tạo chuyển động hoàn toàn trên GPU, phía sau khối tiêu đề kiểu biên tập và khung tối giản.",
+    "pl": "Pełnoekranowy hero/splash WebGPU three.js: rój rurkowych „kluseczek\" reagujących na mysz, animowanych w całości na GPU, za redakcyjnym blokiem tytułowym i minimalistyczną ramą.",
+    "id": "Hero/splash WebGPU three.js layar penuh: kawanan tabung \"mi\" yang reaktif terhadap mouse, dianimasikan sepenuhnya di GPU, di belakang blok judul editorial dan bingkai minimal.",
+    "nl": "Schermvullende WebGPU-three.js-hero/splash: een zwerm muis-reactieve buis-'noodles', volledig op de GPU geanimeerd, achter een redactioneel titelblok en minimale opmaak.",
+    "ar": "قسم بطل/شاشة افتتاحية بملء الشاشة بتقنية WebGPU وthree.js: سرب من الأنابيب \"النودلز\" المتفاعلة مع الماوس، متحركة بالكامل على وحدة معالجة الرسومات، خلف كتلة عنوان تحريرية وإطار بسيط.",
+    "tr": "Tam ekran WebGPU three.js hero/splash: fareye tepki veren ve tamamen GPU üzerinde canlandırılan bir tüp \"erişte\" sürüsü; editöryel bir başlık bloğu ve sade çerçevenin arkasında.",
+    "uk": "Повноекранний WebGPU three.js герой/сплеш: рій трубчастих «локшинок», що реагують на мишу й анімуються повністю на GPU, за редакційним заголовком і мінімальним оформленням."
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Open Design",
+    "url": "https://github.com/nexu-io"
+  },
+  "homepage": "https://github.com/nexu-io/open-design/tree/main/plugins/_official/examples/example-webgpu-hero",
+  "tags": [
+    "example",
+    "first-party",
+    "prototype",
+    "webgpu",
+    "three.js",
+    "hero",
+    "splash",
+    "shader",
+    "generative",
+    "background"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "scenario",
+    "taskKind": "new-generation",
+    "mode": "prototype",
+    "scenario": "design",
+    "surface": "prototype",
+    "preview": {
+      "type": "html",
+      "entry": "./example.html"
+    },
+    "useCase": {
+      "query": {
+        "en": "Use the WebGPU Hero template to turn my content into a full-bleed splash page with a live three.js GPU-animated background behind an editorial title block. Preserve the template's visual signature and WebGPU pipeline, use real copy, and avoid lorem ipsum or placeholder images.",
+        "zh-CN": "用「WebGPU 英雄区」模板把我的内容做成一个全屏 splash：实时 three.js GPU 动画背景 + 编辑风标题。保持模板的视觉签名和 WebGPU 管线，使用真实文案，避免 lorem ipsum 和占位图片。"
+      },
+      "exampleOutputs": [
+        {
+          "path": "./example.html",
+          "title": "WebGPU Hero",
+          "title_i18n": {
+            "en": "WebGPU Hero",
+            "zh-CN": "WebGPU 英雄区"
+          }
+        }
+      ]
+    },
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ],
+      "assets": [
+        "./example.html"
+      ]
+    },
+    "pipeline": {
+      "stages": [
+        {
+          "id": "generate",
+          "atoms": [
+            "file-write",
+            "live-artifact"
+          ]
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject",
+      "fs:write"
+    ]
+  }
+}
