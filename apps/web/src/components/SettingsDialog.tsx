@@ -10,6 +10,7 @@ import {
 import { useAnalytics } from '../analytics/provider';
 import {
   trackSettingsAppearanceClick,
+  trackSettingsByokModelsFetchResult,
   trackSettingsByokTestResult,
   trackSettingsCliTestResult,
   trackSettingsByokFieldClick,
@@ -301,6 +302,32 @@ type ProviderModelsState =
 
 type ByokRequiredField = ByokDraftField;
 type ByokPreconditionAction = 'test';
+type ByokFieldMissing = 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+
+function byokFieldMissingFromIssues(issues: readonly ByokDraftIssue[]): ByokFieldMissing {
+  const missingFields = new Set<ByokRequiredField>();
+  for (const issue of issues) {
+    if (
+      issue.code === 'api_key_required' ||
+      issue.code === 'base_url_required' ||
+      issue.code === 'model_required'
+    ) {
+      missingFields.add(issue.field);
+    }
+  }
+  if (missingFields.size === 0) return 'none';
+  if (missingFields.size > 1) return 'multiple';
+  return Array.from(missingFields)[0] ?? 'none';
+}
+
+function byokErrorKindFromIssues(issues: readonly ByokDraftIssue[]): string | undefined {
+  return issues[0]?.code;
+}
+
+function byokTrackingTestResult(result: ConnectionTestResponse): 'success' | 'failed' | 'timeout' {
+  if (result.ok) return 'success';
+  return result.kind === 'timeout' ? 'timeout' : 'failed';
+}
 
 // Map a test result to the visual severity of its inline status node so
 // the same green/red/amber palette as the Rescan status applies.
@@ -965,6 +992,7 @@ export function SettingsDialog({
   const providerModelsFirstResetRef = useRef(true);
   const deferAfterKeyCleanRef = useRef(false);
   const providerAutoTestKeyRef = useRef<string | null>(null);
+  const byokLastUnsuccessfulTestKeyRef = useRef<string | null>(null);
   const apiKeyInputRef = useRef<HTMLInputElement | null>(null);
   const baseUrlInputRef = useRef<HTMLInputElement | null>(null);
   const modelSelectRef = useRef<HTMLButtonElement | null>(null);
@@ -1274,6 +1302,10 @@ export function SettingsDialog({
       return;
     }
     const blockingIssues = blockingByokDraftIssues(byokDraftValidation);
+    const currentConfigKey = providerConnectionTestKey(apiProtocol, cfg);
+    const lastUnsuccessfulConfigKey = byokLastUnsuccessfulTestKeyRef.current;
+    const configKeyChanged = lastUnsuccessfulConfigKey !== null &&
+      lastUnsuccessfulConfigKey !== currentConfigKey;
     if (blockingIssues.length > 0) {
       if (options.silentPreconditions) {
         return;
@@ -1285,10 +1317,16 @@ export function SettingsDialog({
           page_name: 'settings',
           area: 'execution_model',
           provider_id: byokProviderId,
-          result: 'not_ready',
+          result: 'failed',
+          error_code: byokErrorKindFromIssues(blockingIssues),
+          error_kind: byokErrorKindFromIssues(blockingIssues),
+          field_missing: byokFieldMissingFromIssues(blockingIssues),
+          config_key_changed: configKeyChanged,
+          success_after_action: false,
           duration_ms: 0,
         });
       }
+      byokLastUnsuccessfulTestKeyRef.current = currentConfigKey;
       return;
     }
     const controller = new AbortController();
@@ -1327,11 +1365,16 @@ export function SettingsDialog({
           page_name: 'settings',
           area: 'execution_model',
           provider_id: byokProviderId,
-          result: result.ok ? 'success' : 'failed',
+          result: byokTrackingTestResult(result),
           ...(result.ok ? {} : { error_code: result.kind || 'UNKNOWN' }),
+          ...(result.ok ? {} : { error_kind: result.kind || 'UNKNOWN' }),
+          field_missing: 'none',
+          config_key_changed: configKeyChanged,
+          success_after_action: result.ok && configKeyChanged,
           duration_ms: Math.round(performance.now() - startedAt),
         });
       }
+      byokLastUnsuccessfulTestKeyRef.current = result.ok ? null : currentConfigKey;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       if (providerTestRevisionRef.current !== revision) {
@@ -1356,9 +1399,14 @@ export function SettingsDialog({
           provider_id: byokProviderId,
           result: 'failed',
           error_code: err instanceof Error ? err.name : 'UNKNOWN',
+          error_kind: err instanceof Error ? err.name : 'UNKNOWN',
+          field_missing: 'none',
+          config_key_changed: configKeyChanged,
+          success_after_action: false,
           duration_ms: Math.round(performance.now() - startedAt),
         });
       }
+      byokLastUnsuccessfulTestKeyRef.current = currentConfigKey;
     } finally {
       if (providerTestAbortRef.current === controller) {
         providerTestAbortRef.current = null;
@@ -1382,12 +1430,37 @@ export function SettingsDialog({
   };
 
   const handleFetchProviderModels = async (
-    options: { silent?: boolean } = {},
+    options: { silent?: boolean; trigger?: 'auto' | 'manual' } = {},
   ) => {
+    const trigger = options.trigger ?? (options.silent ? 'auto' : 'manual');
+    const byokProviderId = byokProtocolToTracking(apiProtocol);
+    const trackModelsFetchResult = (
+      props: Omit<
+        Parameters<typeof trackSettingsByokModelsFetchResult>[1],
+        'page_name' | 'area' | 'provider_id' | 'trigger' | 'source'
+      >,
+      source: 'network' | 'cache' = 'network',
+    ) => {
+      if (!byokProviderId) return;
+      trackSettingsByokModelsFetchResult(analytics.track, {
+        page_name: 'settings',
+        area: 'configure_execution_mode_byok',
+        provider_id: byokProviderId,
+        trigger,
+        source,
+        ...props,
+      });
+    };
     if (providerModelsState.status === 'running') {
       return;
     }
     if (apiProtocol === 'azure') {
+      trackModelsFetchResult({
+        result: 'failed',
+        error_code: 'unsupported_azure',
+        error_kind: 'unsupported_azure',
+        duration_ms: 0,
+      });
       if (!options.silent) {
         setByokPreconditionNotice({
           action: 'test',
@@ -1397,6 +1470,12 @@ export function SettingsDialog({
       return;
     }
     if (apiProtocol === 'ollama') {
+      trackModelsFetchResult({
+        result: 'failed',
+        error_code: 'unsupported_ollama',
+        error_kind: 'unsupported_ollama',
+        duration_ms: 0,
+      });
       if (!options.silent) {
         setByokPreconditionNotice({
           action: 'test',
@@ -1409,6 +1488,13 @@ export function SettingsDialog({
       byokModelFetchDraftValidation,
     );
     if (modelFetchBlockingIssues.length > 0) {
+      trackModelsFetchResult({
+        result: 'failed',
+        error_code: byokErrorKindFromIssues(modelFetchBlockingIssues),
+        error_kind: byokErrorKindFromIssues(modelFetchBlockingIssues),
+        field_missing: byokFieldMissingFromIssues(modelFetchBlockingIssues),
+        duration_ms: 0,
+      });
       if (!options.silent) {
         showByokDraftValidationNotice('test', byokModelFetchDraftValidation);
       }
@@ -1422,6 +1508,14 @@ export function SettingsDialog({
     );
     const cachedModels = activeProviderModelsCache[cacheKey];
     if (cachedModels) {
+      trackModelsFetchResult(
+        {
+          result: 'success',
+          model_count: cachedModels.length,
+          duration_ms: 0,
+        },
+        'cache',
+      );
       setProviderModelsState({
         status: 'done',
         cacheKey,
@@ -1438,6 +1532,7 @@ export function SettingsDialog({
     const revision = providerModelsRevisionRef.current;
     providerModelsAbortRef.current = controller;
     setProviderModelsState({ status: 'running', cacheKey });
+    const startedAt = performance.now();
     const clearIfStale = () => {
       if (providerModelsAbortRef.current === controller) {
         setProviderModelsState({ status: 'idle' });
@@ -1463,6 +1558,13 @@ export function SettingsDialog({
           [cacheKey]: result.models ?? [],
         }));
       }
+      trackModelsFetchResult({
+        result: result.ok ? 'success' : 'failed',
+        ...(result.ok ? {} : { error_code: result.kind || 'UNKNOWN' }),
+        ...(result.ok ? {} : { error_kind: result.kind || 'UNKNOWN' }),
+        model_count: result.ok ? result.models?.length ?? 0 : 0,
+        duration_ms: Math.round(performance.now() - startedAt),
+      });
       setProviderModelsState({ status: 'done', cacheKey, result });
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -1479,6 +1581,13 @@ export function SettingsDialog({
           latencyMs: 0,
           detail: err instanceof Error ? err.message : 'Model list request failed',
         },
+      });
+      trackModelsFetchResult({
+        result: 'failed',
+        error_code: err instanceof Error ? err.name : 'UNKNOWN',
+        error_kind: err instanceof Error ? err.name : 'UNKNOWN',
+        model_count: 0,
+        duration_ms: Math.round(performance.now() - startedAt),
       });
     } finally {
       if (providerModelsAbortRef.current === controller) {

@@ -42,6 +42,7 @@ export type AnalyticsEventName =
   | 'settings_view'
   | 'settings_cli_test_result'
   | 'settings_byok_test_result'
+  | 'settings_byok_models_fetch_result'
   | 'settings_connector_auth_result'
   // Onboarding-only result events. UI clicks + page_views inside the
   // onboarding flow reuse the generic `ui_click` / `page_view` shapes
@@ -1979,8 +1980,26 @@ export interface SettingsByokTestResultProps {
   // wire format matches the doc.
   area: 'execution_model';
   provider_id: TrackingByokProviderId;
-  result: TrackingTestResult | 'not_ready';
+  result: TrackingTestResult;
   error_code?: string;
+  error_kind?: string;
+  field_missing?: 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+  config_key_changed?: boolean;
+  success_after_action?: boolean;
+  duration_ms: number;
+}
+
+export interface SettingsByokModelsFetchResultProps {
+  page_name: TrackingSettingsPage;
+  area: 'configure_execution_mode_byok';
+  provider_id: TrackingByokProviderId;
+  result: TrackingResult;
+  trigger: 'auto' | 'manual';
+  source: 'network' | 'cache';
+  error_code?: string;
+  error_kind?: string;
+  field_missing?: 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+  model_count?: number;
   duration_ms: number;
 }
 
@@ -2024,6 +2043,10 @@ export type AnalyticsEventPayload =
   | { event: 'settings_view'; props: SettingsViewProps }
   | { event: 'settings_cli_test_result'; props: SettingsCliTestResultProps }
   | { event: 'settings_byok_test_result'; props: SettingsByokTestResultProps }
+  | {
+      event: 'settings_byok_models_fetch_result';
+      props: SettingsByokModelsFetchResultProps;
+    }
   | { event: 'settings_connector_auth_result'; props: SettingsConnectorAuthResultProps }
   | { event: 'onboarding_runtime_scan_result'; props: OnboardingRuntimeScanResultProps }
   | { event: 'onboarding_complete_result'; props: OnboardingCompleteResultProps }
