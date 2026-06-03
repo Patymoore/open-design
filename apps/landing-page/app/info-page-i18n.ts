@@ -178,6 +178,40 @@ export interface InfoPageCopy {
     ctaTitle: string;
     ctaBody: string;
   };
+  download: {
+    title: string;
+    description: string;
+    breadcrumb: string;
+    label: string;
+    heading: string;
+    lead: string;
+    autoCtaPrefix: string; // "Download for" → "Download for macOS"
+    autoCtaFallback: string; // shown before JS detects platform
+    recommended: string; // "Recommended for your system"
+    publishedPrefix: string; // "Released"
+    releaseNotes: string;
+    platformsTitle: string;
+    mac: string;
+    macArm: string;
+    macIntel: string;
+    windows: string;
+    windowsInstaller: string;
+    windowsPortable: string;
+    linux: string;
+    linuxBody: string;
+    installer: string;
+    portable: string;
+    dmg: string;
+    zip: string;
+    checksum: string;
+    downloadVerb: string; // "Download"
+    requirementsTitle: string;
+    requirements: LinkText[];
+    allReleasesTitle: string;
+    allReleasesBody: string;
+    ctaTitle: string;
+    ctaBody: string;
+  };
 }
 
 const QUICKSTART_CODE = {
@@ -501,6 +535,48 @@ const INFO_PAGE_COPY: Partial<Record<LandingLocaleCode, InfoPageCopy>> = {
       ctaBody:
         'Star the repo, grab the desktop build, or run the install in your terminal. Your DESIGN.md system stays in your repo from the first render onward.',
     },
+    download: {
+      title: 'Download Open Design — desktop app for macOS, Windows & Linux',
+      description:
+        'Download the latest Open Design desktop build. Install and create — sign in once, pick a model, start designing. macOS (Apple Silicon & Intel), Windows, and Linux.',
+      breadcrumb: 'Download',
+      label: 'Download',
+      heading: 'Download Open Design.',
+      lead:
+        'Install and create — no API key, no setup. The desktop app ships with the official model router; sign in once and start designing.',
+      autoCtaPrefix: 'Download for',
+      autoCtaFallback: 'Download Open Design',
+      recommended: 'Recommended for your system',
+      publishedPrefix: 'Released',
+      releaseNotes: 'Release notes',
+      platformsTitle: 'All platforms',
+      mac: 'macOS',
+      macArm: 'Apple Silicon',
+      macIntel: 'Intel',
+      windows: 'Windows',
+      windowsInstaller: 'Installer',
+      windowsPortable: 'Portable',
+      linux: 'Linux',
+      linuxBody: 'AppImage and Docker / Podman Compose are available on the release page.',
+      installer: 'Installer',
+      portable: 'Portable',
+      dmg: 'DMG',
+      zip: 'ZIP',
+      checksum: 'SHA-256',
+      downloadVerb: 'Download',
+      requirementsTitle: 'System requirements',
+      requirements: [
+        { label: 'macOS', body: '11 Big Sur or newer — Apple Silicon and Intel builds.' },
+        { label: 'Windows', body: '10 or 11 (x64) — installer or portable zip.' },
+        { label: 'Linux', body: 'AppImage, or Docker / Podman Compose one-click setup.' },
+      ],
+      allReleasesTitle: 'All releases & checksums',
+      allReleasesBody:
+        'Every build, checksum, and past version lives on GitHub Releases and releases.open-design.ai.',
+      ctaTitle: 'Prefer the terminal?',
+      ctaBody:
+        'Install from source in three commands, or drive Open Design headlessly from your existing coding agent.',
+    },
   },
 };
 
@@ -754,6 +830,41 @@ INFO_PAGE_COPY.zh = {
     ],
     ctaTitle: '三条命令切换。',
     ctaBody: '给仓库点 Star、下载桌面版，或直接在终端安装。你的 DESIGN.md 系统从第一次渲染开始就留在自己的 repo。',
+  },
+  download: {
+    ...INFO_PAGE_COPY.en!.download,
+    title: '下载 Open Design —— macOS / Windows / Linux 桌面客户端',
+    description:
+      '下载最新版 Open Design 桌面客户端。装上就能创作——登录一次、选个模型、开始设计。支持 macOS（Apple Silicon 与 Intel）、Windows、Linux。',
+    breadcrumb: '下载',
+    label: '下载',
+    heading: '下载 Open Design。',
+    lead: '装上就能创作——不需要 API key、零配置。桌面端内置官方 model router，登录一次即可开始设计。',
+    autoCtaPrefix: '下载适用于',
+    autoCtaFallback: '下载 Open Design',
+    recommended: '推荐给你的系统',
+    publishedPrefix: '发布于',
+    releaseNotes: '更新日志',
+    platformsTitle: '全部平台',
+    macArm: 'Apple Silicon',
+    macIntel: 'Intel',
+    windowsInstaller: '安装版',
+    windowsPortable: '便携版',
+    linuxBody: 'AppImage 以及 Docker / Podman Compose 一键搭建，见 release 页面。',
+    installer: '安装版',
+    portable: '便携版',
+    checksum: 'SHA-256',
+    downloadVerb: '下载',
+    requirementsTitle: '系统要求',
+    requirements: [
+      { label: 'macOS', body: '11 Big Sur 及以上——提供 Apple Silicon 与 Intel 版本。' },
+      { label: 'Windows', body: '10 或 11（x64）——安装版或便携版 zip。' },
+      { label: 'Linux', body: 'AppImage，或 Docker / Podman Compose 一键搭建。' },
+    ],
+    allReleasesTitle: '全部版本与校验和',
+    allReleasesBody: '每个构建、校验和与历史版本都在 GitHub Releases 与 releases.open-design.ai 上。',
+    ctaTitle: '更喜欢用终端？',
+    ctaBody: '三条命令从源码安装，或用你现有的编码 agent 以 headless 方式驱动 Open Design。',
   },
 };
 
@@ -1269,6 +1380,10 @@ function compactInfoPageCopy(
       ],
       ctaBody: text.reusable.ctaBody,
     },
+    // Download copy is not part of the compact text set yet; fall back to the
+    // English download strings (the dedicated /download page still localizes
+    // its asset matrix + chrome via the surrounding layout).
+    download: INFO_PAGE_COPY.en!.download,
   };
 }
 

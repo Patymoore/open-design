@@ -1,0 +1,383 @@
+---
+/*
+ * /download/ — dedicated download center.
+ *
+ * Auto-reflects the latest GitHub release. The platform matrix is
+ * rendered at build time from `getLatestRelease()` (SEO-friendly, works
+ * without JS); an inline enhancer detects the visitor's OS, highlights
+ * the matching row, and refetches `releases/latest` to keep hrefs live
+ * between rebuilds. Asset-name conventions mirror header-enhancer.astro.
+ */
+import Layout from '../../_components/sub-page-layout.astro';
+import { getLatestRelease, type ReleaseAsset } from '../../_lib/github';
+import { getInfoPageCopy } from '../../info-page-i18n';
+import { localeFromPath, localizedHref } from '../../i18n';
+
+const locale = localeFromPath(Astro.url.pathname);
+const href = (path: string) => localizedHref(path, locale);
+const copy = getInfoPageCopy(locale);
+const page = copy.download;
+const common = copy.common;
+
+const release = await getLatestRelease();
+const m = release.matrix;
+
+const SITE = Astro.site?.toString() ?? 'https://open-design.ai/';
+const REPO = 'https://github.com/nexu-io/open-design';
+const REPO_RELEASES = `${REPO}/releases`;
+const QUICKSTART_DOC = `${REPO}/blob/main/QUICKSTART.md`;
+
+const title = page.title;
+const description = page.description;
+
+function fmtSize(bytes: number): string | null {
+  if (!bytes || bytes <= 0) return null;
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1 ? `${mb.toFixed(0)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
+}
+
+function fmtDate(iso: string | null): string | null {
+  if (!iso) return null;
+  // Stable, locale-agnostic YYYY-MM-DD (avoid build-host TZ drift).
+  return iso.slice(0, 10);
+}
+
+// One download line in a platform card.
+interface Row {
+  key: string; // data-dl key the enhancer targets
+  variant: string; // e.g. "DMG" / "ZIP" / "Installer"
+  asset: ReleaseAsset | null;
+}
+
+interface PlatformCard {
+  os: 'macOS' | 'Windows' | 'Linux';
+  osLabel: string;
+  arch?: string; // sub-label, e.g. "Apple Silicon"
+  matchKey: string; // ties to enhancer detectPlatform (recommend highlight)
+  rows: Row[];
+  note?: string;
+}
+
+const cards: PlatformCard[] = [
+  {
+    os: 'macOS',
+    osLabel: page.mac,
+    arch: page.macArm,
+    matchKey: 'mac-arm64',
+    rows: [
+      { key: 'mac-arm64-dmg', variant: page.dmg, asset: m.macArm64Dmg },
+      { key: 'mac-arm64-zip', variant: page.zip, asset: m.macArm64Zip },
+    ],
+  },
+  {
+    os: 'macOS',
+    osLabel: page.mac,
+    arch: page.macIntel,
+    matchKey: 'mac-x64',
+    rows: [
+      { key: 'mac-x64-dmg', variant: page.dmg, asset: m.macX64Dmg },
+      { key: 'mac-x64-zip', variant: page.zip, asset: m.macX64Zip },
+    ],
+  },
+  {
+    os: 'Windows',
+    osLabel: page.windows,
+    matchKey: 'win',
+    rows: [
+      { key: 'win-setup', variant: page.windowsInstaller, asset: m.winSetup },
+      { key: 'win-portable', variant: page.windowsPortable, asset: m.winPortable },
+    ],
+  },
+  {
+    os: 'Linux',
+    osLabel: page.linux,
+    matchKey: 'linux',
+    rows: m.linux
+      ? [{ key: 'linux-appimage', variant: 'AppImage', asset: m.linux }]
+      : [],
+    note: page.linuxBody,
+  },
+];
+
+const publishedLabel = fmtDate(release.publishedAt);
+
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Open Design', item: SITE },
+      { '@type': 'ListItem', position: 2, name: page.breadcrumb, item: `${SITE}download/` },
+    ],
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Open Design',
+    applicationCategory: 'DesignApplication',
+    operatingSystem: 'macOS, Windows, Linux',
+    softwareVersion: release.version,
+    softwareHelp: { '@type': 'CreativeWork', url: QUICKSTART_DOC },
+    downloadUrl: m.macArm64Dmg?.url ?? release.releaseUrl,
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    license: 'https://www.apache.org/licenses/LICENSE-2.0',
+  },
+];
+---
+
+<Layout title={title} description={description} active="home" jsonLd={jsonLd}>
+  <nav class="breadcrumb" aria-label={common.breadcrumbAria}>
+    <a href={href('/')}>Open Design</a>
+    <span>/</span>
+    <span aria-current="page">{page.breadcrumb}</span>
+  </nav>
+
+  <article class="info-page" data-download-root>
+    <header class="catalog-head">
+      <span class="label">{page.label}</span>
+      <h1 class="display">{page.heading}</h1>
+      <p class="lead">{page.lead}</p>
+
+      <div class="dl-hero-actions">
+        <a
+          class="btn btn-primary"
+          href={m.macArm64Dmg?.url ?? release.releaseUrl}
+          data-dl-auto
+          {...(m.macArm64Dmg?.url ? {} : { target: '_blank', rel: 'noreferrer noopener' })}
+        >
+          <span data-dl-auto-label>{page.autoCtaFallback}</span>
+          <span class="dl-auto-os" data-dl-auto-os hidden></span>
+        </a>
+        <span class="dl-version">
+          <a class="inline-link" href={release.releaseUrl} target="_blank" rel="noreferrer noopener">
+            {release.versionLabel}
+          </a>
+          {publishedLabel && <span class="dl-version-date"> · {page.publishedPrefix} {publishedLabel}</span>}
+          <span> · </span>
+          <a class="inline-link" href={release.releaseUrl} target="_blank" rel="noreferrer noopener">{page.releaseNotes}</a>
+        </span>
+      </div>
+    </header>
+
+    <section class="info-section" id="platforms">
+      <h2>{page.platformsTitle}</h2>
+      <div class="dl-grid">
+        {cards.map((card) => (
+          <div class="dl-card" data-dl-card data-dl-match={card.matchKey}>
+            <div class="dl-card-head">
+              <span class="dl-os">{card.osLabel}</span>
+              {card.arch && <span class="dl-arch">{card.arch}</span>}
+              <span class="dl-rec" data-dl-rec hidden>{page.recommended}</span>
+            </div>
+            {card.rows.length > 0 ? (
+              <ul class="dl-rows">
+                {card.rows.map((row) => (
+                  <li class="dl-row">
+                    {row.asset ? (
+                      <>
+                        <a class="dl-link" href={row.asset.url} data-dl-key={row.key}>
+                          {page.downloadVerb} <strong>{row.variant}</strong>
+                          {fmtSize(row.asset.size) && <span class="dl-size">{fmtSize(row.asset.size)}</span>}
+                        </a>
+                        {row.asset.sha256Url && (
+                          <a class="dl-sha" href={row.asset.sha256Url} target="_blank" rel="noreferrer noopener">{page.checksum}</a>
+                        )}
+                      </>
+                    ) : (
+                      <a class="dl-link dl-link-fallback" href={release.releaseUrl} target="_blank" rel="noreferrer noopener">
+                        {row.variant} <span class="dl-size">→ Releases</span>
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p class="dl-note">
+                <a class="inline-link" href={release.releaseUrl} target="_blank" rel="noreferrer noopener">{card.note}</a>
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section class="info-section" id="requirements">
+      <h2>{page.requirementsTitle}</h2>
+      <ul>
+        {page.requirements.map((item) => (
+          <li><strong>{item.label}</strong> — {item.body}</li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="info-section" id="all-releases">
+      <h2>{page.allReleasesTitle}</h2>
+      <p>
+        {page.allReleasesBody}{' '}
+        <a class="inline-link" href={REPO_RELEASES} target="_blank" rel="noreferrer noopener">GitHub Releases</a>.
+      </p>
+    </section>
+
+    <section class="info-cta" aria-label="Open Design call to action">
+      <div>
+        <h2>{page.ctaTitle}</h2>
+        <p>{page.ctaBody}</p>
+      </div>
+      <div class="info-cta-actions">
+        <a class="btn btn-primary" href={href('/quickstart/')}>{common.quickstart}</a>
+        <a class="btn btn-ghost" href={REPO} target="_blank" rel="noreferrer noopener">{common.starOnGithub}</a>
+      </div>
+      <div class="info-cta-meta">
+        <span class="stamp">● {common.live}</span>
+        <span>{release.versionLabel} · Apache-2.0</span>
+        <span>{common.macWinLinux}</span>
+      </div>
+    </section>
+  </article>
+
+  <script is:inline define:vars={{ autoPrefix: page.autoCtaPrefix }}>
+    (() => {
+      const REPO_API = 'https://api.github.com/repos/nexu-io/open-design';
+
+      // Mirror header-enhancer.astro detection. Returns the matchKey used
+      // on each [data-dl-card] plus the asset-name matcher + os label.
+      const detect = () => {
+        const ua = (navigator.userAgent || '').toLowerCase();
+        const p = (
+          (navigator.userAgentData && navigator.userAgentData.platform) ||
+          navigator.platform || ''
+        ).toLowerCase();
+        const isWin = /win/.test(p) || /windows/.test(ua);
+        const isMac = /mac/.test(p) || (/mac os x/.test(ua) && !/iphone|ipad|ipod/.test(ua));
+        const isLinux = /linux/.test(p) || (/linux/.test(ua) && !/android/.test(ua));
+        if (isWin) return { matchKey: 'win', os: 'Windows', match: (n) => /win.*setup\.exe$/.test(n) };
+        if (isMac) {
+          const intel = (() => {
+            try {
+              const gl = document.createElement('canvas').getContext('webgl');
+              const dbg = gl && gl.getExtension('WEBGL_debug_renderer_info');
+              const r = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
+              return /intel|radeon|amd/i.test(r) && !/apple/i.test(r);
+            } catch { return false; }
+          })();
+          return intel
+            ? { matchKey: 'mac-x64', os: 'macOS (Intel)', match: (n) => n.endsWith('mac-x64.dmg') }
+            : { matchKey: 'mac-arm64', os: 'macOS', match: (n) => n.endsWith('mac-arm64.dmg') };
+        }
+        if (isLinux) return { matchKey: 'linux', os: 'Linux', match: () => false };
+        return null;
+      };
+
+      const platform = detect();
+      if (!platform) return;
+
+      // Highlight the recommended card + set the hero CTA OS label.
+      for (const card of document.querySelectorAll('[data-dl-card]')) {
+        if (card.getAttribute('data-dl-match') === platform.matchKey) {
+          card.setAttribute('data-dl-recommended', 'true');
+          const rec = card.querySelector('[data-dl-rec]');
+          if (rec) rec.hidden = false;
+        }
+      }
+      const osSlot = document.querySelector('[data-dl-auto-os]');
+      const labelSlot = document.querySelector('[data-dl-auto-label]');
+      if (osSlot) { osSlot.textContent = ` ${platform.os}`; osSlot.hidden = false; }
+      if (labelSlot) labelSlot.textContent = autoPrefix;
+
+      // Live refetch: keep the hero CTA + matrix links current between rebuilds.
+      fetch(`${REPO_API}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((release) => {
+          const assets = Array.isArray(release && release.assets) ? release.assets : [];
+          if (assets.length === 0) return;
+          const byName = (re) =>
+            assets.find((a) => a && typeof a.name === 'string' && typeof a.browser_download_url === 'string' && re(a.name));
+          const map = {
+            'mac-arm64-dmg': (n) => n.endsWith('mac-arm64.dmg'),
+            'mac-arm64-zip': (n) => n.endsWith('mac-arm64.zip'),
+            'mac-x64-dmg': (n) => n.endsWith('mac-x64.dmg'),
+            'mac-x64-zip': (n) => n.endsWith('mac-x64.zip'),
+            'win-setup': (n) => /win.*setup\.exe$/.test(n),
+            'win-portable': (n) => /win.*portable\.zip$/.test(n),
+            'linux-appimage': (n) => /\.appimage$/i.test(n),
+          };
+          for (const [key, re] of Object.entries(map)) {
+            const asset = byName(re);
+            if (!asset) continue;
+            for (const link of document.querySelectorAll(`[data-dl-key="${key}"]`)) {
+              link.href = asset.browser_download_url;
+            }
+          }
+          const heroAsset = byName(platform.match);
+          const hero = document.querySelector('[data-dl-auto]');
+          if (heroAsset && hero) {
+            hero.href = heroAsset.browser_download_url;
+            hero.removeAttribute('target');
+            hero.removeAttribute('rel');
+          }
+        })
+        .catch(() => {});
+    })();
+  </script>
+</Layout>
+
+<style>
+  .dl-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1.25rem;
+    margin-top: 1.25rem;
+  }
+  .dl-auto-os { font-weight: 600; }
+  .dl-version { font-size: 0.9rem; opacity: 0.85; }
+  .dl-version-date { opacity: 0.8; }
+
+  .dl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-top: 0.5rem;
+  }
+  .dl-card {
+    border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
+    border-radius: 14px;
+    padding: 1.1rem 1.2rem;
+    background: var(--surface, rgba(255, 255, 255, 0.5));
+    transition: border-color 160ms, box-shadow 160ms;
+  }
+  .dl-card[data-dl-recommended='true'] {
+    border-color: var(--accent, #14120b);
+    box-shadow: 0 0 0 1px var(--accent, #14120b);
+  }
+  .dl-card-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+  .dl-os { font-weight: 650; font-size: 1.05rem; }
+  .dl-arch { font-size: 0.85rem; opacity: 0.7; }
+  .dl-rec {
+    margin-left: auto;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: var(--accent, #14120b);
+    color: #fff;
+  }
+  .dl-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+  .dl-row { display: flex; align-items: center; gap: 0.6rem; }
+  .dl-link {
+    flex: 1;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  .dl-link strong { font-weight: 600; }
+  .dl-link:hover { text-decoration: underline; }
+  .dl-size { font-size: 0.78rem; opacity: 0.6; }
+  .dl-sha { font-size: 0.72rem; opacity: 0.55; text-decoration: none; }
+  .dl-sha:hover { opacity: 1; text-decoration: underline; }
+  .dl-note { font-size: 0.9rem; opacity: 0.8; margin: 0; }
+</style>
