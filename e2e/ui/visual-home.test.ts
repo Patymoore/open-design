@@ -59,9 +59,16 @@ test('captures the home context picker surface', async ({ page }) => {
   await configureVisualPage(page);
   await gotoVisualHome(page);
 
-  await page.getByTestId('home-hero-input').fill('@visual');
-  await expect(page.getByTestId('home-hero-plugin-picker')).toBeVisible();
-  await expect(page.getByRole('option', { name: /Prototype Starter/i })).toBeVisible();
+  // Context is now inserted through the composer "+" menu rather than a bare
+  // `@` floating picker. Open the menu, expand the Plugins submenu, and confirm
+  // an installed plugin can be inserted as an `@mention`.
+  await page.getByTestId('home-hero-plus').click();
+  const plusMenu = page.getByRole('menu', { name: /add/i }).first();
+  await expect(plusMenu).toBeVisible();
+  // The Plugins submenu opens on hover (and click toggles it), so hovering the
+  // parent row is the stable way to reveal the installed-plugin list.
+  await plusMenu.getByRole('menuitem', { name: /Plugins/i }).hover();
+  await expect(page.getByRole('menuitem', { name: /Prototype Starter/i })).toBeVisible();
 
   await captureVisual(page, 'visual-home-context-picker');
 });
