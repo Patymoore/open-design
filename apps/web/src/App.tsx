@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
+import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { useAnalytics } from './analytics/provider';
 import {
   trackFileUploadResult,
@@ -215,10 +216,18 @@ function mergeAmrModelsIntoAgents(
 }
 
 export function App() {
+  // `reducedMotion="user"` makes every motion/react component honor the OS
+  // `prefers-reduced-motion` setting: transform/layout animations are zeroed
+  // out while opacity-only changes are kept. The CSS `@media (prefers-reduced-
+  // motion: reduce)` block covers the CSS-keyframe surfaces, but the dialogs,
+  // toasts and popovers that moved to motion/react need this gate too — without
+  // it they keep springing/sliding for users who asked us not to animate.
   return (
-    <IframeKeepAliveProvider>
-      <AppInner />
-    </IframeKeepAliveProvider>
+    <MotionConfig reducedMotion="user">
+      <IframeKeepAliveProvider>
+        <AppInner />
+      </IframeKeepAliveProvider>
+    </MotionConfig>
   );
 }
 
@@ -1796,7 +1805,9 @@ function AppInner() {
           route={route}
           projects={projects}
         />
-        <div className="workspace-shell__body">{appMain}</div>
+        <div className="workspace-shell__body">
+          {appMain}
+        </div>
       </div>
       {clientType === 'desktop' ? null : (
         <PetOverlay
@@ -1806,6 +1817,7 @@ function AppInner() {
         />
       )}
       <TooltipLayer />
+      <AnimatePresence>
       {settingsOpen ? (
         <SettingsDialog
           initial={config}
@@ -1849,6 +1861,7 @@ function AppInner() {
           onProviderModelsCacheChange={setProviderModelsCache}
         />
       ) : null}
+      </AnimatePresence>
       <MemoryToast onOpenMemory={() => openSettings('memory')} />
       {/* First-run privacy consent banner. It waits for daemon config
           hydration because privacyDecisionAt is daemon-owned and stripped
@@ -1857,7 +1870,14 @@ function AppInner() {
           finish both flip the flag). Independent of Settings: z-index in
           index.css sits above modal backdrops so opening Settings does
           not hide the banner. */}
+      <AnimatePresence>
       {showPrivacyConsent ? (
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 10, scale: 0.97 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+        >
         <PrivacyConsentModal
           onAccept={() => {
             // Default opt-in: clicking "I get it" enables the same telemetry
@@ -1876,7 +1896,9 @@ function AppInner() {
             });
           }}
         />
+      </motion.div>
       ) : null}
+      </AnimatePresence>
     </>
   );
 }
