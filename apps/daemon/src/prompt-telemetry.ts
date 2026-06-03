@@ -93,8 +93,9 @@ const SECTION_PRIORITY = new Map<PromptTelemetrySectionKind, number>([
   ['userRequest', 9],
 ]);
 
-const POSIX_LOCAL_PATH =
-  /(^|[\s([{"'`])\/(?:Users|home|root|tmp|private\/tmp|private\/var\/folders|var\/folders|Volumes|mnt|workspace|workspaces)\/[^\s)\]}"'`,;<>]+/g;
+const FILE_LOCAL_PATH =
+  /(^|[\s([{"'`])file:\/\/(?:localhost)?\/[^\s)\]}"'`,;<>]+/gi;
+const POSIX_LOCAL_PATH = /(^|[\s([{"'`])\/(?!\/)[^\s)\]}"'`,;<>]+/g;
 const WINDOWS_LOCAL_PATH =
   /(^|[\s([{"'`])(?:[A-Za-z]:\\|\\\\)[^\s)\]}"'`,;<>]+/g;
 
@@ -117,6 +118,9 @@ function truncateUtf8(value: string, maxBytes: number): string {
 export function redactLocalPaths(input: string): string {
   if (!input) return input;
   return input
+    .replace(FILE_LOCAL_PATH, (_match, prefix: string) => {
+      return `${prefix}${PROMPT_STACK_PATH_MARKER}`;
+    })
     .replace(POSIX_LOCAL_PATH, (_match, prefix: string) => {
       return `${prefix}${PROMPT_STACK_PATH_MARKER}`;
     })

@@ -99,6 +99,55 @@ describe('prompt telemetry builder', () => {
     expect(first.sections[0]!.fingerprint).toBe(second.sections[0]!.fingerprint);
   });
 
+  it('normalizes arbitrary absolute project roots before fingerprinting', () => {
+    const first = buildPromptStackTelemetry({
+      composedPrompt: 'Your working directory: /app/project',
+      sections: [
+        { kind: 'daemonSystemPrompt', content: 'Your working directory: /app/project' },
+      ],
+    });
+    const second = buildPromptStackTelemetry({
+      composedPrompt: 'Your working directory: /app/other',
+      sections: [
+        { kind: 'daemonSystemPrompt', content: 'Your working directory: /app/other' },
+      ],
+    });
+
+    expect(first.sections[0]!.redactedContent).toBe(
+      `Your working directory: ${PROMPT_STACK_PATH_MARKER}`,
+    );
+    expect(second.sections[0]!.redactedContent).toBe(
+      `Your working directory: ${PROMPT_STACK_PATH_MARKER}`,
+    );
+    expect(first.sections[0]!.redactedContent).not.toContain('/app/project');
+    expect(second.sections[0]!.redactedContent).not.toContain('/app/other');
+    expect(first.promptFingerprint).toBe(second.promptFingerprint);
+    expect(first.sections[0]!.fingerprint).toBe(second.sections[0]!.fingerprint);
+  });
+
+  it('normalizes file URL local paths before fingerprinting', () => {
+    const first = buildPromptStackTelemetry({
+      composedPrompt: 'Preview file:///app/project/index.html',
+      sections: [
+        { kind: 'userRequest', content: 'Preview file:///app/project/index.html' },
+      ],
+    });
+    const second = buildPromptStackTelemetry({
+      composedPrompt: 'Preview file://localhost/app/other/index.html',
+      sections: [
+        {
+          kind: 'userRequest',
+          content: 'Preview file://localhost/app/other/index.html',
+        },
+      ],
+    });
+
+    expect(first.sections[0]!.redactedContent).toBe(`Preview ${PROMPT_STACK_PATH_MARKER}`);
+    expect(second.sections[0]!.redactedContent).toBe(`Preview ${PROMPT_STACK_PATH_MARKER}`);
+    expect(first.promptFingerprint).toBe(second.promptFingerprint);
+    expect(first.sections[0]!.fingerprint).toBe(second.sections[0]!.fingerprint);
+  });
+
   it('strips runtime tool token-bearing lines before capture', () => {
     const telemetry = buildPromptStackTelemetry({
       composedPrompt: 'tools',
