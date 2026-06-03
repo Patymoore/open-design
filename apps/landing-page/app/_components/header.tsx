@@ -34,48 +34,58 @@ const ext = {
 } as const;
 
 /*
- * Solution dropdown — SEO surfaces grouped under one parent. Names stay in
- * English on purpose: each is a target keyword phrase (e.g. "Figma alternative"),
- * and the canonical search-query form is English regardless of UI locale.
- * `href` is relative and run through `href()` so it picks up the locale prefix.
- * Pages still on the backlog point at an existing surface today and will be
- * repointed at their dedicated page once it ships (see nav IA plan, PR-2/3).
+ * Nav structure mirrors the agreed Header spec 1:1 (see od-landing nav doc).
+ * Sub-item display names are kept verbatim from that spec and are not
+ * localized — product names and SEO use-case phrases stay in their canonical
+ * English form regardless of UI locale. `href` values are placeholders today
+ * (Solution use-case / Roles pages are a later milestone) and point at an
+ * existing surface so nothing 404s; they get repointed as each page ships.
  */
-const SOLUTION_LINKS: ReadonlyArray<{ name: string; href: string }> = [
-  { name: 'Claude Code for Design', href: '/compare/' },
-  { name: 'AI Prototype Generator', href: '/compare/' },
-  { name: 'AI Dashboard Builder', href: '/compare/' },
-  { name: 'AI Landing Page Builder', href: '/compare/' },
-  { name: 'AI Slides Generator', href: '/compare/' },
-  { name: 'Figma Alternative', href: '/alternatives/claude-design/' },
-  { name: 'Lovable Alternative', href: '/alternatives/claude-design/' },
+
+// Solution → Use cases. Placeholder hrefs until the dedicated pages ship.
+const SOLUTION_USE_CASES: ReadonlyArray<{ name: string; href: string }> = [
+  { name: 'Prototype', href: '/compare/' },
+  { name: 'Dashboard', href: '/compare/' },
+  { name: 'Slides', href: '/compare/' },
+  { name: 'Image', href: '/compare/' },
+  { name: 'Video', href: '/compare/' },
+  { name: 'Design System', href: '/compare/' },
+];
+
+// Solution → Roles. Placeholder hrefs until the dedicated pages ship.
+const SOLUTION_ROLES: ReadonlyArray<{ name: string; href: string }> = [
+  { name: 'Solo Builder', href: '/compare/' },
+  { name: 'Designer', href: '/compare/' },
+  { name: 'Engineering', href: '/compare/' },
+  { name: 'Product Managers', href: '/compare/' },
+  { name: 'Marketing', href: '/compare/' },
 ];
 
 /*
- * Agent dropdown — the 17 first-party coding-agent adapters. Names mirror the
- * canonical `name:` fields on the /agents/ hub (apps/landing-page/app/pages/
- * agents/index.astro); each item deep-links to that agent's anchor on the hub.
- * Per-agent detail pages (/agents/<slug>/) are a later milestone — until then
- * the anchor is the destination. Agent product names are not localized.
+ * Agent dropdown — AMR (the design Agent) plus the 17 first-party coding-agent
+ * adapters. Display names are verbatim from the Header spec; `slug` maps to the
+ * agent's anchor on the /agents/ hub (apps/landing-page/app/pages/agents/
+ * index.astro). Per-agent detail pages are a later milestone — until then the
+ * anchor is the destination. Agent product names are not localized.
  */
 const AGENT_LINKS: ReadonlyArray<{ name: string; slug: string }> = [
-  { name: 'Claude Code', slug: 'claude-code' },
-  { name: 'Codex', slug: 'codex' },
-  { name: 'Cursor Agent', slug: 'cursor' },
-  { name: 'Gemini CLI', slug: 'gemini' },
-  { name: 'GitHub Copilot CLI', slug: 'copilot' },
-  { name: 'OpenCode', slug: 'opencode' },
-  { name: 'Qwen', slug: 'qwen' },
-  { name: 'Grok', slug: 'grok' },
-  { name: 'Hermes', slug: 'hermes' },
-  { name: 'Kimi CLI', slug: 'kimi' },
+  { name: 'Codex CLI', slug: 'codex' },
   { name: 'Devin for Terminal', slug: 'devin' },
-  { name: 'DeepSeek TUI', slug: 'deepseek' },
+  { name: 'OpenCode', slug: 'opencode' },
+  { name: 'Kimi CLI', slug: 'kimi' },
+  { name: 'Qwen Code', slug: 'qwen' },
+  { name: 'Qoder CLI', slug: 'qoder' },
+  { name: 'GitHub Copilot CLI', slug: 'copilot' },
   { name: 'Pi', slug: 'pi' },
-  { name: 'Mistral Vibe CLI', slug: 'vibe' },
   { name: 'Kiro CLI', slug: 'kiro' },
   { name: 'Kilo', slug: 'kilo' },
-  { name: 'Qoder CLI', slug: 'qoder' },
+  { name: 'Mistral Vibe CLI', slug: 'vibe' },
+  { name: 'DeepSeek TUI', slug: 'deepseek' },
+  { name: 'Claude Code', slug: 'claude-code' },
+  { name: 'Gemini CLI', slug: 'gemini' },
+  { name: 'Hermes', slug: 'hermes' },
+  { name: 'Grok Build', slug: 'grok' },
+  { name: 'Cursor Agent', slug: 'cursor' },
 ];
 
 export interface HeaderProps {
@@ -241,27 +251,18 @@ export function Header({
                     </span>
                   </a>
                 </li>
-                <li role='none'>
-                  <a role='menuitem' href={AMR_URL}>
-                    <span className='dropdown-name'>{productMenuCopy.amrName}</span>
-                    <span className='dropdown-blurb'>
-                      {productMenuCopy.amrBlurb}
-                    </span>
-                  </a>
-                </li>
-                {/* Tutorials is a top-level nav item (see Library section
-                  below). Don't list it here too — duplicating it once at
-                  Product/Tutorials and again at top-level confuses users
-                  about whether the two link to the same page. */}
+                {/* AMR is no longer listed here — per the Header spec it now
+                  heads the Agent dropdown (the design Agent above the coding
+                  agents). Listing it in both places would be redundant. */}
               </ul>
             </li>
             {/*
-              Solution — SEO surfaces (Claude Code for design, use-case pages,
-              competitor-alternative pages) grouped under one parent. The
-              trigger points at the flagship Claude Code page once it ships;
-              until then it falls back to /compare/. Same CSS-only dropdown
-              mechanic as Product. Sub-item names are intentionally English
-              (target search phrases). See nav IA plan PR-2/3.
+              Solution — two labeled groups per the Header spec: Use cases
+              (Prototype / Dashboard / Slides / Image / Video / Design System)
+              and Roles (Solo Builder / Designer / Engineering / Product
+              Managers / Marketing). Sub-item hrefs are placeholders until each
+              dedicated page ships; sub-item names are verbatim from the spec
+              and not localized. Same CSS-only dropdown mechanic as Product.
             */}
             <li className='has-dropdown'>
               <a
@@ -273,9 +274,22 @@ export function Header({
                 {headerCopy.nav.solution}
                 <span className='dropdown-caret' aria-hidden='true'>▾</span>
               </a>
-              <ul className='nav-dropdown' role='menu'>
-                {SOLUTION_LINKS.map((item) => (
-                  <li role='none' key={item.name}>
+              <ul className='nav-dropdown nav-dropdown-solution' role='menu'>
+                <li role='none' className='nav-dropdown-group'>
+                  <span className='nav-dropdown-group-label'>{headerCopy.nav.useCases}</span>
+                </li>
+                {SOLUTION_USE_CASES.map((item) => (
+                  <li role='none' key={`uc-${item.name}`}>
+                    <a role='menuitem' href={href(item.href)}>
+                      <span className='dropdown-name'>{item.name}</span>
+                    </a>
+                  </li>
+                ))}
+                <li role='none' className='nav-dropdown-group'>
+                  <span className='nav-dropdown-group-label'>{headerCopy.nav.roles}</span>
+                </li>
+                {SOLUTION_ROLES.map((item) => (
+                  <li role='none' key={`role-${item.name}`}>
                     <a role='menuitem' href={href(item.href)}>
                       <span className='dropdown-name'>{item.name}</span>
                     </a>
@@ -284,9 +298,10 @@ export function Header({
               </ul>
             </li>
             {/*
-              Agent — the 17 first-party coding-agent adapters, deep-linking to
-              their anchors on the /agents/ hub. The trigger points at the hub
-              itself. Agent product names are not localized.
+              Agent — AMR (the design Agent) heads the list, followed by the 17
+              first-party coding-agent adapters deep-linking to their anchors on
+              the /agents/ hub. The trigger points at the hub itself. Agent
+              product names are not localized.
             */}
             <li className='has-dropdown'>
               <a
@@ -299,6 +314,11 @@ export function Header({
                 <span className='dropdown-caret' aria-hidden='true'>▾</span>
               </a>
               <ul className='nav-dropdown nav-dropdown-agents' role='menu'>
+                <li role='none'>
+                  <a role='menuitem' href={AMR_URL}>
+                    <span className='dropdown-name'>{productMenuCopy.amrName}</span>
+                  </a>
+                </li>
                 {AGENT_LINKS.map((item) => (
                   <li role='none' key={item.slug}>
                     <a role='menuitem' href={href(`/agents/#${item.slug}`)}>
@@ -334,6 +354,8 @@ export function Header({
                 {headerCopy.nav.plugins}
                 <span className='dropdown-caret' aria-hidden='true'>▾</span>
               </a>
+              {/* Names follow the Header spec verbatim: "Design Templates /
+                Design Skills / Design Systems". */}
               <ul className='nav-dropdown' role='menu'>
                 <li role='none'>
                   <a
@@ -341,7 +363,7 @@ export function Header({
                     href={href('/plugins/templates/')}
                     className={linkClass('templates')}
                   >
-                    <span className='dropdown-name'>{headerCopy.nav.templates}</span>
+                    <span className='dropdown-name'>Design Templates</span>
                   </a>
                 </li>
                 <li role='none'>
@@ -350,7 +372,7 @@ export function Header({
                     href={href('/plugins/skills/')}
                     className={linkClass('skills')}
                   >
-                    <span className='dropdown-name'>{headerCopy.nav.skills}</span>
+                    <span className='dropdown-name'>Design Skills</span>
                   </a>
                 </li>
                 <li role='none'>
@@ -359,16 +381,18 @@ export function Header({
                     href={href('/plugins/systems/')}
                     className={linkClass('systems')}
                   >
-                    <span className='dropdown-name'>{headerCopy.nav.systems}</span>
+                    <span className='dropdown-name'>Design Systems</span>
                   </a>
                 </li>
               </ul>
             </li>
             {/*
-              Resources — Blog, Tutorials, the comparison hub, and Download
-              collapsed under one parent. Blog/Tutorials were standalone
-              top-level items before; folding them here frees two slots for the
-              new Solution/Agent dropdowns without overflowing the bar.
+              Resources — Blog, Video Tutorials, Weekly Newsletter, Download
+              per the Header spec. Blog/Tutorials were standalone top-level
+              items before; folding them here frees slots for the new
+              Solution/Agent dropdowns. Weekly Newsletter has no product yet,
+              so it renders as a disabled placeholder until the subscribe page
+              ships.
             */}
             <li className='has-dropdown'>
               <a
@@ -402,13 +426,17 @@ export function Header({
                     href={href('/tutorials/')}
                     className={linkClass('tutorials')}
                   >
-                    <span className='dropdown-name'>{headerCopy.nav.tutorials}</span>
+                    <span className='dropdown-name'>Video Tutorials</span>
                   </a>
                 </li>
                 <li role='none'>
-                  <a role='menuitem' href={href('/compare/')}>
-                    <span className='dropdown-name'>Compare</span>
-                  </a>
+                  <span
+                    className='dropdown-name dropdown-disabled'
+                    aria-disabled='true'
+                    title='Coming soon'
+                  >
+                    Weekly Newsletter
+                  </span>
                 </li>
                 <li role='none'>
                   <a role='menuitem' href={href('/download/')}>
@@ -418,21 +446,53 @@ export function Header({
               </ul>
             </li>
             {/*
-              Community is a static contributors / ambassadors page served
-              from `apps/landing-page/public/community/index.html` — Astro
-              copies `public/` verbatim, so this hits Cloudflare Pages as a
-              first-party route at `/community/`.
-
-              The href is the literal `/community/` rather than
-              `href('/community/')` because the page is a single non-
-              locale-aware destination — locale-prefixed variants like
-              `/zh/community/` would fall through to a 404 since the
-              `[locale]/[...path].astro` catch-all does not generate it.
+              Community — dropdown per the Header spec: Contributors,
+              Ambassadors, Moderators, Discord, Discussions. The first three
+              are anchors on the static `/community/` page (served verbatim
+              from `public/community/index.html`); Discord and Discussions are
+              external. Hrefs are the literal `/community/...` — the page is a
+              single non-locale-aware destination, so `/zh/community/` would
+              404 against the `[locale]/[...path].astro` catch-all.
             */}
-            <li>
-              <a href='/community/' className={linkClass('community')}>
+            <li className='has-dropdown'>
+              <a
+                href='/community/'
+                className={
+                  active === 'community' ? 'is-active' : undefined
+                }
+                aria-haspopup='true'
+                aria-expanded='false'
+              >
                 {headerCopy.nav.community}
+                <span className='dropdown-caret' aria-hidden='true'>▾</span>
               </a>
+              <ul className='nav-dropdown' role='menu'>
+                <li role='none'>
+                  <a role='menuitem' href='/community/#contributors'>
+                    <span className='dropdown-name'>Contributors</span>
+                  </a>
+                </li>
+                <li role='none'>
+                  <a role='menuitem' href='/community/#ambassadors'>
+                    <span className='dropdown-name'>Ambassadors</span>
+                  </a>
+                </li>
+                <li role='none'>
+                  <a role='menuitem' href='/community/#moderators'>
+                    <span className='dropdown-name'>Moderators</span>
+                  </a>
+                </li>
+                <li role='none'>
+                  <a role='menuitem' href={DISCORD} {...ext}>
+                    <span className='dropdown-name'>Discord</span>
+                  </a>
+                </li>
+                <li role='none'>
+                  <a role='menuitem' href={`${REPO}/discussions`} {...ext}>
+                    <span className='dropdown-name'>Discussions</span>
+                  </a>
+                </li>
+              </ul>
             </li>
             {/*
               Contact intentionally NOT exposed in the top nav: it's a
