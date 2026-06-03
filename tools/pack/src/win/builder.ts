@@ -65,6 +65,7 @@ import type {
 const execFileAsync = promisify(execFile);
 const WIN_ARCHIVE_CACHE_VERSION = 3;
 const WIN_ELECTRON_BUILDER_DIR_CACHE_VERSION = 6;
+const WIN_NSIS_BASE_PAYLOAD_INPUT_HASH_CACHE_VERSION = 1;
 
 async function assertWebStandaloneOutput(config: ToolPackConfig): Promise<void> {
   const webRoot = join(config.workspaceRoot, "apps", "web");
@@ -252,6 +253,47 @@ function createCacheLocalWinPaths(paths: WinPaths, entryRoot: string): WinPaths 
     webStandaloneHookAuditPath: join(entryRoot, "web-standalone-after-pack-audit.json"),
     webStandaloneHookConfigPath: join(entryRoot, "web-standalone-after-pack-config.json"),
   };
+}
+
+function resolveCachedNsisBasePayloadInputHashPath(entryPath: string): string {
+  return join(entryPath, "win-nsis-base-payload-input-hash.json");
+}
+
+async function readCachedNsisBasePayloadInputHash(entryPath: string): Promise<string | null> {
+  try {
+    const value = JSON.parse(
+      await readFile(resolveCachedNsisBasePayloadInputHashPath(entryPath), "utf8"),
+    ) as { hash?: unknown; version?: unknown };
+    if (
+      value.version === WIN_NSIS_BASE_PAYLOAD_INPUT_HASH_CACHE_VERSION
+      && typeof value.hash === "string"
+      && /^[0-9a-f]{64}$/.test(value.hash)
+    ) {
+      return value.hash;
+    }
+  } catch {
+    // Older cache entries do not have this metadata.
+  }
+  return null;
+}
+
+async function resolveCachedNsisBasePayloadInputHash(
+  entryPath: string,
+  builtApp: WinBuiltAppManifest,
+): Promise<string> {
+  const cached = await readCachedNsisBasePayloadInputHash(entryPath);
+  if (cached != null) return cached;
+
+  const hash = await hashWinNsisBasePayloadInputs(builtApp);
+  await writeFile(
+    resolveCachedNsisBasePayloadInputHashPath(entryPath),
+    `${JSON.stringify({
+      hash,
+      version: WIN_NSIS_BASE_PAYLOAD_INPUT_HASH_CACHE_VERSION,
+    }, null, 2)}\n`,
+    "utf8",
+  );
+  return hash;
 }
 
 function rewriteAuditPaths(value: unknown, fromRoot: string, toRoot: string): unknown {
@@ -585,6 +627,8 @@ export async function runElectronBuilder(
     const nsisOverlayPayloadNode = createNsisOverlayPayloadNode(null, [], async () => undefined);
     const createNsisInstallerNode = (
       archiveSegments: WinPackTiming[],
+      basePayloadKey: string,
+      overlayPayloadKey: string,
     ): CacheNode<{ createdAt: string; installerPath: string }> => ({
       build: async ({ entryRoot }) => {
         archiveSegments.push(...await buildCustomWinNsisInstaller(config, paths));
@@ -598,9 +642,9 @@ export async function runElectronBuilder(
       invalidate: async () => null,
       key: hashJson({
         archiveCacheVersion: WIN_ARCHIVE_CACHE_VERSION,
-        basePayloadKey: nsisBasePayloadNode.key,
+        basePayloadKey,
         namespace: config.namespace,
-        overlayPayloadKey: nsisOverlayPayloadNode.key,
+        overlayPayloadKey,
         packagedVersion,
         signing: signingCacheKey,
         target: "nsis-installer",
@@ -608,12 +652,35 @@ export async function runElectronBuilder(
       }),
       outputs: ["setup.exe"],
     });
+
+    const basePayloadInputHash = shouldBuildWinNsisInstaller(config.to)
+      ? await runSegment("nsis-payload-base:input-hash", async () =>
+        resolveCachedNsisBasePayloadInputHash(
+          manifest.entryPath,
+          {
+            appBuilderOutputRoot: cachedBuilderRoot,
+            cacheEntryPath: manifest.entryPath,
+            configPath: paths.packagedConfigPath,
+            executablePath: cachedExecutablePath,
+            source: "cache",
+            unpackedRoot: cachedUnpackedRoot,
+            version: 1,
+            webStandaloneHookAuditPath: null,
+          },
+        )
+      )
+      : null;
+
+    const contentKeyedBasePayloadNode = basePayloadInputHash == null
+      ? null
+      : createNsisBasePayloadNode(null, [], basePayloadInputHash);
     if (shouldBuildWinNsisInstaller(config.to) && !shouldBuildWinPortableZip(config.to)) {
+      if (contentKeyedBasePayloadNode == null) throw new Error("missing NSIS base payload input hash");
       const nsisHitSegments: WinPackTiming[] = [];
       const nsisHit = await runSegment("nsis-installer:read-hit", async () =>
         cache.readHit({
           materialize: nsisSetupMaterialize,
-          node: createNsisInstallerNode(nsisHitSegments),
+          node: createNsisInstallerNode(nsisHitSegments, contentKeyedBasePayloadNode.key, nsisOverlayPayloadNode.key),
         })
       );
       if (nsisHit != null) {
@@ -621,6 +688,47 @@ export async function runElectronBuilder(
         return segments;
       }
     }
+
+    let basePayloadHit = false;
+    let overlayPayloadHit = false;
+    if (shouldBuildWinNsisInstaller(config.to)) {
+      if (basePayloadInputHash == null || contentKeyedBasePayloadNode == null) {
+        throw new Error("missing NSIS base payload input hash");
+      }
+      const basePayloadProbeSegments: WinPackTiming[] = [];
+      const basePayloadProbeNode = createNsisBasePayloadNode(null, basePayloadProbeSegments, basePayloadInputHash);
+      const basePayloadProbe = await runSegment("nsis-payload-base:read-hit", async () =>
+        cache.readHit({
+          materialize: nsisBasePayloadMaterialize,
+          node: basePayloadProbeNode,
+        })
+      );
+      basePayloadHit = basePayloadProbe != null;
+      segments.push(...basePayloadProbeSegments);
+
+      const overlayPayloadProbeSegments: WinPackTiming[] = [];
+      const overlayPayloadProbe = await runSegment("nsis-payload-overlay:read-hit", async () =>
+        cache.readHit({
+          materialize: nsisOverlayPayloadMaterialize,
+          node: createNsisOverlayPayloadNode(null, overlayPayloadProbeSegments, async () => undefined),
+        })
+      );
+      overlayPayloadHit = overlayPayloadProbe != null;
+      segments.push(...overlayPayloadProbeSegments);
+
+      if (basePayloadHit && overlayPayloadHit && !shouldBuildWinPortableZip(config.to)) {
+        const installerSegments: WinPackTiming[] = [];
+        await runSegment("nsis-installer:cache", async () => {
+          await cache.acquire({
+            materialize: nsisSetupMaterialize,
+            node: createNsisInstallerNode(installerSegments, contentKeyedBasePayloadNode.key, nsisOverlayPayloadNode.key),
+          });
+        });
+        segments.push(...installerSegments);
+        return segments;
+      }
+    }
+
     const materialized = await runSegment("installer:materialize-unpacked", async () => {
       const materializedManifest = await cache.readHit({
         materialize: [{
@@ -642,9 +750,6 @@ export async function runElectronBuilder(
       }
       return materializeCachedUnpackedForInstaller(paths, packagedVersion);
     });
-    const basePayloadInputHash = await runSegment("nsis-payload-base:input-hash", async () =>
-      hashWinNsisBasePayloadInputs(materialized)
-    );
     let signedUnpacked = false;
     const ensureSignedUnpacked = async (): Promise<void> => {
       if (!config.signed || signedUnpacked) return;
@@ -686,27 +791,34 @@ export async function runElectronBuilder(
       segments.push(...archiveSegments);
     }
     if (shouldBuildWinNsisInstaller(config.to)) {
-      const basePayloadSegments: WinPackTiming[] = [];
-      await runSegment("nsis-payload-base:cache", async () => {
-        await cache.acquire({
-          materialize: nsisBasePayloadMaterialize,
-          node: createNsisBasePayloadNode(materialized, basePayloadSegments, basePayloadInputHash),
+      if (basePayloadInputHash == null || contentKeyedBasePayloadNode == null) {
+        throw new Error("missing NSIS base payload input hash");
+      }
+      if (!basePayloadHit) {
+        const basePayloadSegments: WinPackTiming[] = [];
+        await runSegment("nsis-payload-base:cache", async () => {
+          await cache.acquire({
+            materialize: nsisBasePayloadMaterialize,
+            node: createNsisBasePayloadNode(materialized, basePayloadSegments, basePayloadInputHash),
+          });
         });
-      });
-      segments.push(...basePayloadSegments);
-      const overlayPayloadSegments: WinPackTiming[] = [];
-      await runSegment("nsis-payload-overlay:cache", async () => {
-        await cache.acquire({
-          materialize: nsisOverlayPayloadMaterialize,
-          node: createNsisOverlayPayloadNode(materialized, overlayPayloadSegments, ensureSignedUnpacked),
+        segments.push(...basePayloadSegments);
+      }
+      if (!overlayPayloadHit) {
+        const overlayPayloadSegments: WinPackTiming[] = [];
+        await runSegment("nsis-payload-overlay:cache", async () => {
+          await cache.acquire({
+            materialize: nsisOverlayPayloadMaterialize,
+            node: createNsisOverlayPayloadNode(materialized, overlayPayloadSegments, ensureSignedUnpacked),
+          });
         });
-      });
-      segments.push(...overlayPayloadSegments);
+        segments.push(...overlayPayloadSegments);
+      }
       const installerSegments: WinPackTiming[] = [];
       await runSegment("nsis-installer:cache", async () => {
         await cache.acquire({
           materialize: nsisSetupMaterialize,
-          node: createNsisInstallerNode(installerSegments),
+          node: createNsisInstallerNode(installerSegments, contentKeyedBasePayloadNode.key, nsisOverlayPayloadNode.key),
         });
       });
       segments.push(...installerSegments);
