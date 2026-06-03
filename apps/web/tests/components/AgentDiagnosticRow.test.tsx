@@ -38,10 +38,13 @@ describe('AgentDiagnosticRow', () => {
   it('only renders buttons for intents that have a wired handler', () => {
     const onRescan = vi.fn();
     // openInstall is in the diagnostic but no onOpenInstall handler is given,
-    // so only Rescan should render.
+    // so only Rescan should render. Actions are icon-only buttons whose
+    // accessible name comes from the (tooltip) aria-label.
     render(<AgentDiagnosticRow diagnostic={notOnPath} handlers={{ onRescan }} />);
-    expect(screen.queryByText(en['settings.agentInstall.install'])).toBeNull();
-    const rescan = screen.getByText(en['settings.rescan']);
+    expect(
+      screen.queryByRole('button', { name: en['settings.agentInstall.install'] }),
+    ).toBeNull();
+    const rescan = screen.getByRole('button', { name: en['settings.rescan'] });
     fireEvent.click(rescan);
     expect(onRescan).toHaveBeenCalledTimes(1);
   });
@@ -57,7 +60,11 @@ describe('AgentDiagnosticRow', () => {
     render(
       <AgentDiagnosticRow diagnostic={authMissing} handlers={{ onLaunchOAuth }} />,
     );
-    fireEvent.click(screen.getByText(en['chat.antigravityError.launchTerminalCta']));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: en['chat.antigravityError.launchTerminalCta'],
+      }),
+    );
     expect(onLaunchOAuth).toHaveBeenCalledWith('antigravity');
   });
 });

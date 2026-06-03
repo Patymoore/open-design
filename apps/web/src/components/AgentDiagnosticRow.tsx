@@ -1,5 +1,7 @@
 import { useT } from '../i18n';
 import type { AgentDiagnostic, AgentFixIntent } from '../types';
+import { Icon } from './Icon';
+import type { IconName } from './Icon';
 import styles from './AgentDiagnosticRow.module.css';
 
 // Handlers the host wires per fix intent. Each is optional: a button is only
@@ -22,34 +24,57 @@ interface Props {
   className?: string;
 }
 
-type ResolvedAction = { key: string; label: string; onClick: () => void };
+type ResolvedAction = {
+  key: string;
+  label: string;
+  icon: IconName;
+  onClick: () => void;
+};
 
-// Map one typed fix intent to a concrete button, reusing translation keys
-// that already exist so this component adds no new locale strings. Intents
-// without a wired handler (or, for setEnv/clearEnv, without dedicated UI yet)
-// resolve to null and simply aren't rendered — the diagnostic message still
-// names the env var so the user isn't left without guidance.
+// Map one typed fix intent to a concrete icon button, reusing translation keys
+// that already exist so this component adds no new locale strings. The label
+// is surfaced as a tooltip + accessible name; the glyph keeps the action quiet
+// so it never competes with the diagnostic message. Intents without a wired
+// handler (or, for setEnv/clearEnv, without dedicated UI yet) resolve to null
+// and simply aren't rendered — the diagnostic message still names the env var
+// so the user isn't left without guidance.
 function useResolveAction() {
   const t = useT();
   return (intent: AgentFixIntent, handlers: AgentFixHandlers): ResolvedAction | null => {
     switch (intent.kind) {
       case 'openInstall':
         return handlers.onOpenInstall
-          ? { key: 'openInstall', label: t('settings.agentInstall.install'), onClick: handlers.onOpenInstall }
+          ? {
+              key: 'openInstall',
+              label: t('settings.agentInstall.install'),
+              icon: 'download',
+              onClick: handlers.onOpenInstall,
+            }
           : null;
       case 'openDocs':
         return handlers.onOpenDocs
-          ? { key: 'openDocs', label: t('settings.agentInstall.docs'), onClick: handlers.onOpenDocs }
+          ? {
+              key: 'openDocs',
+              label: t('settings.agentInstall.docs'),
+              icon: 'file',
+              onClick: handlers.onOpenDocs,
+            }
           : null;
       case 'rescan':
         return handlers.onRescan
-          ? { key: 'rescan', label: t('settings.rescan'), onClick: handlers.onRescan }
+          ? {
+              key: 'rescan',
+              label: t('settings.rescan'),
+              icon: 'reload',
+              onClick: handlers.onRescan,
+            }
           : null;
       case 'launchOAuth':
         return handlers.onLaunchOAuth
           ? {
               key: 'launchOAuth',
               label: t('chat.antigravityError.launchTerminalCta'),
+              icon: 'external-link',
               onClick: () => handlers.onLaunchOAuth?.(intent.agentId),
             }
           : null;
@@ -102,8 +127,10 @@ export function AgentDiagnosticRow({ diagnostic, handlers = {}, className }: Pro
               type="button"
               className={styles.action}
               onClick={action.onClick}
+              title={action.label}
+              aria-label={action.label}
             >
-              {action.label}
+              <Icon name={action.icon} size={15} strokeWidth={1.9} />
             </button>
           ))}
         </div>

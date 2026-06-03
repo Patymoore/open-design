@@ -3182,56 +3182,62 @@ export function SettingsDialog({
                               role="group"
                               aria-label={cardLabel}
                             >
-                              <AgentIcon id={a.id} size={40} />
-                              <div className="agent-card-body">
-                                <div className="agent-card-name">{agentName}</div>
-                                {description ? (
-                                  <div className="agent-card-description">
-                                    {description}
+                              <div className="agent-card-unavailable-row">
+                                <AgentIcon id={a.id} size={30} />
+                                <div className="agent-card-body">
+                                  <div className="agent-card-name">
+                                    {agentName}
                                   </div>
-                                ) : null}
-                                {/* Why is it unavailable? not-on-path vs a
-                                    broken shim vs a bad *_BIN override each get
-                                    a distinct, actionable line instead of a
-                                    silent "Not installed" card. Install/Docs
-                                    stay as the existing links below, so the row
-                                    only contributes the reason + Rescan. */}
-                                {(a.diagnostics ?? []).map((diagnostic, i) => (
-                                  <AgentDiagnosticRow
-                                    key={`${diagnostic.reason}-${i}`}
-                                    diagnostic={diagnostic}
-                                    handlers={{
-                                      onRescan: () => void handleRefreshAgents(),
-                                    }}
-                                  />
-                                ))}
-                              </div>
-                              {hasLinks ? (
-                                <div className="agent-card-actions agent-card-actions--inline">
-                                  {docsUrl ? (
-                                    <a
-                                      href={docsUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="agent-card-link agent-card-link--muted"
-                                      onClick={markAgentInstallIntent}
-                                    >
-                                      {t('settings.agentInstall.docs')}
-                                    </a>
-                                  ) : null}
-                                  {installUrl ? (
-                                    <a
-                                      href={installUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="agent-card-link agent-card-link--ghost"
-                                      onClick={markAgentInstallIntent}
-                                    >
-                                      {t('settings.agentInstall.install')}
-                                    </a>
+                                  {description ? (
+                                    <div className="agent-card-description">
+                                      {description}
+                                    </div>
                                   ) : null}
                                 </div>
-                              ) : null}
+                                {hasLinks ? (
+                                  <div className="agent-card-actions agent-card-actions--inline">
+                                    {docsUrl ? (
+                                      <a
+                                        href={docsUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="agent-card-link agent-card-link--muted agent-card-link--icon"
+                                        onClick={markAgentInstallIntent}
+                                        title={t('settings.agentInstall.docs')}
+                                        aria-label={t('settings.agentInstall.docs')}
+                                      >
+                                        <Icon name="file" size={15} />
+                                      </a>
+                                    ) : null}
+                                    {installUrl ? (
+                                      <a
+                                        href={installUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="agent-card-link agent-card-link--ghost"
+                                        onClick={markAgentInstallIntent}
+                                      >
+                                        {t('settings.agentInstall.install')}
+                                      </a>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
+                              {/* Why is it unavailable? not-on-path vs a broken
+                                  shim vs a bad *_BIN override each get a
+                                  distinct, actionable line. It spans the full
+                                  card width on its own row below the
+                                  logo/name/links so it never crowds the inline
+                                  Docs/Install actions. */}
+                              {(a.diagnostics ?? []).map((diagnostic, i) => (
+                                <AgentDiagnosticRow
+                                  key={`${diagnostic.reason}-${i}`}
+                                  diagnostic={diagnostic}
+                                  handlers={{
+                                    onRescan: () => void handleRefreshAgents(),
+                                  }}
+                                />
+                              ))}
                             </div>
                           );
                         })}
