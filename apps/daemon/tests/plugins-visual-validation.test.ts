@@ -87,6 +87,34 @@ describe('visual validation atom runner', () => {
     }
   });
 
+  it('honors an explicit entryFile over auto-detected index.html', async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), 'od-visual-explicit-entry-'));
+    try {
+      await writeFile(path.join(cwd, 'index.html'), '<!doctype html><html><body>stale</body></html>', 'utf8');
+      await writeFile(path.join(cwd, 'active.html'), '<!doctype html><html><body>active</body></html>', 'utf8');
+      await writeFile(
+        path.join(cwd, 'reference-home.png'),
+        PNG.sync.write(createFilledPng(200, 120, [255, 255, 255, 255])),
+      );
+
+      let capturedEntryFile: string | null = null;
+      const result = await runVisualValidation({
+        cwd,
+        entryFile: 'active.html',
+        captureScreenshot: async ({ entryFile, outputPath }) => {
+          capturedEntryFile = entryFile;
+          await writeFile(outputPath, PNG.sync.write(createFilledPng(200, 120, [255, 255, 255, 255])));
+        },
+      });
+
+      expect(result.report.status).toBe('ok');
+      expect(result.report.entryFile).toBe('active.html');
+      expect(capturedEntryFile).toBe('active.html');
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('captures with the reference dimensions instead of the old clamp bounds', async () => {
     const cwd = await mkdtemp(path.join(os.tmpdir(), 'od-visual-reference-viewport-'));
     try {

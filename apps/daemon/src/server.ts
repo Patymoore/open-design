@@ -10824,12 +10824,16 @@ export async function startServer({
         const cwd = projectRecord
           ? resolveProjectDir(PROJECTS_DIR, projectIdForRun, projectRecord.metadata)
           : null;
+        const entryFile = typeof projectRecord?.metadata?.entryFile === 'string'
+          ? projectRecord.metadata.entryFile
+          : null;
         const outcome = await runStageWithRegistry({
           db:             dbHandle,
           runId:          run.id,
           projectId:      projectIdForRun,
           conversationId: run.conversationId ?? null,
           cwd,
+          entryFile,
           stage,
           iteration,
           snapshot:       stageSnapshot,

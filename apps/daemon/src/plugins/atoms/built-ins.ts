@@ -81,7 +81,10 @@ async function visualValidationWorker(ctx: AtomWorkerContext): Promise<AtomOutco
   if (!ctx.cwd) {
     return { signals: {}, note: '[visual-validation] skipped: no project cwd' };
   }
-  const { report, signals } = await runVisualValidation({ cwd: ctx.cwd });
+  const { report, signals } = await runVisualValidation({
+    cwd:       ctx.cwd,
+    entryFile: ctx.entryFile,
+  });
   return {
     signals,
     note: `[visual-validation] ${report.message}`,

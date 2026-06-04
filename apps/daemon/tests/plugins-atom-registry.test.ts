@@ -93,6 +93,7 @@ function ctxFor(stage: PipelineStage, iteration = 0): AtomWorkerContext {
     projectId:      'project-1',
     conversationId: 'conv-A',
     cwd:            tmpDir,
+    entryFile:      null,
     stage,
     iteration,
     snapshot:       fakeSnapshot(),
