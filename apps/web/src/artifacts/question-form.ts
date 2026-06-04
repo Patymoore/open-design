@@ -309,9 +309,15 @@ export function parsePartialQuestionForm(input: string): QuestionForm | null {
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {};
-  const topId = typeof top.id === 'string' && top.id.trim().length > 0 ? top.id.trim() : undefined;
+  // `id` keys the live (still-editable) Questions panel, so it must be stable
+  // for the whole stream. Do NOT derive it from the streaming body `id`: that
+  // token arrives char-by-char and `parsePartialJson` repairs the open string,
+  // so `top.id` would churn (`"d"` → `"di"` → …) and remount the panel,
+  // discarding in-progress answers. Use the open-tag attr (complete the instant
+  // the tag streams) or a stable default; the final parse (`tryParseForm`,
+  // after the close tag) adopts the real body id.
   const topTitle = typeof top.title === 'string' && top.title.trim().length > 0 ? top.title : undefined;
-  const id = attrs.id ?? topId ?? 'discovery';
+  const id = attrs.id ?? 'discovery';
   const title = attrs.title ?? topTitle ?? 'A few quick questions';
   const description = typeof top.description === 'string' ? top.description : undefined;
   // Carry submitLabel through the preview too — `tryParseForm` reads it for the

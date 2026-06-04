@@ -160,6 +160,19 @@ describe('parsePartialQuestionForm (true token-by-token streaming)', () => {
     expect(f?.questions).toEqual([]);
   });
 
+  it('keeps the preview form id stable while the body id token streams (no churn)', () => {
+    // No tag attr; the body `id` arrives char-by-char. The preview id must NOT
+    // follow the partial token (which would remount the editable panel and drop
+    // answers) — it stays the stable default until the final parse.
+    for (const buf of [
+      '<question-form>{"id":"d',
+      '<question-form>{"id":"disc',
+      '<question-form>{"id":"discovery-form","questions":[{"id":"a","label":"Q"}]}',
+    ]) {
+      expect(parsePartialQuestionForm(buf)?.id).toBe('discovery');
+    }
+  });
+
   it('does not let a nested question id/description masquerade as form metadata', () => {
     // No form-level id on the tag or top-level body — only a question-level
     // id. The form id must stay the stable fallback, not adopt "platform"
