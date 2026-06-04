@@ -858,7 +858,7 @@
 
 /* -------- Composer -------------------------------------------------- */
 .composer {
-  padding: 10px;
+  padding: 10px 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1081,7 +1081,11 @@
   border-top: 1px solid var(--border-soft);
 }
 .composer-row .icon-btn {
-  width: 32px; height: 32px;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
   background: transparent;
   border: 1px solid transparent;
@@ -1108,7 +1112,7 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  height: 28px;
+  height: 32px;
   min-width: 0;
 }
 .session-mode-toggle__trigger,
@@ -1134,8 +1138,9 @@
     box-shadow 160ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .session-mode-toggle__trigger {
-  height: 28px;
-  padding: 0 8px;
+  height: 32px;
+  max-width: 132px;
+  padding: 0 9px;
   border-radius: 7px;
   box-shadow: var(--shadow-xs);
 }

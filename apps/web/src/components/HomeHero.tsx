@@ -133,6 +133,7 @@ interface Props {
   error: string | null;
   showActivePluginChip?: boolean;
   onExamplePromptStatusChange?: (info: ExamplePromptInfo | null) => void;
+  executionSwitcher?: ReactNode;
 }
 
 interface HomeHeroDesignSystemOption {
@@ -237,6 +238,7 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
     error,
     showActivePluginChip = true,
     onExamplePromptStatusChange,
+    executionSwitcher,
   },
   ref,
 ) {
@@ -1208,6 +1210,11 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
               onChange={onSessionModeChange}
               disabled={Boolean(submitDisabled)}
             />
+            {executionSwitcher ? (
+              <div className="home-hero__execution-switcher">
+                {executionSwitcher}
+              </div>
+            ) : null}
             {activeCreateChip ? (
               <ActiveTypeChip chip={activeCreateChip} onClear={onClearActiveChip} />
             ) : null}

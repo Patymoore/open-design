@@ -1537,6 +1537,7 @@
 }
 .app .df-panel:not(.no-preview) .df-cell-name {
   min-width: 0;
+  max-width: none;
 }
 .app .df-panel:not(.no-preview) .df-row-name-btn,
 .app .df-panel:not(.no-preview) .df-row-name-wrap,
@@ -1544,6 +1545,10 @@
   width: 100%;
   min-width: 0;
   max-width: 100%;
+}
+.app .df-panel:not(.no-preview) .df-row-sub-kind,
+.app .df-panel:not(.no-preview) .df-row-sub-time {
+  display: inline;
 }
 .app .df-panel:not(.no-preview) .df-row-name {
   display: block;
