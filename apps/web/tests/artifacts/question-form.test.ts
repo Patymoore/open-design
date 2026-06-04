@@ -185,4 +185,17 @@ describe('parsePartialQuestionForm (true token-by-token streaming)', () => {
       '<question-form id="discovery">```json\n{"questions":[{"id":"a","label":"First","type":"text"}]}\n``';
     expect(parsePartialQuestionForm(buf)?.questions.map((q) => q.label)).toEqual(['First']);
   });
+
+  it('does not strip backticks that are content of a label still being typed', () => {
+    // The trailing ``` here is inside an open string value, not a closing
+    // fence — it must survive into the preview, not be trimmed to "Use ".
+    const buf = '<question-form id="discovery">{"questions":[{"id":"a","label":"Use ```';
+    expect(parsePartialQuestionForm(buf)?.questions[0]?.label).toContain('```');
+  });
+
+  it('carries a custom submitLabel through the streaming preview', () => {
+    const buf =
+      '<question-form id="discovery">{"submitLabel":"Generate brief","questions":[{"id":"a","label":"First","type":"text"}';
+    expect(parsePartialQuestionForm(buf)?.submitLabel).toBe('Generate brief');
+  });
 });

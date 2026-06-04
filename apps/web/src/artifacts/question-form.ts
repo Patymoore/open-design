@@ -299,9 +299,7 @@ export function parsePartialQuestionForm(input: string): QuestionForm | null {
   // (possibly only a partial ``` so far) — otherwise the leftover backticks
   // make the JSON unparseable in the gap between "fence closed" and
   // "</question-form> arrived", dropping the live preview back to empty.
-  const body = rawBody
-    .replace(/^\s*```(?:json)?\s*/i, '')
-    .replace(/\s*`{1,3}\s*$/, '');
+  const body = stripTrailingFence(rawBody.replace(/^\s*```(?:json)?\s*/i, ''));
   // Derive form-level metadata from the *parsed top-level object*, not a
   // whole-body regex scan: a nested question/option `id`/`title`/`description`
   // must not masquerade as the form's own. `id` keys the live Questions panel
@@ -316,13 +314,49 @@ export function parsePartialQuestionForm(input: string): QuestionForm | null {
   const id = attrs.id ?? topId ?? 'discovery';
   const title = attrs.title ?? topTitle ?? 'A few quick questions';
   const description = typeof top.description === 'string' ? top.description : undefined;
+  // Carry submitLabel through the preview too — `tryParseForm` reads it for the
+  // final form and `QuestionForm` renders `form.submitLabel ?? default`, so
+  // omitting it here makes a custom CTA flicker in only once the close tag
+  // arrives.
+  const submitLabel = typeof top.submitLabel === 'string' ? top.submitLabel : undefined;
   const questions = shapeStreamingQuestions(top.questions);
   return {
     id,
     title,
     questions,
     ...(description ? { description } : {}),
+    ...(submitLabel ? { submitLabel } : {}),
   };
+}
+
+// Strip a trailing ```` ``` ```` fence (possibly only partially streamed) from
+// a form body — but only when those backticks are the closing wrapper, not
+// content of a JSON string value still being typed. Stripping unconditionally
+// would eat real backticks from a label like `"Use ``` ..."` mid-stream.
+function stripTrailingFence(body: string): string {
+  const m = /\s*`{1,3}\s*$/.exec(body);
+  if (!m) return body;
+  const before = body.slice(0, m.index);
+  // If the text before the trailing backticks ends inside an open JSON string,
+  // the backticks belong to that value — leave them for the repair pass.
+  if (endsInsideJsonString(before)) return body;
+  return before;
+}
+
+function endsInsideJsonString(s: string): boolean {
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') {
+      inStr = true;
+    }
+  }
+  return inStr;
 }
 
 // Shape questions from a still-streaming, already-parsed `questions` array.
