@@ -1702,14 +1702,14 @@ describe('FileWorkspace add-module menu', () => {
     expect(menu).not.toBeNull();
 
     // The tab strip is a horizontal scroll container that also clips
-    // vertically, so the "+" button lives OUTSIDE it in `.ws-tabs-actions`
-    // and the launcher menu is portaled to <body> — neither can be clipped
+    // vertically, so the "+" button lives outside it in `.ws-add-tab`
+    // and the launcher menu is portaled to <body> -- neither can be clipped
     // by the scrolling bar.
     const tabsBar = document.querySelector('.ws-tabs-bar');
     expect(tabsBar).not.toBeNull();
     expect(tabsBar!.contains(addButton)).toBe(false);
     expect(tabsBar!.contains(menu)).toBe(false);
-    expect(addButton.closest('.ws-tabs-actions')).not.toBeNull();
+    expect(addButton.closest('.ws-add-tab')).not.toBeNull();
   });
 
   it('orders launcher sections as create new, files, then tabs in one scroll body', () => {

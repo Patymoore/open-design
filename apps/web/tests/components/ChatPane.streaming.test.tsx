@@ -159,7 +159,9 @@ describe('ChatPane streaming state', () => {
     expect(css).toContain('.chat-queued-send-title');
     expect(css).toContain('text-overflow: ellipsis;');
     expect(css).toContain('.chat-queued-send-drag-handle');
-    expect(css).toContain('max-width: min(calc(100% - 20px), 520px);');
+    expect(css).toContain('align-self: stretch;');
+    expect(css).toContain('width: 100%;');
+    expect(css).toContain('max-width: none;');
     expect(css).toContain('.chat-queued-send-action');
     expect(css).toContain('width: 24px;');
     expect(css).toContain('height: 24px;');
