@@ -1443,6 +1443,9 @@ export function HomeView({
         selectedPluginContexts={selectedPluginContexts.map((item) => item.record)}
         selectedMcpContexts={selectedMcpContexts.map((item) => item.server)}
         selectedConnectorContexts={selectedConnectorContexts.map((item) => item.connector)}
+        contextOnlyPlugins={selectedPluginContexts.filter((item) => !item.inlineBacked).map((item) => item.record)}
+        contextOnlyMcpServers={selectedMcpContexts.filter((item) => !item.inlineBacked).map((item) => item.server)}
+        contextOnlyConnectors={selectedConnectorContexts.filter((item) => !item.inlineBacked).map((item) => item.connector)}
         onRemovePluginContext={removePluginContext}
         onRemoveMcpContext={removeMcpContext}
         onRemoveConnectorContext={removeConnectorContext}

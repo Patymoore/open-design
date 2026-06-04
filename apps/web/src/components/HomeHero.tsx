@@ -97,6 +97,13 @@ interface Props {
   selectedPluginContexts?: InstalledPluginRecord[];
   selectedMcpContexts?: McpServerConfig[];
   selectedConnectorContexts?: ConnectorDetail[];
+  // Context-only selections (staged through the plain `Use` action, no inline
+  // @mention pill). These have no in-prompt representation, so the active row
+  // renders a removable chip for each — otherwise a kept-in-payload context
+  // would be invisible and unremovable (silent context drift).
+  contextOnlyPlugins?: InstalledPluginRecord[];
+  contextOnlyMcpServers?: McpServerConfig[];
+  contextOnlyConnectors?: ConnectorDetail[];
   onRemovePluginContext?: (pluginId: string) => void;
   onRemoveMcpContext?: (serverId: string) => void;
   onRemoveConnectorContext?: (connectorId: string) => void;
@@ -206,6 +213,12 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
     onClearActiveChip = onClearActivePlugin,
     onClearActiveSkill = () => undefined,
     selectedPluginContexts = EMPTY_PLUGIN_CONTEXTS,
+    contextOnlyPlugins = EMPTY_PLUGIN_CONTEXTS,
+    contextOnlyMcpServers = EMPTY_MCP_OPTIONS,
+    contextOnlyConnectors = EMPTY_CONNECTOR_OPTIONS,
+    onRemovePluginContext = () => undefined,
+    onRemoveMcpContext = () => undefined,
+    onRemoveConnectorContext = () => undefined,
     onAddPlugin = () => undefined,
     onAddConnector = () => undefined,
     onAddMcp = () => undefined,
@@ -966,6 +979,78 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
                 </button>
               </span>
             ) : null}
+            {contextOnlyPlugins.map((plugin) => (
+              <span
+                key={`ctx-plugin-${plugin.id}`}
+                className="home-hero__active-chip home-hero__active-chip--context"
+                data-testid={`home-hero-context-plugin-${plugin.id}`}
+              >
+                <span className="home-hero__active-icon" aria-hidden>
+                  <Icon name="sliders" size={12} />
+                </span>
+                <span className="home-hero__active-label">{plugin.title}</span>
+                <button
+                  type="button"
+                  className="home-hero__active-clear od-tooltip"
+                  onClick={() => onRemovePluginContext(plugin.id)}
+                  aria-label={t('chat.removeAria', { name: plugin.title })}
+                  title={t('common.close')}
+                  data-tooltip={t('common.close')}
+                  data-testid={`home-hero-context-clear-${plugin.id}`}
+                >
+                  <Icon name="close" size={9} />
+                </button>
+              </span>
+            ))}
+            {contextOnlyMcpServers.map((server) => {
+              const label = server.label || server.id;
+              return (
+                <span
+                  key={`ctx-mcp-${server.id}`}
+                  className="home-hero__active-chip home-hero__active-chip--context"
+                  data-testid={`home-hero-context-mcp-${server.id}`}
+                >
+                  <span className="home-hero__active-icon" aria-hidden>
+                    <Icon name="sliders" size={12} />
+                  </span>
+                  <span className="home-hero__active-label">{label}</span>
+                  <button
+                    type="button"
+                    className="home-hero__active-clear od-tooltip"
+                    onClick={() => onRemoveMcpContext(server.id)}
+                    aria-label={t('chat.removeAria', { name: label })}
+                    title={t('common.close')}
+                    data-tooltip={t('common.close')}
+                    data-testid={`home-hero-context-clear-${server.id}`}
+                  >
+                    <Icon name="close" size={9} />
+                  </button>
+                </span>
+              );
+            })}
+            {contextOnlyConnectors.map((connector) => (
+              <span
+                key={`ctx-connector-${connector.id}`}
+                className="home-hero__active-chip home-hero__active-chip--context"
+                data-testid={`home-hero-context-connector-${connector.id}`}
+              >
+                <span className="home-hero__active-icon" aria-hidden>
+                  <Icon name="link" size={12} />
+                </span>
+                <span className="home-hero__active-label">{connector.name}</span>
+                <button
+                  type="button"
+                  className="home-hero__active-clear od-tooltip"
+                  onClick={() => onRemoveConnectorContext(connector.id)}
+                  aria-label={t('chat.removeAria', { name: connector.name })}
+                  title={t('common.close')}
+                  data-tooltip={t('common.close')}
+                  data-testid={`home-hero-context-clear-${connector.id}`}
+                >
+                  <Icon name="close" size={9} />
+                </button>
+              </span>
+            ))}
           </div>
         ) : null}
         <div className="home-hero__prompt-surface">

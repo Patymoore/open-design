@@ -289,6 +289,11 @@ describe('HomeView context picker', () => {
     fireEvent.click(await screen.findByTestId('plugins-home-use-chart-plugin'));
     await settle();
 
+    // A context-only selection has no inline pill, so it must still be visible
+    // and removable through a chip — otherwise it would be silently kept in the
+    // payload with no way for the user to see or clear it.
+    expect(await screen.findByTestId('home-hero-context-plugin-chart-plugin')).toBeTruthy();
+
     // The user then types a freeform prompt that never references the plugin.
     setHomeHeroPrompt('Summarize my latest numbers');
     await settle();
@@ -302,6 +307,60 @@ describe('HomeView context picker', () => {
         expect.objectContaining({ id: 'chart-plugin', title: 'Chart Plugin' }),
       ],
     }));
+  });
+
+  it('drops a context-only `Use` selection from the submit payload once its chip is cleared', async () => {
+    // Regression: a context-only selection is kept in the payload until the
+    // user explicitly clears it. The active-row chip's clear button is that
+    // explicit path; after clearing, the plugin must no longer be sent.
+    const plugin = makePlugin('chart-plugin', 'Chart Plugin');
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      if (typeof url === 'string' && url === '/api/plugins') {
+        return new Response(JSON.stringify({ plugins: [plugin] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (typeof url === 'string' && url === '/api/mcp/servers') {
+        return new Response(JSON.stringify({ servers: [], templates: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    const onSubmit = vi.fn();
+
+    render(
+      <HomeView
+        projects={[]}
+        onSubmit={onSubmit}
+        onOpenProject={() => undefined}
+        onViewAllProjects={() => undefined}
+      />,
+    );
+
+    await screen.findByTestId('home-hero-input');
+    fireEvent.click(await screen.findByTestId('plugins-home-use-chart-plugin'));
+    await settle();
+
+    // Clear it through the chip's remove control.
+    fireEvent.click(await screen.findByTestId('home-hero-context-clear-chart-plugin'));
+    await settle();
+    expect(screen.queryByTestId('home-hero-context-plugin-chart-plugin')).toBeNull();
+
+    setHomeHeroPrompt('Summarize my latest numbers');
+    await settle();
+    fireEvent.click(screen.getByTestId('home-hero-submit'));
+
+    const payload = onSubmit.mock.calls[0]?.[0];
+    expect(payload?.prompt).toBe('Summarize my latest numbers');
+    expect(payload?.contextPlugins ?? []).toEqual([]);
   });
 
   it('binds a selected home skill to the created project payload', async () => {
