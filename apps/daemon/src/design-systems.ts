@@ -10,7 +10,7 @@
 // `surface`) fall back to frontmatter when the body has none.
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -185,6 +185,15 @@ type UserDesignSystemMetadata = {
   provenance?: DesignSystemProvenance;
   projectId?: string;
 };
+
+type AtomicTextFileWrite = {
+  targetPath: string;
+  content: string;
+};
+
+type AtomicTextFileSnapshot =
+  | { existed: true; content: string }
+  | { existed: false };
 
 export const LEGACY_DESIGN_SYSTEM_ARTIFACTS = [
   {
@@ -1052,18 +1061,16 @@ export async function updateUserDesignSystemRevisionStatus(
   if (!dirId) return null;
   const revision = await readUserDesignSystemRevision(root, id, revisionId);
   if (!revision) return null;
-  if (status === 'accepted') {
-    const updated = await updateUserDesignSystem(root, id, {
-      body: revision.proposedBody,
-    });
-    if (!updated) return null;
-    await applyRevisionFileChanges(root, dirId, revision.fileChanges);
-  }
   const next: DesignSystemRevision = {
     ...revision,
     status,
     updatedAt: new Date().toISOString(),
   };
+  if (status === 'accepted') {
+    const accepted = await writeAcceptedUserDesignSystemRevision(root, dirId, revision, next);
+    if (!accepted) return null;
+    return next;
+  }
   await writeUserDesignSystemRevision(root, dirId, next);
   return next;
 }
@@ -1418,41 +1425,55 @@ async function writeGeneratedDesignSystemFiles(
     mkdir(path.join(dir, 'ui_kits', 'app', 'components'), { recursive: true }),
   ]);
 
+  await Promise.all(
+    generatedDesignSystemFileWrites(dir, input).map((write) =>
+      writeFile(write.targetPath, write.content, 'utf8')
+    ),
+  );
+}
+
+function generatedDesignSystemFileWrites(
+  dir: string,
+  input: {
+    title: string;
+    category: string;
+    surface: DesignSystemSurface;
+    summary: string;
+    sourceNotes?: string;
+    provenance?: DesignSystemProvenance;
+    body: string;
+  },
+): AtomicTextFileWrite[] {
   const palette = normalizeSwatches(input.body);
   const summary = input.summary || 'A user-created Open Design design system.';
   const sections = extractMarkdownSections(input.body);
   const provenance = input.provenance ?? normalizeProvenance(undefined, {
     ...(input.sourceNotes ? { sourceNotes: input.sourceNotes } : {}),
   });
-  await Promise.all([
-    writeFile(
-      path.join(dir, 'README.md'),
-      renderReadme({ ...input, summary, palette, sections }),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'SKILL.md'),
-      renderSkill({ ...input, summary, palette }),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'context', 'provenance.json'),
-      `${JSON.stringify(provenance ?? {}, null, 2)}\n`,
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'context', 'provenance.md'),
-      renderProvenanceMarkdown(provenance, input.title),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'colors_and_type.css'),
-      renderCssTokens({ title: input.title, palette }),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'package.json'),
-      `${JSON.stringify(
+  return [
+    {
+      targetPath: path.join(dir, 'README.md'),
+      content: renderReadme({ ...input, summary, palette, sections }),
+    },
+    {
+      targetPath: path.join(dir, 'SKILL.md'),
+      content: renderSkill({ ...input, summary, palette }),
+    },
+    {
+      targetPath: path.join(dir, 'context', 'provenance.json'),
+      content: `${JSON.stringify(provenance ?? {}, null, 2)}\n`,
+    },
+    {
+      targetPath: path.join(dir, 'context', 'provenance.md'),
+      content: renderProvenanceMarkdown(provenance, input.title),
+    },
+    {
+      targetPath: path.join(dir, 'colors_and_type.css'),
+      content: renderCssTokens({ title: input.title, palette }),
+    },
+    {
+      targetPath: path.join(dir, 'package.json'),
+      content: `${JSON.stringify(
         {
           name: slugify(input.title),
           private: true,
@@ -1464,94 +1485,79 @@ async function writeGeneratedDesignSystemFiles(
         null,
         2,
       )}\n`,
-      'utf8',
-    ),
-    writeFile(path.join(dir, 'assets', 'logo.svg'), renderLogoSvg(input.title, palette), 'utf8'),
-    writeFile(
-      path.join(dir, 'src', 'components', 'design-system-reference.tsx'),
-      renderReferenceComponent(input.title),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'src', 'assets', 'README.md'),
-      '# Assets\n\nPlace product screenshots, icons, logos, fonts, and brand references here.\n',
-      'utf8',
-    ),
-    writeFile(path.join(dir, 'index.html'), renderOverviewHtml(input.title, summary, palette, sections), 'utf8'),
-    writeFile(
-      path.join(dir, 'preview', 'colors-primary.html'),
-      renderColorPreviewHtml('Primary Colors', palette),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'colors-theme-light.html'),
-      renderColorPreviewHtml('Light Theme Palette', palette),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'colors-theme-dark.html'),
-      renderColorPreviewHtml('Dark Theme Palette', {
+    },
+    { targetPath: path.join(dir, 'assets', 'logo.svg'), content: renderLogoSvg(input.title, palette) },
+    {
+      targetPath: path.join(dir, 'src', 'components', 'design-system-reference.tsx'),
+      content: renderReferenceComponent(input.title),
+    },
+    {
+      targetPath: path.join(dir, 'src', 'assets', 'README.md'),
+      content: '# Assets\n\nPlace product screenshots, icons, logos, fonts, and brand references here.\n',
+    },
+    {
+      targetPath: path.join(dir, 'index.html'),
+      content: renderOverviewHtml(input.title, summary, palette, sections),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'colors-primary.html'),
+      content: renderColorPreviewHtml('Primary Colors', palette),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'colors-theme-light.html'),
+      content: renderColorPreviewHtml('Light Theme Palette', palette),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'colors-theme-dark.html'),
+      content: renderColorPreviewHtml('Dark Theme Palette', {
         ...palette,
         background: palette.foreground,
         foreground: '#ffffff',
         muted: '#d6d6d6',
         border: '#3f3f46',
       }),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'typography-specimens.html'),
-      renderTypographyPreviewHtml(input.title),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'spacing-tokens.html'),
-      renderSpacingPreviewHtml('Spacing Tokens'),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'spacing-radius.html'),
-      renderSpacingPreviewHtml('Border Radius'),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'spacing-shadows.html'),
-      renderSpacingPreviewHtml('Shadow Elevation'),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'components-buttons.html'),
-      renderComponentCatalogHtml('Buttons', input.title, summary, palette),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'components-inputs.html'),
-      renderComponentCatalogHtml('Inputs', input.title, summary, palette),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'preview', 'brand-assets.html'),
-      renderLogoPreviewHtml(input.title, palette),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'ui_kits', 'app', 'index.html'),
-      renderComponentPreviewHtml(input.title, summary, palette),
-      'utf8',
-    ),
-    writeFile(
-      path.join(dir, 'ui_kits', 'app', 'README.md'),
-      renderUiKitReadme(input.title),
-      'utf8',
-    ),
-    ...defaultUiKitComponentSpecs().map(({ fileName, componentName, purpose }) =>
-      writeFile(
-        path.join(dir, 'ui_kits', 'app', 'components', fileName),
-        renderUiKitComponent(componentName, input.title, purpose),
-        'utf8',
-      ),
-    ),
-  ]);
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'typography-specimens.html'),
+      content: renderTypographyPreviewHtml(input.title),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'spacing-tokens.html'),
+      content: renderSpacingPreviewHtml('Spacing Tokens'),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'spacing-radius.html'),
+      content: renderSpacingPreviewHtml('Border Radius'),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'spacing-shadows.html'),
+      content: renderSpacingPreviewHtml('Shadow Elevation'),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'components-buttons.html'),
+      content: renderComponentCatalogHtml('Buttons', input.title, summary, palette),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'components-inputs.html'),
+      content: renderComponentCatalogHtml('Inputs', input.title, summary, palette),
+    },
+    {
+      targetPath: path.join(dir, 'preview', 'brand-assets.html'),
+      content: renderLogoPreviewHtml(input.title, palette),
+    },
+    {
+      targetPath: path.join(dir, 'ui_kits', 'app', 'index.html'),
+      content: renderComponentPreviewHtml(input.title, summary, palette),
+    },
+    {
+      targetPath: path.join(dir, 'ui_kits', 'app', 'README.md'),
+      content: renderUiKitReadme(input.title),
+    },
+    ...defaultUiKitComponentSpecs().map(({ fileName, componentName, purpose }) => ({
+      targetPath: path.join(dir, 'ui_kits', 'app', 'components', fileName),
+      content: renderUiKitComponent(componentName, input.title, purpose),
+    })),
+  ];
 }
 
 function defaultUiKitComponentSpecs(): Array<{ fileName: string; componentName: string; purpose: string }> {
@@ -1997,20 +2003,149 @@ function normalizeRevisionFileChanges(raw: unknown): DesignSystemRevisionFileCha
   return out;
 }
 
-async function applyRevisionFileChanges(
+async function writeAcceptedUserDesignSystemRevision(
+  root: string,
+  dirId: string,
+  revision: DesignSystemRevision,
+  acceptedRevision: DesignSystemRevision,
+): Promise<boolean> {
+  const base = path.join(root, dirId);
+  const designPath = path.join(base, 'DESIGN.md');
+  let existingBody: string;
+  try {
+    existingBody = await readFile(designPath, 'utf8');
+  } catch {
+    return false;
+  }
+  const existingMeta = await readUserMetadata(root, dirId);
+  const updatedAt = acceptedRevision.updatedAt;
+  const title = normalizeTitle(existingMeta.title ?? firstHeading(existingBody) ?? dirId);
+  const category = existingMeta.category || extractCategory(existingBody) || 'Custom';
+  const surface = existingMeta.surface ?? extractSurface(existingBody) ?? 'web';
+  const artifactMode = existingMeta.artifactMode;
+  const provenance = existingMeta.provenance;
+  const metadata: UserDesignSystemMetadata = {
+    ...existingMeta,
+    title,
+    category,
+    surface,
+    status: existingMeta.status ?? 'draft',
+    ...(artifactMode ? { artifactMode } : {}),
+    createdAt: existingMeta.createdAt ?? updatedAt,
+    updatedAt,
+    ...(provenance ? { provenance } : {}),
+  };
+  const writes: AtomicTextFileWrite[] = [
+    { targetPath: designPath, content: revision.proposedBody },
+    {
+      targetPath: path.join(base, 'metadata.json'),
+      content: `${JSON.stringify(metadata, null, 2)}\n`,
+    },
+  ];
+  if (artifactMode !== 'agent-managed') {
+    const sourceNotes = provenanceToNotes(provenance);
+    writes.push(...generatedDesignSystemFileWrites(base, {
+      title,
+      category,
+      surface,
+      summary: summarize(revision.proposedBody),
+      ...(provenance ? { provenance } : {}),
+      ...(sourceNotes ? { sourceNotes } : {}),
+      body: revision.proposedBody,
+    }));
+  }
+  writes.push(...revisionFileChangeWrites(root, dirId, revision.fileChanges));
+  writes.push({
+    targetPath: path.join(base, 'revisions', `${acceptedRevision.id}.json`),
+    content: `${JSON.stringify(acceptedRevision, null, 2)}\n`,
+  });
+  await writeTextFilesAtomically(base, writes);
+  return true;
+}
+
+function revisionFileChangeWrites(
   root: string,
   dirId: string,
   fileChanges: DesignSystemRevisionFileChange[] | undefined,
-): Promise<void> {
+): AtomicTextFileWrite[] {
   const changes = normalizeRevisionFileChanges(fileChanges);
-  if (changes.length === 0) return;
+  if (changes.length === 0) return [];
   const base = path.join(root, dirId);
   const resolvedBase = path.resolve(base);
+  const writes: AtomicTextFileWrite[] = [];
   for (const change of changes) {
+    if (
+      change.path === 'DESIGN.md'
+      || change.path === 'metadata.json'
+      || change.path.startsWith('revisions/')
+    ) {
+      continue;
+    }
     const target = path.resolve(base, change.path);
     if (target !== resolvedBase && !target.startsWith(`${resolvedBase}${path.sep}`)) continue;
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, change.proposedContent, 'utf8');
+    writes.push({ targetPath: target, content: change.proposedContent });
+  }
+  return writes;
+}
+
+async function writeTextFilesAtomically(base: string, writes: AtomicTextFileWrite[]): Promise<void> {
+  if (writes.length === 0) return;
+  const deduped = [...new Map(writes.map((write) => [write.targetPath, write])).values()];
+  const snapshots = new Map<string, AtomicTextFileSnapshot>();
+  for (const write of deduped) {
+    try {
+      snapshots.set(write.targetPath, {
+        existed: true,
+        content: await readFile(write.targetPath, 'utf8'),
+      });
+    } catch (err) {
+      if (!isAbsenceError(err)) throw err;
+      snapshots.set(write.targetPath, { existed: false });
+    }
+  }
+  const tempDir = path.join(base, `.tmp-revision-accept-${randomUUID()}`);
+  const stagedWrites: Array<AtomicTextFileWrite & { tempPath: string }> = [];
+  await mkdir(tempDir, { recursive: true });
+  try {
+    for (const [index, write] of deduped.entries()) {
+      const tempPath = path.join(tempDir, `${index}.tmp`);
+      await writeFile(tempPath, write.content, 'utf8');
+      stagedWrites.push({ ...write, tempPath });
+    }
+    for (const write of stagedWrites) {
+      await mkdir(path.dirname(write.targetPath), { recursive: true });
+    }
+    const applied: string[] = [];
+    try {
+      for (const write of stagedWrites) {
+        await rename(write.tempPath, write.targetPath);
+        applied.push(write.targetPath);
+      }
+    } catch (err) {
+      await rollbackAtomicTextFileWrites(applied, snapshots);
+      throw err;
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function rollbackAtomicTextFileWrites(
+  applied: string[],
+  snapshots: Map<string, AtomicTextFileSnapshot>,
+): Promise<void> {
+  for (const targetPath of applied.reverse()) {
+    const snapshot = snapshots.get(targetPath);
+    try {
+      if (snapshot?.existed) {
+        await mkdir(path.dirname(targetPath), { recursive: true });
+        await writeFile(targetPath, snapshot.content, 'utf8');
+      } else {
+        await rm(targetPath, { force: true });
+      }
+    } catch {
+      // Keep the original write failure as the actionable error.
+    }
   }
 }
 
