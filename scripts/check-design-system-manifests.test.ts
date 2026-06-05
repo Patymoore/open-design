@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -6,7 +9,7 @@ import {
   type DesignSystemProjectManifest,
   validateDesignSystemProjectManifest,
 } from "../design-systems/_schema/manifest.schema.ts";
-import { validateManifestSemantics } from "./check-design-system-manifests.ts";
+import { validateManifestSemantics, validateTailwindV4Css } from "./check-design-system-manifests.ts";
 
 test("design-system project manifest schema accepts the v1 minimum shape", () => {
   const result = validateDesignSystemProjectManifest({
@@ -83,6 +86,8 @@ test("design-system project manifest schema rejects path drift and unknown keys"
     files: {
       design: "design.md",
       tokens: "colors.css",
+      designTokens: "tokens.json",
+      tailwind: "tailwind.css",
     },
     extra: "field",
   });
@@ -94,6 +99,8 @@ test("design-system project manifest schema rejects path drift and unknown keys"
     assert.match(errors, /\$\.source\.unexpected/);
     assert.match(errors, /\$\.files\.design/);
     assert.match(errors, /\$\.files\.tokens/);
+    assert.match(errors, /\$\.files\.designTokens/);
+    assert.match(errors, /\$\.files\.tailwind/);
     assert.match(errors, /\$\.extra/);
   }
 });
@@ -114,6 +121,8 @@ test("design-system project manifest schema accepts import-project optional inde
     files: {
       design: "DESIGN.md",
       tokens: "tokens.css",
+      designTokens: "design-tokens.json",
+      tailwind: "tailwind-v4.css",
       components: "components.html",
     },
     assetsDir: "assets",
@@ -149,10 +158,34 @@ test("design-system project manifest schema accepts import-project optional inde
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.manifest.usage, "USAGE.md");
+    assert.equal(result.manifest.files.designTokens, "design-tokens.json");
+    assert.equal(result.manifest.files.tailwind, "tailwind-v4.css");
     assert.equal(result.manifest.componentsManifest, "components.manifest.json");
     assert.equal(result.manifest.importMode, "hybrid");
     assert.equal(result.manifest.preview?.pages.length, 2);
     assert.equal(result.manifest.sourceFiles?.report, "source/token-contract.report.json");
+  }
+});
+
+test("design-system tailwind v4 guard only allows aliases to schema tokens", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "od-tailwind-guard-"));
+  try {
+    const filePath = path.join(root, "tailwind-v4.css");
+    writeFileSync(filePath, '@import "tailwindcss";\n@import "./tokens.css";\n\n@theme {\n  --color-accent: var(--accent);\n}\n');
+    const okViolations: string[] = [];
+    await validateTailwindV4Css(okViolations, "design-systems/test/manifest.json", root, "tailwind-v4.css");
+    assert.deepEqual(okViolations, []);
+
+    writeFileSync(filePath, '@import "tailwindcss";\n@theme {\n  --color-accent: #fff;\n  --color-custom: var(--custom);\n}\n');
+    const violations: string[] = [];
+    await validateTailwindV4Css(violations, "design-systems/test/manifest.json", root, "tailwind-v4.css");
+    assert.deepEqual(violations, [
+      "design-systems/test/manifest.json: tailwind-v4.css must import ./tokens.css",
+      "design-systems/test/manifest.json: tailwind-v4.css @theme declarations must be var(--token) aliases",
+      "design-systems/test/manifest.json: tailwind-v4.css maps --color-custom to non-schema token --custom",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

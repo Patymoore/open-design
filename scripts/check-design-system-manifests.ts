@@ -16,12 +16,14 @@ import { fileURLToPath } from "node:url";
 
 import { parseDesignSystemProjectManifest } from "../design-systems/_schema/manifest.schema.ts";
 import type { DesignSystemProjectManifest } from "../design-systems/_schema/manifest.schema.ts";
+import { TOKEN_SCHEMA } from "../design-systems/_schema/tokens.schema.ts";
 import { extractComponentsManifest } from "../packages/contracts/src/design-systems/components-manifest.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const designSystemsRoot = path.join(repoRoot, "design-systems");
 const craftRoot = path.join(repoRoot, "craft");
 const SKIPPED_DIRECTORIES = new Set(["_schema"]);
+const TOKEN_SCHEMA_NAMES = new Set(TOKEN_SCHEMA.map((spec) => spec.name));
 
 function toRepositoryPath(filePath: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
@@ -38,6 +40,10 @@ async function exists(filePath: string): Promise<boolean> {
 
 async function readJson(filePath: string): Promise<unknown> {
   return JSON.parse(await readFile(filePath, "utf8")) as unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function discoverManifestPaths(): Promise<string[]> {
@@ -83,6 +89,8 @@ export async function checkDesignSystemManifests(): Promise<boolean> {
     const requiredFiles = [
       manifest.files.design,
       manifest.files.tokens,
+      ...(manifest.files.designTokens === undefined ? [] : [manifest.files.designTokens]),
+      ...(manifest.files.tailwind === undefined ? [] : [manifest.files.tailwind]),
       ...(manifest.files.components === undefined ? [] : [manifest.files.components]),
       ...(manifest.usage === undefined ? [] : [manifest.usage]),
       ...(manifest.componentsManifest === undefined ? [] : [manifest.componentsManifest]),
@@ -104,7 +112,9 @@ export async function checkDesignSystemManifests(): Promise<boolean> {
       violations.push(`${repositoryManifestPath}: preview.dir is declared but ${manifest.preview.dir}/ does not exist`);
     }
 
-    await validateDeclaredJsonFiles(violations, repositoryManifestPath, brandRoot, manifest.sourceFiles);
+    await validateDeclaredJsonFiles(violations, repositoryManifestPath, brandRoot, manifest);
+    await validateDesignTokensJson(violations, repositoryManifestPath, brandRoot, manifest.files.designTokens);
+    await validateTailwindV4Css(violations, repositoryManifestPath, brandRoot, manifest.files.tailwind);
     await validateComponentsManifestCache(violations, repositoryManifestPath, brandRoot, folderSlug, manifest.componentsManifest);
   }
 
@@ -118,6 +128,96 @@ export async function checkDesignSystemManifests(): Promise<boolean> {
     `Design system manifest check passed: ${manifestPaths.length} project manifest${manifestPaths.length === 1 ? "" : "s"} valid; DESIGN.md-only systems skipped.`,
   );
   return true;
+}
+
+async function validateDesignTokensJson(
+  violations: string[],
+  repositoryManifestPath: string,
+  brandRoot: string,
+  designTokensPath: string | undefined,
+): Promise<void> {
+  if (designTokensPath === undefined) return;
+  const filePath = path.join(brandRoot, designTokensPath);
+  let parsed: unknown;
+  try {
+    parsed = await readJson(filePath);
+  } catch (error) {
+    violations.push(
+      `${repositoryManifestPath}: ${designTokensPath} could not be parsed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return;
+  }
+  if (!isRecord(parsed)) {
+    violations.push(`${repositoryManifestPath}: ${designTokensPath} must be a JSON object`);
+    return;
+  }
+  if (parsed.format !== "od-design-tokens/v1") {
+    violations.push(`${repositoryManifestPath}: ${designTokensPath} format must be od-design-tokens/v1`);
+  }
+  if (parsed.contract !== "TOKEN_SCHEMA") {
+    violations.push(`${repositoryManifestPath}: ${designTokensPath} contract must be TOKEN_SCHEMA`);
+  }
+  if (!Array.isArray(parsed.tokens)) {
+    violations.push(`${repositoryManifestPath}: ${designTokensPath} tokens must be an array`);
+    return;
+  }
+  const declared = new Set<string>();
+  for (const [index, token] of parsed.tokens.entries()) {
+    if (!isRecord(token) || typeof token.name !== "string" || typeof token.value !== "string") {
+      violations.push(`${repositoryManifestPath}: ${designTokensPath} tokens[${index}] must include string name and value`);
+      continue;
+    }
+    declared.add(token.name);
+  }
+  for (const spec of TOKEN_SCHEMA) {
+    if (!declared.has(spec.name)) {
+      violations.push(`${repositoryManifestPath}: ${designTokensPath} is missing ${spec.name}`);
+    }
+  }
+}
+
+export async function validateTailwindV4Css(
+  violations: string[],
+  repositoryManifestPath: string,
+  brandRoot: string,
+  tailwindPath: string | undefined,
+): Promise<void> {
+  if (tailwindPath === undefined) return;
+  let css: string;
+  try {
+    css = await readFile(path.join(brandRoot, tailwindPath), "utf8");
+  } catch (error) {
+    violations.push(
+      `${repositoryManifestPath}: ${tailwindPath} could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return;
+  }
+  if (!css.includes('@import "./tokens.css";')) {
+    violations.push(`${repositoryManifestPath}: ${tailwindPath} must import ./tokens.css`);
+  }
+  const themeBody = css.match(/@theme\s*\{([\s\S]*?)\}/)?.[1];
+  if (themeBody === undefined) {
+    violations.push(`${repositoryManifestPath}: ${tailwindPath} must declare an @theme block`);
+    return;
+  }
+  for (const rawDeclaration of themeBody.split(";")) {
+    const declaration = rawDeclaration.trim();
+    if (declaration.length === 0) continue;
+    const match = declaration.match(/^(--[A-Za-z0-9_-]+)\s*:\s*var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/);
+    if (match === null) {
+      violations.push(`${repositoryManifestPath}: ${tailwindPath} @theme declarations must be var(--token) aliases`);
+      continue;
+    }
+    const tailwindName = match[1]!;
+    const sourceName = match[2]!;
+    if (!TOKEN_SCHEMA_NAMES.has(sourceName)) {
+      violations.push(`${repositoryManifestPath}: ${tailwindPath} maps ${tailwindName} to non-schema token ${sourceName}`);
+    }
+  }
 }
 
 async function discoverCraftSlugs(): Promise<Set<string>> {
@@ -189,13 +289,13 @@ async function validateDeclaredJsonFiles(
   violations: string[],
   repositoryManifestPath: string,
   brandRoot: string,
-  sourceFiles: Record<string, string | undefined> | undefined,
+  manifest: DesignSystemProjectManifest,
 ): Promise<void> {
   const jsonPaths = [
-    sourceFiles?.scanned,
-    sourceFiles?.tokens,
-    sourceFiles?.report,
-    sourceFiles?.snippets,
+    manifest.sourceFiles?.scanned,
+    manifest.sourceFiles?.tokens,
+    manifest.sourceFiles?.report,
+    manifest.sourceFiles?.snippets,
   ].filter((fileName): fileName is string => fileName !== undefined);
 
   for (const fileName of jsonPaths) {

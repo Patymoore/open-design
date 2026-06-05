@@ -2188,6 +2188,8 @@ function DesignSystemPackageCard({
     manifest?.usage ? manifest.usage : null,
     manifest?.files?.design ?? 'DESIGN.md',
     manifest?.files?.tokens ?? 'tokens.css',
+    manifest?.files?.designTokens,
+    manifest?.files?.tailwind,
     manifest?.files?.components,
     manifest?.componentsManifest,
   ].filter((item): item is string => typeof item === 'string' && item.length > 0);
