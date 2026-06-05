@@ -1196,19 +1196,48 @@ describe('FileViewer SVG artifacts', () => {
         exports: ['html'],
       },
     });
+    const css = readExpandedIndexCss();
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+    const workspaceShell = document.createElement('div');
+    workspaceShell.className = 'workspace-shell';
+    const chrome = document.createElement('div');
+    chrome.className = 'workspace-tabs-chrome app-chrome-header';
+    vi.spyOn(chrome, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 100, 34));
+    const workspaceBody = document.createElement('div');
+    workspaceBody.className = 'workspace-shell__body';
+    workspaceShell.append(chrome, workspaceBody);
+    document.body.appendChild(workspaceShell);
 
     const { container } = render(
       <FileViewer projectId="project-1" projectKind="prototype" file={file} liveHtml="<html><body>hi</body></html>" />,
+      { container: workspaceBody },
     );
 
     fireEvent.click(screen.getByRole('button', { name: /present/i }));
     fireEvent.click(screen.getByRole('menuitem', { name: /in this tab/i }));
 
     await waitFor(() => {
-      const frame = container.querySelector('.present-overlay iframe');
+      const frame = document.body.querySelector('.present-overlay iframe');
       expect(frame?.getAttribute('sandbox')).toBe('allow-scripts allow-downloads');
       expect(frame?.getAttribute('data-od-render-mode')).toBe('url-load');
     });
+    expect(container.querySelector('.html-viewer.is-tab-present')).toBeTruthy();
+    const overlay = document.body.querySelector<HTMLElement>('.present-overlay');
+    expect(overlay?.parentElement).toBe(document.body);
+    expect(document.body.style.getPropertyValue('--workspace-tabs-chrome-height')).toBe('34px');
+    expect(overlay?.style.getPropertyValue('--workspace-tabs-chrome-height')).toBe('');
+    const bodyChromeHeight = window
+      .getComputedStyle(document.body)
+      .getPropertyValue('--workspace-tabs-chrome-height')
+      .trim();
+    const resolvedTop = window
+      .getComputedStyle(overlay!)
+      .top.replace(/var\(--workspace-tabs-chrome-height,\s*38px\)/, bodyChromeHeight || '38px');
+    expect(resolvedTop).toBe('34px');
+    style.remove();
+    workspaceShell.remove();
   });
 
   it('allows downloads in React component preview iframes', async () => {
@@ -5104,6 +5133,17 @@ describe('LiveArtifactViewer', () => {
     expect(rule).toContain('right: calc(env(safe-area-inset-right, 0px) + 20px);');
     expect(rule).toContain('display: inline-flex;');
     expect(rule).toContain('align-items: center;');
+  });
+
+  it('keeps in-tab presentation overlays anchored to the inherited workspace tab height', () => {
+    const css = readExpandedIndexCss();
+    const overlayRule = css.match(/\.present-overlay\s*\{[^}]+\}/)?.[0] ?? '';
+
+    expect(overlayRule).toContain('position: fixed;');
+    expect(overlayRule).toContain('top: var(--workspace-tabs-chrome-height, 38px);');
+    expect(overlayRule).toContain('right: 0;');
+    expect(overlayRule).toContain('bottom: 0;');
+    expect(overlayRule).toContain('left: 0;');
   });
 
   it('uses the shared zoom dropdown for live artifact previews', async () => {
