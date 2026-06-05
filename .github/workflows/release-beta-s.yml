@@ -491,6 +491,7 @@ jobs:
           fetch-depth: 1
           lfs: false
           path: _release-build
+          ref: ${{ needs.metadata.outputs.commit }}
 
       - name: Prepare self-hosted mac toolchain
         working-directory: _release-build
@@ -640,6 +641,7 @@ jobs:
           clean: false
           fetch-depth: 1
           lfs: false
+          ref: ${{ needs.metadata.outputs.commit }}
 
       - name: Prepare self-hosted Windows toolchain
         shell: pwsh
@@ -758,6 +760,8 @@ jobs:
         inputs.publish &&
         needs.metadata.result == 'success' &&
         (inputs.enable_mac_arm64 || inputs.enable_win_x64) &&
+        !inputs.enable_mac_x64 &&
+        !inputs.enable_linux_x64 &&
         (!inputs.enable_mac_arm64 || needs.build_mac_arm64.result == 'success') &&
         (!inputs.enable_win_x64 || needs.build_win_x64.result == 'success')
       }}
