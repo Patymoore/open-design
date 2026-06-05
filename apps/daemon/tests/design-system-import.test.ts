@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { importLocalDesignSystemProject } from '../src/design-system-import.js';
-import { listDesignSystems, readDesignSystemAssets } from '../src/design-systems.js';
+import { listDesignSystems, readDesignSystemAssets, readDesignSystemPackageInfo } from '../src/design-systems.js';
 
 describe('importLocalDesignSystemProject', () => {
   let tempRoot: string;
@@ -201,6 +201,13 @@ describe('importLocalDesignSystemProject', () => {
     expect(assets.tokensCss).not.toContain('--font-sans');
     expect(assets.tokensCss).not.toContain('--section-y:');
     expect(assets.fixtureHtml).toContain('Component fixture');
+
+    const packageInfo = await readDesignSystemPackageInfo(userDesignSystemsRoot, 'kami-app');
+    expect(packageInfo?.manifest?.sourceFiles?.report).toBe('source/token-contract.report.json');
+    expect(packageInfo?.sourceEvidence?.tokenContract).toMatchObject({
+      contract: 'TOKEN_SCHEMA',
+      selfCheckOk: true,
+    });
 
     const systems = await listDesignSystems(userDesignSystemsRoot);
     expect(systems).toMatchObject([

@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import type { DesignSystemGenerateSnapshot } from './DesignSystemFlow';
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import type { ConnectorDetail } from '@open-design/contracts';
 import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
 import {
@@ -113,18 +112,6 @@ interface Props {
   onRenameProject: (id: string, name: string) => void;
   onChangeDefaultDesignSystem: (id: string) => void;
   onCreateDesignSystem?: () => void;
-  renderDesignSystemCreation?: (
-    onBack: () => void,
-    hooks?: {
-      onBeforeGenerate?: (snapshot: DesignSystemGenerateSnapshot) => void;
-      onGenerateSettled?: (
-        snapshot: DesignSystemGenerateSnapshot,
-        outcome:
-          | { result: 'success' }
-          | { result: 'failed'; errorCode: string },
-      ) => void;
-    },
-  ) => ReactNode;
   onOpenDesignSystem?: (id: string) => void;
   onDesignSystemsRefresh?: () => Promise<void> | void;
   onPersistComposioKey: (composio: AppConfig['composio']) => Promise<void> | void;
@@ -264,7 +251,6 @@ export function EntryView({
   onRenameProject,
   onChangeDefaultDesignSystem,
   onCreateDesignSystem,
-  renderDesignSystemCreation,
   onOpenDesignSystem,
   onDesignSystemsRefresh,
   onPersistComposioKey,
@@ -377,7 +363,6 @@ export function EntryView({
       onRenameProject={onRenameProject}
       onChangeDefaultDesignSystem={onChangeDefaultDesignSystem}
       onCreateDesignSystem={onCreateDesignSystem}
-      renderDesignSystemCreation={renderDesignSystemCreation}
       onOpenDesignSystem={onOpenDesignSystem}
       onDesignSystemsRefresh={onDesignSystemsRefresh}
       onPersistComposioKey={onPersistComposioKey}

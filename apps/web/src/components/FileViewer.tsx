@@ -6523,11 +6523,36 @@ function HtmlViewer({
 
   useEffect(() => {
     if (!inTabPresent) return;
+    const bodyStyle = document.body.style;
+    const previousChromeHeight = bodyStyle.getPropertyValue('--workspace-tabs-chrome-height');
+    const updateChromeHeight = () => {
+      const chrome = document.querySelector<HTMLElement>('.workspace-tabs-chrome.app-chrome-header');
+      const height = chrome?.getBoundingClientRect().height ?? 0;
+      if (height > 0) {
+        bodyStyle.setProperty('--workspace-tabs-chrome-height', `${Math.round(height)}px`);
+      } else {
+        bodyStyle.removeProperty('--workspace-tabs-chrome-height');
+      }
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setInTabPresent(false);
     };
+    updateChromeHeight();
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    window.addEventListener('resize', updateChromeHeight);
+    const chrome = document.querySelector<HTMLElement>('.workspace-tabs-chrome.app-chrome-header');
+    const observer = chrome && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateChromeHeight) : null;
+    if (observer && chrome) observer.observe(chrome);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', updateChromeHeight);
+      observer?.disconnect();
+      if (previousChromeHeight) {
+        bodyStyle.setProperty('--workspace-tabs-chrome-height', previousChromeHeight);
+      } else {
+        bodyStyle.removeProperty('--workspace-tabs-chrome-height');
+      }
+    };
   }, [inTabPresent]);
 
   function openInNewTab() {
@@ -6787,6 +6812,7 @@ function HtmlViewer({
 
   function presentInThisTab() {
     setPresentMenuOpen(false);
+    setMode('preview');
     setInTabPresent(true);
   }
 
@@ -7887,7 +7913,7 @@ function HtmlViewer({
   ) : null;
 
   return (
-    <div className="viewer html-viewer">
+    <div className={`viewer html-viewer${inTabPresent ? ' is-tab-present' : ''}`}>
       <div className="viewer-toolbar">
         <div className="viewer-toolbar-left">
           <button
@@ -8744,7 +8770,7 @@ function HtmlViewer({
           <pre className="viewer-source">{source}</pre>
         )}
       </div>
-      {inTabPresent && source ? (
+      {inTabPresent && source && typeof document !== 'undefined' ? createPortal(
         <div
           className="present-overlay"
           role="dialog"
@@ -8772,7 +8798,8 @@ function HtmlViewer({
               srcDoc={srcDoc}
             />
           )}
-        </div>
+        </div>,
+        document.body,
       ) : null}
       {imageExportModalOpen ? (
         <div className="modal-backdrop" role="presentation">
@@ -8836,7 +8863,7 @@ function HtmlViewer({
                   void handleImageExportSave();
                 }}
               >
-                {imageExportBusy || imageExportPreparing ? t('fileViewer.exportImageSaving') : t('common.save')}
+                {imageExportBusy ? t('fileViewer.exportImageSaving') : t('common.save')}
               </button>
             </div>
           </div>

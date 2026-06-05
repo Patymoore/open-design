@@ -210,7 +210,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MAC_BUILD_TARGET: dmg
           MAC_COMPRESSION: normal
-          MAC_SIGN_MODE: "on"
+          # build-mac.sh accepts no | sign-only | notarize; the legacy "on" is
+          # rejected ("unsupported MAC_SIGN_MODE"). sign-only signs the beta with
+          # the Apple Developer ID cert without notarization (notarize needs the
+          # APPLE_NOTARY_KEYCHAIN_PROFILE plumbing that only lands with the
+          # release-beta-isomorphism mac-lane rework). Unblocks signed mac betas
+          # built directly from main.
+          MAC_SIGN_MODE: "sign-only"
           RELEASE_VERSION: ${{ needs.metadata.outputs.beta_version }}
           TOOLS_PACK_NAMESPACE: release-beta
         run: |
