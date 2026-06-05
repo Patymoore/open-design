@@ -66,10 +66,11 @@ production trace
   -> online observation
 ```
 
-Langfuse is the trace, score, dataset, experiment, and annotation surface.
-PostHog remains the aggregate product analytics and alerting surface. Open
-Design owns the domain model that maps a design-agent run onto task stages,
-quality signals, and release decisions.
+Langfuse is the trace, score, dataset, experiment, and annotation surface. It is
+the observability index, not the durable storage layer for user attachments or
+generated artifacts. PostHog remains the aggregate product analytics and
+alerting surface. Open Design owns the domain model that maps a design-agent run
+onto task stages, quality signals, storage references, and release decisions.
 
 ### Semantic Trace Shape
 
@@ -79,6 +80,7 @@ runtime spans:
 ```text
 open-design-turn
   brief-intake
+    attachment-manifest
   route-task-kind
   resolve-context
     resolve-skill
@@ -105,6 +107,83 @@ open-design-turn
 The exact implementation can preserve the existing `agent-run`, `llm`, and
 `tool:*` observations, but those observations should sit inside or alongside
 semantic task stages so humans and agents can diagnose by product intent.
+
+### Heavy Input and Artifact Boundary
+
+Open Design is a design product, so the input and output surface is heavier than
+a short chat prompt. A run can include long briefs, reference images, PDFs,
+brand files, prior project files, generated HTML, images, decks, documents,
+preview screenshots, export bundles, and reproducibility materials. These
+objects should not be copied wholesale into Langfuse input/output fields.
+
+The target boundary is:
+
+| Layer | Responsibility |
+| --- | --- |
+| Open Design object storage | Stores original user attachments, parsed text, thumbnails, OCR or embedding outputs, generated artifacts, preview screenshots, export bundles, and reproducibility files. |
+| Langfuse | Stores trace-safe manifests, summaries, hashes, stage status, storage references, evaluator scores, usage, latency, and cost fields. |
+| PostHog | Stores aggregate product analytics and user/workspace-level trend metrics derived from trace-safe fields. |
+
+Langfuse should retain enough information for analysis, triage, and replay
+without becoming the source of truth for sensitive or large user data. The
+default policy is:
+
+- do not upload original attachments or artifact packages to Langfuse by
+  default;
+- always emit an `attachment_manifest` and `artifact_manifest` with stable ids,
+  MIME type, byte size, SHA-256 hash, parse/build status, truncation status,
+  redaction status, and Open Design storage references;
+- include short summaries and product-analysis fields that are safe to index in
+  Langfuse;
+- use short-lived signed URLs only for interactive inspection, not as the
+  durable reference stored in Langfuse;
+- store durable `od://`-style references, object ids, or artifact ids that Open
+  Design can resolve after authorization;
+- only upload a raw attachment to Langfuse Media when the file type is supported,
+  the data is low sensitivity or explicitly allowed, and replaying the trace
+  requires Langfuse-native media resolution;
+- run masking/redaction before any input, output, or metadata leaves Open
+  Design.
+
+The minimum manifest shape should be stable across traces:
+
+```json
+{
+  "attachment_manifest": [
+    {
+      "attachment_id": "att_123",
+      "role": "reference_image",
+      "mime_type": "image/png",
+      "size_bytes": 2481032,
+      "sha256": "sha256:...",
+      "parse_status": "ok",
+      "summary": "Brand reference image with dark UI styling.",
+      "redacted": false,
+      "truncated": false,
+      "stored_in_open_design": true,
+      "langfuse_media_id": null,
+      "storage_ref": "od://objects/workspaces/ws_1/runs/run_1/attachments/att_123"
+    }
+  ],
+  "artifact_manifest": [
+    {
+      "artifact_id": "art_456",
+      "type": "html_prototype",
+      "size_bytes": 482193,
+      "sha256": "sha256:...",
+      "preview_status": "ok",
+      "export_status": "ok",
+      "storage_ref": "od://objects/workspaces/ws_1/runs/run_1/artifacts/art_456",
+      "thumbnail_ref": "od://objects/workspaces/ws_1/runs/run_1/artifacts/art_456/thumb.png"
+    }
+  ]
+}
+```
+
+This boundary resolves the conflict between Langfuse truncation and incomplete
+product analytics: Langfuse gets complete trace-safe semantics, while Open
+Design keeps complete raw data behind product authorization and retention
+policies.
 
 ### Score Model
 
@@ -167,7 +246,8 @@ path:
 - high-cost or high-latency traces become efficiency dataset candidates;
 - ambiguous traces enter annotation queues before promotion;
 - accepted dataset items retain source trace id, task kind, agent, model, skill,
-  design system, prompt stack fingerprint, and expected outcome.
+  design system, prompt stack fingerprint, trace-safe attachment/artifact
+  manifests, and expected outcome.
 
 Experiments should run the same dataset against candidate changes such as:
 
@@ -255,6 +335,15 @@ Loop health:
 - annotation queue throughput and aging;
 - number of shipped changes linked to observed trace evidence.
 
+Data completeness:
+
+- share of artifact-producing runs with a valid `artifact_manifest`;
+- share of attachment-bearing runs with a valid `attachment_manifest`;
+- share of traces with truncated input/output and no compensating summary;
+- share of manifests with missing storage references, hashes, or parse/build
+  status;
+- masked or redacted attachment share by task kind and data class.
+
 ## Rollout Slices
 
 ### Slice 1: Spec and Baseline
@@ -270,8 +359,22 @@ Loop health:
 - Preserve existing trace ids, tags, and low-level observations.
 - Emit stage status, duration, and failure metadata so failed traces can be
   grouped by product stage.
+- Emit trace-safe attachment and artifact manifests during `brief-intake` and
+  `verify-artifact`.
 
-### Slice 3: Automatic Evaluators
+### Slice 3: Object Storage and Manifest Contract
+
+- Define the Open Design object storage contract for attachments, parsed
+  derivatives, generated artifacts, preview screenshots, export bundles, and
+  reproducibility files.
+- Store original heavy inputs and outputs in Open Design controlled storage,
+  not in Langfuse by default.
+- Store durable object references, hashes, summaries, redaction state,
+  truncation state, and parse/build status in Langfuse.
+- Add masking before Langfuse ingestion so raw sensitive content cannot leak
+  through input, output, or metadata fields.
+
+### Slice 4: Automatic Evaluators
 
 - Add deterministic scores for artifact validity, preview success, task success
   proxy, latency bucket, and cost bucket.
@@ -279,15 +382,18 @@ Loop health:
 - Write scores back to Langfuse and mirror aggregate fields to PostHog where
   dashboarding needs them.
 
-### Slice 4: Dataset and Annotation Promotion
+### Slice 5: Dataset and Annotation Promotion
 
 - Add an agent-operable workflow that proposes dataset items from failed,
   low-score, high-cost, and high-latency traces.
 - Route ambiguous quality cases to Langfuse annotation queues.
 - Preserve provenance from dataset item back to source trace and accepted human
   annotation.
+- Preserve trace-safe manifest references for attachments and artifacts; require
+  human approval before promoting sensitive raw attachments or artifacts into
+  durable evaluation fixtures.
 
-### Slice 5: Experiment and Release Gates
+### Slice 6: Experiment and Release Gates
 
 - Define fixed task datasets for core task kinds.
 - Run experiments before prompt, skill, model-routing, retry, or context changes
@@ -307,7 +413,7 @@ produces the same pass/fail decision across implementations:
 | Advisory metrics | P50 latency, P99 latency, cache hit ratio, annotation throughput, dataset growth, and user rating volume. These must be reported with the gate result but do not block by themselves. |
 | Improvement threshold | A candidate qualifies as an improvement only when all blocking metrics pass and at least one blocking reliability, latency, or cost metric improves by 5% or more, or one documented failure category is eliminated on the fixed regression dataset. |
 
-### Slice 6: Agent-Operated Optimization Loop
+### Slice 7: Agent-Operated Optimization Loop
 
 - Schedule an agent report that ranks the most important quality, reliability,
   latency, and cost opportunities.
@@ -332,6 +438,8 @@ which proposed evolutions are trustworthy.
 ## Non-goals
 
 - This spec does not replace Langfuse or PostHog.
+- This spec does not make Langfuse the storage layer for original user
+  attachments or generated artifact packages.
 - This spec does not add a new model router.
 - This spec does not require all evaluators to be LLM judges.
 - This spec does not implement runtime changes in the spec-only PR.
@@ -344,11 +452,14 @@ The loop is working when a representative production regression can be handled
 end to end:
 
 1. A bad run produces a trace with a clear failing task stage.
-2. Automatic or human scores identify the quality, stability, latency, or cost
+2. Attachment and artifact manifests include trace-safe summaries, hashes,
+   storage references, truncation state, and redaction state when applicable.
+3. Automatic or human scores identify the quality, stability, latency, or cost
    problem.
-3. The trace is promoted to a dataset item or annotation queue with provenance.
-4. An experiment compares a proposed fix against the accepted dataset.
-5. The result summarizes quality, reliability, latency, and cost tradeoffs.
-6. A human approves high-risk changes or the agent proceeds with a low-risk
+4. The trace is promoted to a dataset item or annotation queue with provenance.
+5. An experiment compares a proposed fix against the accepted dataset.
+6. The result summarizes quality, reliability, latency, cost, and data
+   completeness tradeoffs.
+7. A human approves high-risk changes or the agent proceeds with a low-risk
    improvement.
-7. Online dashboards confirm the improvement after release.
+8. Online dashboards confirm the improvement after release.
