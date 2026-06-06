@@ -35,6 +35,9 @@ describe("release workflows", () => {
     expect(selfHostedMac.match(/RELEASE_ARTIFACT_MODE: dmg-and-payload/g)?.length ?? 0).toBe(2);
     expect(buildMac).toContain("build_args+=(--require-vela-cli)");
     expect(buildMac).toContain('--cache-dir "$TOOLS_PACK_CACHE_DIR"');
+    expect(buildMac).toContain('tools-pack mac build update fixture');
+    expect(buildMac).toContain('OD_PACKAGED_E2E_MAC_UPDATE_BUILD_JSON_PATH="$update_build_json_path"');
+    expect(buildMac).toContain('OD_PACKAGED_E2E_MAC_UPDATE_VERSION="${OD_PACKAGED_E2E_MAC_UPDATE_VERSION:-$update_version}"');
     expect(buildMac).not.toContain("::warning::Expected Electron framework symlink");
     expect(macX64).not.toContain("REQUIRE_VELA_CLI: \"true\"");
     expect(win).not.toContain("--require-vela-cli");
@@ -42,6 +45,12 @@ describe("release workflows", () => {
     expect(beta.match(/REQUIRE_VELA_CLI: "true"/g)?.length ?? 0).toBe(1);
     expect(beta).toContain("release-beta publish requires win_x64_target=nsis or all");
     expect(betaSelfHosted).toContain("release-beta-s publish requires win_x64_target=nsis or all");
+    expect(beta).toContain("mac_arm64_update_metadata_url:");
+    expect(beta).toContain("win_x64_update_metadata_url:");
+    expect(beta).toContain("OD_PACKAGED_E2E_MAC_UPDATE_METADATA_URL: ${{ inputs.mac_arm64_update_metadata_url }}");
+    expect(beta).toContain("OD_PACKAGED_E2E_WIN_UPDATE_METADATA_URL: ${{ inputs.win_x64_update_metadata_url }}");
+    expect(betaSelfHosted).toContain("mac_arm64_update_metadata_url:");
+    expect(selfHostedMac).toContain("OD_PACKAGED_E2E_MAC_UPDATE_METADATA_URL: ${{ inputs.mac_arm64_update_metadata_url }}");
     expect(win).toContain("-IncludeZip $${{ inputs.win_x64_target == 'all' || inputs.win_x64_target == 'zip' }}");
     expect(selfHostedWin).toContain("-IncludeZip $${{ inputs.win_x64_target == 'all' || inputs.win_x64_target == 'zip' }}");
     expect(prepareWin).toContain("$sourcePayload = [string]$build.payloadPath");

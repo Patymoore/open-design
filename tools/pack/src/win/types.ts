@@ -1,4 +1,5 @@
 import type { DesktopEvalResult, DesktopScreenshotResult, DesktopStatusSnapshot, DesktopUpdateResult } from "@open-design/sidecar-proto";
+import type { ToolPackLauncherRuntimeSnapshot } from "../launcher-runtime-snapshot.js";
 import type { CacheReport } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
 import type { INTERNAL_PACKAGES } from "./constants.js";
@@ -327,6 +328,7 @@ export type WinResetResult = {
 
 export type WinInspectResult = {
   eval?: DesktopEvalResult;
+  launcher: ToolPackLauncherRuntimeSnapshot;
   screenshot?: DesktopScreenshotResult;
   status: DesktopStatusSnapshot | null;
   update?: DesktopUpdateResult;

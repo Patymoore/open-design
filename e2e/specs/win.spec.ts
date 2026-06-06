@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 
 import { createPackagedSmokeReport } from '@/vitest/packaged-report';
+import { startPackagedPayloadUpdateFixture, type PackagedPayloadUpdateFixture } from '@/vitest/packaged-payload-update-fixture';
 import {
   applyPackagedUpdateEnv,
   resolvePackagedUpdateScenario,
@@ -26,11 +27,6 @@ const maxInstallDurationMs = Number.parseInt(process.env.OD_PACKAGED_E2E_WIN_MAX
 const smokeProfile = process.env.OD_PACKAGED_E2E_WIN_SMOKE_PROFILE ?? 'core';
 const verifyCoreOnly = smokeProfile === 'core';
 const verifyReinstallWhileRunning = !verifyCoreOnly && process.env.OD_PACKAGED_E2E_WIN_VERIFY_REINSTALL !== '0';
-const verifyRealUpdateInstaller =
-  process.env.OD_PACKAGED_E2E_WIN_REAL_UPDATE_INSTALL == null
-    ? !verifyCoreOnly
-    : process.env.OD_PACKAGED_E2E_WIN_REAL_UPDATE_INSTALL === '1';
-const updateArtifactPath = normalizeOptionalEnv(process.env.OD_PACKAGED_E2E_WIN_UPDATE_ARTIFACT_PATH);
 const updateMetadataUrl = normalizeOptionalEnv(process.env.OD_PACKAGED_E2E_WIN_UPDATE_METADATA_URL);
 const updateVersion = normalizeOptionalEnv(process.env.OD_PACKAGED_E2E_WIN_UPDATE_VERSION);
 const updateBuildJsonPath = normalizeOptionalEnv(process.env.OD_PACKAGED_E2E_WIN_UPDATE_BUILD_JSON_PATH);
@@ -111,17 +107,6 @@ type WinUninstallResult = {
   residueObservation?: WinCleanupResult['residueObservation'];
 };
 
-type WinListResult = {
-  current: {
-    registryEntries: Array<{
-      displayName: string | null;
-      displayVersion: string | null;
-      installLocation: string | null;
-      keyPath: string;
-    }>;
-  };
-};
-
 type WinInspectResult = {
   eval?: {
     error?: string;
@@ -134,8 +119,15 @@ type WinInspectResult = {
   status: DesktopStatus | null;
   update?: {
     active?: {
+      artifact?: {
+        type?: string;
+      };
       path?: string;
       version?: string;
+    };
+    artifact?: {
+      type?: string;
+      url?: string;
     };
     availableVersion?: string;
     channel?: string;
@@ -155,6 +147,28 @@ type WinInspectResult = {
     };
     state: string;
   };
+  launcher: LauncherSnapshot;
+};
+
+type LauncherSnapshot = {
+  active: LauncherPointer | null;
+  attempt: (LauncherPointer & { channel?: string; namespace?: string }) | null;
+  attemptsPath: string;
+  channel: string;
+  error?: string;
+  exists: boolean;
+  lastSuccessful: LauncherPointer | null;
+  namespace: string;
+  root: string;
+  runtimePath: string;
+  stateRoot: string;
+  versionRoots: string[];
+  versionsRoot: string;
+};
+
+type LauncherPointer = {
+  generation: number;
+  version: string;
 };
 
 type LogsResult = {
@@ -182,14 +196,6 @@ type HealthEvalValue = {
 type SmokeTiming = {
   durationMs: number;
   step: string;
-};
-
-type RealUpdateInstallerSummary = {
-  displayVersion: string | null;
-  installerPath: string;
-  nsisLogTail: string[];
-  registryEntryCount: number;
-  targetVersion: string;
 };
 
 type DirectInstallerResult = {
@@ -227,11 +233,12 @@ winDescribe('packaged windows runtime smoke', () => {
     const report = await createPackagedSmokeReport('win');
     let passed = false;
     const timings: SmokeTiming[] = [];
-    let realUpdateInstaller: RealUpdateInstallerSummary | { skipped: true } = { skipped: true };
+    let payloadUpdate: PayloadUpdateSummary | { skipped: true } = { skipped: true };
     let reinstall: DirectInstallerResult | { skipped: true } = { skipped: true };
     let logs: LogsResult | { skipped: true } = { skipped: true };
     let stop: WinStopResult | { skipped: true } = { skipped: true };
     let postUpdateHealth: HealthEvalValue | { skipped: true } = { skipped: true };
+    let payloadFixture: PackagedPayloadUpdateFixture | null = null;
     const updateEnv = captureUpdateEnv();
     try {
       await measureSmokeStep(timings, 'pre-clean uninstall', async () => {
@@ -282,8 +289,21 @@ winDescribe('packaged windows runtime smoke', () => {
         return stop;
       };
 
-      if (!verifyCoreOnly && updateMetadataUrl != null && updateMetadataUrl !== '') {
-        applyPackagedUpdateEnv(process.env, updateScenario, updateMetadataUrl);
+      let expectedPayloadUpdateVersion: string | null = updateVersion;
+      if (!verifyCoreOnly) {
+        if (updateMetadataUrl != null && updateMetadataUrl !== '') {
+          applyPackagedUpdateEnv(process.env, updateScenario, updateMetadataUrl);
+        } else {
+          const localPayload = await resolveLocalPayloadUpdateFixture();
+          expectedPayloadUpdateVersion = localPayload.targetVersion;
+          payloadFixture = await startPackagedPayloadUpdateFixture({
+            channel: updateScenario.channel,
+            payloadPath: localPayload.payloadPath,
+            platform: 'win',
+            version: localPayload.targetVersion,
+          });
+          applyPackagedUpdateEnv(process.env, updateScenario, payloadFixture.info.metadataUrl);
+        }
       }
 
       let start = await startDesktop('start');
@@ -304,6 +324,8 @@ winDescribe('packaged windows runtime smoke', () => {
       expect(value.health.ok).toBe(true);
       if (releaseVersion != null && releaseVersion !== '') expect(value.health.version).toBe(releaseVersion);
       else expect(value.health.version).toEqual(expect.any(String));
+      assertLauncherPointer(inspect.launcher.active, updateScenario.expectedCurrentVersion, 0, 'initial active');
+      assertLauncherPointer(inspect.launcher.lastSuccessful, updateScenario.expectedCurrentVersion, 0, 'initial lastSuccessful');
 
       await mkdir(dirname(preUpdateScreenshotPath), { recursive: true });
       const preUpdateScreenshot = await measureSmokeStep(timings, 'inspect screenshot before update', async () =>
@@ -313,37 +335,21 @@ winDescribe('packaged windows runtime smoke', () => {
       expect(await fileSizeBytes(preUpdateScreenshotPath)).toBeGreaterThan(0);
       await report.report.save('screenshots/open-design-win-before-update.png', await readFile(preUpdateScreenshotPath));
 
-      if (!verifyCoreOnly && verifyRealUpdateInstaller) {
-        const updateTarget = await resolveUpgradeTarget({
-          expectedVersion: updateVersion,
-          metadataUrl: updateMetadataUrl,
-        });
-        realUpdateInstaller = await measureSmokeStep(timings, 'real update installer acceptance', async () =>
-          runUpgradeInstallerAcceptance({
-            installDir: install.installDir,
-            installerPath: updateTarget.installerPath,
+      if (!verifyCoreOnly) {
+        payloadUpdate = await measureSmokeStep(timings, 'payload update acceptance', async () =>
+          runPayloadUpdateAcceptance({
+            expectedVersion: expectedPayloadUpdateVersion,
             startDesktop: async (step) => {
               start = await startDesktop(step);
               return start;
             },
             stopDesktop,
-            targetVersion: updateTarget.targetVersion,
           }),
         );
-        expect(realUpdateInstaller.targetVersion).toBe(updateTarget.targetVersion);
-        const postUpdateInspect = await measureSmokeStep(timings, 'wait healthy inspect after update', async () =>
-          waitForHealthyDesktop(),
-        );
-        expect(postUpdateInspect.status?.state).toBe('running');
-        expect(postUpdateInspect.status?.url).toBe('od://app/');
-        postUpdateHealth = assertHealthEvalValue(postUpdateInspect.eval?.value);
-        expect(postUpdateHealth.href).toBe('od://app/');
-        expect(postUpdateHealth.status).toBe(200);
-        expect(postUpdateHealth.health.ok).toBe(true);
-        expect(postUpdateHealth.health.version).toBe(updateTarget.targetVersion);
+        postUpdateHealth = payloadUpdate.health;
       }
 
-      if (verifyReinstallWhileRunning && !verifyRealUpdateInstaller) {
+      if (verifyReinstallWhileRunning && verifyCoreOnly) {
         reinstall = await measureSmokeStep(timings, 'direct reinstall while running', async () =>
           runDirectInstaller(install.installerPath, install.installDir),
         );
@@ -418,7 +424,7 @@ winDescribe('packaged windows runtime smoke', () => {
         installTiming,
         logs: 'skipped' in logs ? logs : summarizeLogs(logs),
         namespace,
-        realUpdateInstaller,
+        payloadUpdate,
         reinstall,
         screenshot: report.screenshotRelpath,
         screenshots: {
@@ -445,6 +451,9 @@ winDescribe('packaged windows runtime smoke', () => {
       passed = true;
     } finally {
       restoreUpdateEnv(updateEnv);
+      await payloadFixture?.close().catch((error: unknown) => {
+        console.error('failed to close payload update fixture', error);
+      });
       if (!passed) {
         await printPackagedLogs().catch((error: unknown) => {
           console.error('failed to read packaged windows logs after failure', error);
@@ -500,34 +509,57 @@ function printLifecycleTimings(title: string, timings: SmokeTiming[] | undefined
   );
 }
 
-async function runUpgradeInstallerAcceptance(options: {
-  installDir: string;
-  installerPath: string;
+type PayloadUpdateSummary = {
+  applied: NonNullable<WinInspectResult['update']>;
+  downloaded: NonNullable<WinInspectResult['update']>;
+  health: HealthEvalValue;
+  launcherAfterApply: LauncherSnapshot;
+  launcherAfterConfirm: LauncherSnapshot;
+  targetVersion: string;
+};
+
+async function runPayloadUpdateAcceptance(options: {
+  expectedVersion: string | null;
   startDesktop: (step: string) => Promise<WinStartResult>;
   stopDesktop: (step: string) => Promise<WinStopResult>;
-  targetVersion: string;
-}): Promise<RealUpdateInstallerSummary> {
-  await options.stopDesktop('stop before real update installer');
+}): Promise<PayloadUpdateSummary> {
+  const downloadedInspect = await waitForDownloadedUpdater(options.expectedVersion);
+  if (downloadedInspect.update == null) throw new Error('payload update download did not return update status');
+  const targetVersion = downloadedInspect.update.availableVersion;
+  if (targetVersion == null || targetVersion.length === 0) {
+    throw new Error(`payload update did not report availableVersion: ${formatUnknown(downloadedInspect.update)}`);
+  }
+  expect(downloadedInspect.update.artifact?.type).toBe('payload');
+  expectPathInside(downloadedInspect.update.downloadPath ?? '', join(runtimeNamespaceRoot, 'updates'));
+
+  const appliedInspect = await runToolsPackJson<WinInspectResult>('inspect', ['--update-action', 'install']);
+  if (appliedInspect.update == null) throw new Error('payload update install did not return update status');
+  expect(appliedInspect.update.state).toBe('downloaded');
+  expect(appliedInspect.update.artifact?.type).toBe('payload');
+  expect(appliedInspect.update.installResult?.dryRun).not.toBe(true);
+  expectPathInside(appliedInspect.update.installResult?.path ?? '', join(runtimeNamespaceRoot, 'updates'));
+  assertLauncherPointer(appliedInspect.launcher.active, targetVersion, 1, 'post-apply active');
+  assertLauncherPointer(appliedInspect.launcher.lastSuccessful, updateScenario.expectedCurrentVersion, 0, 'post-apply lastSuccessful');
+
+  await options.stopDesktop('stop after payload apply');
   await delay(1000);
-  await options.stopDesktop('stop before installing real update');
-  const installResult = await runDirectInstaller(options.installerPath, options.installDir);
-  expect(installResult.code).toBe(0);
-  await waitForInstalledVersion(options.installDir, options.targetVersion);
-  const list = await runToolsPackJson<WinListResult>('list');
-  const matchingEntries = list.current.registryEntries.filter((entry) => entry.displayName === installIdentity.displayName);
-  expect(matchingEntries.length).toBe(1);
-  const entry = matchingEntries[0];
-  if (entry == null) throw new Error(`expected one registry entry for ${installIdentity.displayName}`);
-  expect(entry.keyPath).toContain(`Open Design-${installIdentity.namespaceToken}`);
-  await seedPackagedOnboardingComplete(options.installDir);
-  await options.startDesktop('start after real update install');
-  await waitForHealthyDesktop();
+  await options.startDesktop('start after payload apply');
+  const postUpdateInspect = await waitForHealthyDesktop();
+  expect(postUpdateInspect.status?.state).toBe('running');
+  expect(postUpdateInspect.status?.url).toBe('od://app/');
+  const health = assertHealthEvalValue(postUpdateInspect.eval?.value);
+  expect(health.href).toBe('od://app/');
+  expect(health.status).toBe(200);
+  expect(health.health.ok).toBe(true);
+  expect(health.health.version).toBe(targetVersion);
+  const confirmedLauncher = await waitForLauncherLastSuccessful(targetVersion);
   return {
-    displayVersion: entry.displayVersion,
-    installerPath: options.installerPath,
-    nsisLogTail: installResult.nsisLogTail,
-    registryEntryCount: matchingEntries.length,
-    targetVersion: options.targetVersion,
+    applied: appliedInspect.update,
+    downloaded: downloadedInspect.update,
+    health,
+    launcherAfterApply: appliedInspect.launcher,
+    launcherAfterConfirm: confirmedLauncher,
+    targetVersion,
   };
 }
 
@@ -615,38 +647,22 @@ async function readNsisLogLines(): Promise<string[]> {
   return raw.split(/\r?\n/).filter((line) => line.length > 0);
 }
 
-async function resolveUpgradeTarget(options: {
-  expectedVersion: string | null;
-  metadataUrl: string | null;
-}): Promise<{ installerPath: string; targetVersion: string }> {
-  const configuredInstallerPath = updateArtifactPath;
-  const configuredTargetVersion = options.expectedVersion;
-  if (configuredInstallerPath != null && configuredInstallerPath !== '' && configuredTargetVersion != null && configuredTargetVersion !== '') {
-    return {
-      installerPath: configuredInstallerPath,
-      targetVersion: configuredTargetVersion,
-    };
-  }
-
-  if (options.metadataUrl != null && options.metadataUrl !== '') {
-    return await resolveExternalUpdaterTarget(configuredTargetVersion);
-  }
-
+async function resolveLocalPayloadUpdateFixture(): Promise<{ payloadPath: string; targetVersion: string }> {
   const fallbackBuildJsonPath = resolveFallbackUpdateBuildJsonPath();
   if (fallbackBuildJsonPath == null) {
     throw new Error(
-      'full packaged windows smoke requires update installer metadata; set OD_PACKAGED_E2E_WIN_UPDATE_METADATA_URL, set OD_PACKAGED_E2E_WIN_UPDATE_ARTIFACT_PATH/OD_PACKAGED_E2E_WIN_UPDATE_VERSION, or provide windows-tools-pack-update-build.json next to OD_PACKAGED_E2E_BUILD_JSON_PATH',
+      'full packaged windows payload smoke requires update payload metadata; set OD_PACKAGED_E2E_WIN_UPDATE_METADATA_URL or provide windows-tools-pack-update-build.json next to OD_PACKAGED_E2E_BUILD_JSON_PATH',
     );
   }
   const updateBuild = JSON.parse(stripUtf8Bom(await readFile(fallbackBuildJsonPath, 'utf8'))) as {
-    installerPath?: unknown;
     latestYmlPath?: unknown;
+    payloadPath?: unknown;
   };
-  if (typeof updateBuild.installerPath !== 'string' || updateBuild.installerPath.length === 0) {
-    throw new Error(`upgrade build metadata missing installerPath: ${fallbackBuildJsonPath}`);
+  if (typeof updateBuild.payloadPath !== 'string' || updateBuild.payloadPath.length === 0) {
+    throw new Error(`upgrade build metadata missing payloadPath: ${fallbackBuildJsonPath}`);
   }
   const targetVersion =
-    configuredTargetVersion ??
+    updateVersion ??
     (typeof updateBuild.latestYmlPath === 'string' && updateBuild.latestYmlPath.length > 0
       ? await readLatestYmlVersion(updateBuild.latestYmlPath)
       : null);
@@ -654,24 +670,8 @@ async function resolveUpgradeTarget(options: {
     throw new Error(`upgrade build metadata missing version: ${fallbackBuildJsonPath}`);
   }
   return {
-    installerPath: updateBuild.installerPath,
+    payloadPath: resolveFromWorkspace(updateBuild.payloadPath),
     targetVersion,
-  };
-}
-
-async function resolveExternalUpdaterTarget(expectedVersion: string | null): Promise<{ installerPath: string; targetVersion: string }> {
-  const downloaded = await waitForDownloadedUpdater(expectedVersion);
-  const downloadPath = downloaded.update?.downloadPath;
-  const availableVersion = downloaded.update?.availableVersion;
-  if (downloadPath == null || downloadPath === '') {
-    throw new Error(`external updater did not report downloadPath: ${formatUnknown(downloaded.update)}`);
-  }
-  if (availableVersion == null || availableVersion === '') {
-    throw new Error(`external updater did not report availableVersion: ${formatUnknown(downloaded.update)}`);
-  }
-  return {
-    installerPath: downloadPath,
-    targetVersion: availableVersion,
   };
 }
 
@@ -692,6 +692,7 @@ async function waitForDownloadedUpdater(expectedVersion: string | null, timeoutM
         if (expectedVersion != null && expectedVersion !== '') {
           expect(inspect.update.availableVersion).toBe(expectedVersion);
         }
+        expect(inspect.update.artifact?.type).toBe('payload');
         expect(inspect.update.channel).toBe(updateScenario.channel);
         expect(inspect.update.currentVersion).toBe(updateScenario.expectedCurrentVersion);
         return inspect;
@@ -702,6 +703,41 @@ async function waitForDownloadedUpdater(expectedVersion: string | null, timeoutM
     await delay(1000);
   }
   throw new Error(`external Windows updater did not download an installer: ${formatUnknown(lastResult)}`);
+}
+
+async function waitForLauncherLastSuccessful(expectedVersion: string, timeoutMs = 45_000): Promise<LauncherSnapshot> {
+  const startedAt = Date.now();
+  let lastLauncher: unknown = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    const inspect = await runToolsPackJson<WinInspectResult>('inspect').catch((error: unknown) => {
+      lastLauncher = error;
+      return null;
+    });
+    if (inspect != null) {
+      lastLauncher = inspect.launcher;
+      if (
+        inspect.launcher.active?.version === expectedVersion &&
+        inspect.launcher.lastSuccessful?.version === expectedVersion
+      ) {
+        expect(inspect.launcher.error).toBeUndefined();
+        return inspect.launcher;
+      }
+    }
+    await delay(750);
+  }
+  throw new Error(`launcher lastSuccessful did not advance to ${expectedVersion}: ${formatUnknown(lastLauncher)}`);
+}
+
+function assertLauncherPointer(
+  pointer: LauncherPointer | null,
+  expectedVersion: string,
+  expectedGeneration: number,
+  label: string,
+): void {
+  expect(pointer, `${label} pointer`).toEqual({
+    generation: expectedGeneration,
+    version: expectedVersion,
+  });
 }
 
 function resolveFallbackUpdateBuildJsonPath(): string | null {
@@ -743,30 +779,6 @@ function restoreUpdateEnv(previous: Partial<Record<(typeof UPDATE_ENV_KEYS)[numb
     if (previous[key] == null) delete process.env[key];
     else process.env[key] = previous[key];
   }
-}
-
-async function waitForInstalledVersion(installDir: string, expectedVersion: string, timeoutMs = 30_000): Promise<void> {
-  const startedAt = Date.now();
-  let lastPackageVersion: unknown = null;
-  let lastConfigVersion: unknown = null;
-  while (Date.now() - startedAt < timeoutMs) {
-    const payloadRoot = await resolveInstalledPayloadRoot(installDir);
-    const installedAppPackage = JSON.parse(
-      await readFile(join(payloadRoot, 'resources', 'app', 'package.json'), 'utf8'),
-    ) as InstalledAppPackage;
-    const installedPackagedConfig = JSON.parse(
-      await readFile(await resolveInstalledPackagedConfigPath(installDir), 'utf8'),
-    ) as { appVersion?: unknown };
-    lastPackageVersion = installedAppPackage.version;
-    lastConfigVersion = installedPackagedConfig.appVersion;
-    if (installedAppPackage.version === expectedVersion && installedPackagedConfig.appVersion === expectedVersion) {
-      return;
-    }
-    await delay(500);
-  }
-  throw new Error(
-    `upgrade install did not settle to ${expectedVersion}; package.json=${formatUnknown(lastPackageVersion)} open-design-config.json=${formatUnknown(lastConfigVersion)}`,
-  );
 }
 
 async function waitForHealthyDesktop(): Promise<WinInspectResult> {
@@ -870,10 +882,6 @@ async function seedPackagedOnboardingComplete(installDir: string): Promise<void>
   const configPath = join(await resolveExpectedDataRoot(installDir), 'app-config.json');
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify({ onboardingCompleted: true }, null, 2)}\n`, 'utf8');
-}
-
-async function resolveExpectedUpdateRoot(installDir: string): Promise<string> {
-  return join(await resolveExpectedNamespaceRoot(installDir), 'updates');
 }
 
 async function resolveExpectedDataRoot(installDir: string): Promise<string> {

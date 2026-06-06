@@ -25,6 +25,7 @@ import {
 } from "@open-design/platform";
 
 import type { ToolPackConfig } from "../config.js";
+import { readToolPackLauncherRuntimeSnapshot } from "../launcher-runtime-snapshot.js";
 import { DESKTOP_LOG_ECHO_ENV } from "./constants.js";
 import { listDirectories, pathExists, removeTree } from "./fs.js";
 import { readBuiltAppManifest } from "./manifest.js";
@@ -440,6 +441,7 @@ export async function inspectPackedWinApp(config: ToolPackConfig, options: { exp
         { timeoutMs: 5000 },
       ),
     }),
+    launcher: await readToolPackLauncherRuntimeSnapshot(config),
     ...(options.path == null ? {} : {
       screenshot: await requestJsonIpc<DesktopScreenshotResult>(
         stamp.ipc,
