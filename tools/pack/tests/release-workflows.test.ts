@@ -16,7 +16,7 @@ function countOccurrences(content: string, needle: string): number {
 
 describe("release workflows", () => {
   it("requires Vela CLI only for beta mac arm64 packaging", async () => {
-    const [beta, betaSelfHosted, preview, stable, buildMac, buildWin, prepareMac, prepareWin, publishPlatform] = await Promise.all([
+    const [beta, betaSelfHosted, preview, stable, buildMac, buildWin, prepareMac, prepareWin, publishPlatform, winLifecycle] = await Promise.all([
       readFile(new URL("../../../.github/workflows/release-beta.yml", import.meta.url), "utf8"),
       readFile(new URL("../../../.github/workflows/release-beta-s.yml", import.meta.url), "utf8"),
       readFile(new URL("../../../.github/workflows/release-preview.yml", import.meta.url), "utf8"),
@@ -26,6 +26,7 @@ describe("release workflows", () => {
       readFile(new URL("../../../.github/workflow/scripts/release/prepare-platform-assets.sh", import.meta.url), "utf8"),
       readFile(new URL("../../../.github/workflow/scripts/release/prepare-platform-assets.ps1", import.meta.url), "utf8"),
       readFile(new URL("../../../.github/workflow/scripts/release/storage/publish-platform.ts", import.meta.url), "utf8"),
+      readFile(new URL("../src/win/lifecycle.ts", import.meta.url), "utf8"),
     ]);
     const mac = sectionBetween(beta, "  build_mac_arm64:", "  build_mac_x64:");
     const macX64 = sectionBetween(beta, "  build_mac_x64:", "  build_win_x64:");
@@ -84,6 +85,9 @@ describe("release workflows", () => {
     expect(buildWin).toContain('Measure-Step "clean tools-pack win namespace"');
     expect(buildWin.indexOf('Measure-Step "clean tools-pack win namespace"')).toBeLessThan(buildWin.indexOf('Measure-Step "tools-pack win build"'));
     expect(buildWin).toContain('"tools-pack", "win", "cleanup"');
+    expect(winLifecycle).toContain("const launcher = resolveToolPackLauncherLayout(config)");
+    expect(winLifecycle).toContain("await removeTree(launcher.paths.namespaceRoot)");
+    expect(winLifecycle).toContain("removedLauncherNamespaceRoot");
     expect(buildWin).toContain('Measure-Step "validate launcher payload artifact"');
     expect(buildWin).toContain('Measure-Step "validate launcher payload update fixture"');
     expect(buildWin).toContain('Test-JsonString $manifest.entry.executable "entry.executable" "payload/Open Design.exe"');

@@ -248,6 +248,7 @@ export type WinUninstallResult = {
 
 export type WinCleanupResult = {
   namespace: string;
+  removedLauncherNamespaceRoot: boolean;
   removedOutputRoot: boolean;
   removedProductUserDataRoot: boolean;
   removedRuntimeNamespaceRoot: boolean;
