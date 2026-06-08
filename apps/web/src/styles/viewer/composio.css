@@ -1896,6 +1896,14 @@
   border: 1px solid rgba(0, 0, 0, 0.12);
   vertical-align: middle;
 }
+/* Plugin detail suppresses the header sidebar toggle on desktop (the
+   preview-edge handle opens the info panel there). Hide it on desktop but
+   expose it again on small screens, where the edge handle is hidden and
+   would otherwise leave the collapsed info panel unreachable. */
+.ds-modal-sidebar-toggle--compact-only {
+  display: none;
+}
+
 @media (max-width: 760px) {
   .ds-modal-backdrop { padding: 0; }
   .ds-modal { border-radius: 0; }
@@ -1913,6 +1921,7 @@
   /* On stacked layout the side handles (which assume horizontal split)
      would float over content awkwardly — fall back to the header toggle. */
   .ds-modal-stage-handle { display: none; }
+  .ds-modal-sidebar-toggle--compact-only { display: inline-flex; }
 }
 
 /* Examples gallery toolbar — filter pills + richer card metadata */

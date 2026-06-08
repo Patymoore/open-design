@@ -553,9 +553,11 @@ export function PreviewModal({
                     : primaryAction.label}
                 </button>
               ) : null}
-              {sidebar && !hideSidebarToggle ? (
+              {sidebar ? (
                 <button
-                  className={`ghost ${sidebarOpen ? 'is-active' : ''}`}
+                  className={`ghost ${sidebarOpen ? 'is-active' : ''}${
+                    hideSidebarToggle ? ' ds-modal-sidebar-toggle--compact-only' : ''
+                  }`}
                   onClick={() => {
                     setSidebarOpen((v) => {
                       const next = !v;
