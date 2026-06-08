@@ -235,7 +235,7 @@ describe('buildTraceObjectManifests', () => {
     expect(manifests?.artifactManifest).toHaveLength(101);
   });
 
-  it('keeps production relay configuration manifest-only without calling worker authorization', async () => {
+  it('leaves production telemetry relay configuration to fallback manifests without reading project files', async () => {
     const projectsRoot = path.join(dataDir, 'projects');
     const projectDir = path.join(projectsRoot, 'proj-1');
     await mkdir(projectDir, { recursive: true });
@@ -255,20 +255,14 @@ describe('buildTraceObjectManifests', () => {
       fetchImpl: fetchSpy as any,
       env: {
         NODE_ENV: 'production',
-        OPEN_DESIGN_OBJECT_RELAY_URL: 'https://telemetry.open-design.ai/api/objects/batch',
+        OPEN_DESIGN_TELEMETRY_RELAY_URL: 'https://telemetry.open-design.ai/api/langfuse',
       },
       now: () => new Date('2026-06-08T00:00:00.000Z'),
     });
 
-    expect(manifests?.completeness).toBe('partial');
-    expect(projectFileReadTracker.calls).toBe(1);
+    expect(manifests).toBeUndefined();
+    expect(projectFileReadTracker.calls).toBe(0);
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(manifests?.artifactManifest?.[0]).toMatchObject({
-      status: 'unavailable',
-      stored_in_open_design: false,
-      reason: 'object_upload_authority_unavailable',
-      size_bytes: 'release artifact'.length,
-    });
   });
 
   it('skips over-limit project files before loading their contents', async () => {

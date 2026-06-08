@@ -440,6 +440,89 @@ describe('langfuse-bridge.reportRunCompletedFromDaemon', () => {
     });
   });
 
+  it('keeps production telemetry relay object uploads disabled while preserving fallback manifests', async () => {
+    await writeAppCfg({
+      installationId: 'install-uuid-1',
+      telemetry: { metrics: true, content: true, artifactManifest: true },
+    });
+    const projectDir = path.join(dataDir, 'projects', 'proj-1');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, 'brief.txt'), 'private attachment body');
+    await writeFile(path.join(projectDir, 'index.html'), '<!doctype html><h1>private artifact</h1>');
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response('{}', { status: 207 }));
+    const priorNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    process.env.OPEN_DESIGN_TELEMETRY_RELAY_URL = 'https://telemetry.open-design.ai/api/langfuse';
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk';
+    process.env.LANGFUSE_SECRET_KEY = 'sk';
+    try {
+      await reportRunCompletedFromDaemon({
+        db: makeDbWithListMessages({
+          'conv-1': [
+            {
+              id: 'user-1',
+              role: 'user',
+              content: 'Use this reference.',
+              attachments: [
+                {
+                  path: 'brief.txt',
+                  name: 'brief.txt',
+                  size: 'private attachment body'.length,
+                },
+              ],
+            },
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Done.',
+              producedFiles: [{ name: 'index.html', kind: 'html', size: 41 }],
+            },
+          ],
+        }),
+        dataDir,
+        run: makeRun({
+          userPrompt: 'Use this reference.',
+          projectAttachmentPaths: ['brief.txt'],
+        }) as any,
+        fetchImpl: fetchSpy as any,
+      });
+    } finally {
+      if (priorNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = priorNodeEnv;
+      }
+      delete process.env.OPEN_DESIGN_TELEMETRY_RELAY_URL;
+      delete process.env.LANGFUSE_PUBLIC_KEY;
+      delete process.env.LANGFUSE_SECRET_KEY;
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toContain('/api/langfuse');
+    expect(fetchSpy.mock.calls[0]![0]).not.toContain('/api/objects/');
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    const langfuseBody = init.body as string;
+    expect(langfuseBody).not.toContain('private attachment body');
+    expect(langfuseBody).not.toContain('<!doctype html><h1>private artifact</h1>');
+    const batch = JSON.parse(langfuseBody).batch as any[];
+    const trace = batch[0].body;
+    expect(trace.metadata.manifest_completeness).toBe('complete');
+    expect(trace.metadata.attachment_manifest[0]).toMatchObject({
+      object_class: 'attachment',
+      status: 'ok',
+      stored_in_open_design: true,
+      size_bytes: 'private attachment body'.length,
+    });
+    expect(trace.metadata.artifact_manifest[0]).toMatchObject({
+      object_class: 'artifact',
+      status: 'ok',
+      stored_in_open_design: true,
+      size_bytes: 41,
+    });
+  });
+
   it('uploads trace objects with worker-issued authority before reporting Langfuse manifests', async () => {
     await writeAppCfg({
       installationId: 'install-uuid-1',

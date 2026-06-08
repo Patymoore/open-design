@@ -633,21 +633,13 @@ export async function buildTraceObjectManifests(
   }
   const config = readRelayConfig(opts.env ?? process.env);
   if (!config) return undefined;
+  if (!config.uploadsEnabled) return undefined;
 
   const now = opts.now ? opts.now() : new Date();
   const sources = await collectSources(opts, config);
   if (sources.length === 0) return undefined;
 
   const manifests = sources.map((source) => manifestBase(source, opts, now));
-
-  if (!config.uploadsEnabled) {
-    return groupManifests(
-      manifests.map((entry) => ({
-        ...entry,
-        reason: entry.reason ?? 'object_upload_authority_unavailable',
-      })),
-    );
-  }
 
   const relayResults = await postObjectBatch(config, opts, manifests, sources);
   const resultByRef = new Map(relayResults.map((result) => [result.storage_ref, result]));
