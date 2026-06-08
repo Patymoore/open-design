@@ -2047,7 +2047,7 @@ export function DesignBrowserPanel({
                 <iframe title={pageTitle} src={loadUrl} />
               </div>
             )}
-            {!isBlank ? (
+            {!isBlank && desktopHostAvailable ? (
               <BrowserCommentMarkers
                 comments={visibleComments}
                 liveTargets={browserLiveCommentTargets}

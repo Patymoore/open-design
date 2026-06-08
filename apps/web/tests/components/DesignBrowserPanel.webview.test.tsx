@@ -334,6 +334,42 @@ describe('DesignBrowserPanel <webview> navigation', () => {
     expect(screen.queryByText('Embedded browser controls are available in the desktop app.')).toBeNull();
   });
 
+  it('does not render saved comment markers in the browser fallback iframe', () => {
+    restoreHost?.();
+    restoreHost = null;
+
+    const previewComments = [{
+      id: 'comment-fallback-1',
+      projectId: 'proj-browser-fallback-comments',
+      conversationId: 'conv-1',
+      filePath: 'browser:https://example.com',
+      elementId: 'dom:#card',
+      selector: '#card',
+      label: 'article.card',
+      note: 'Review this card',
+      text: 'Card',
+      position: { x: 24, y: 32, width: 240, height: 160 },
+      htmlHint: '<article id="card">',
+      status: 'open' as const,
+      createdAt: 1,
+      updatedAt: 1,
+    }];
+
+    const { container } = render(
+      <DesignBrowserPanel
+        initialUrl="https://example.com"
+        projectId="proj-browser-fallback-comments"
+        previewComments={previewComments}
+        onOpenFile={() => {}}
+        onRefreshFiles={() => {}}
+      />,
+    );
+
+    expect(container.querySelector('iframe')).not.toBeNull();
+    expect(container.querySelector('.db-comment-layer')).toBeNull();
+    expect(container.querySelector('.db-comment-marker')).toBeNull();
+  });
+
   it('reuses the artifact mark label and icon for page annotation', () => {
     const { container } = render(
       <I18nProvider initial="zh-CN">
