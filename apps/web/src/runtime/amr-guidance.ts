@@ -19,6 +19,12 @@ export function amrConsoleUrlForProfile(profile: string | null | undefined): str
   return AMR_CONSOLE_URL_BY_PROFILE[normalized] ?? AMR_CONSOLE_URL;
 }
 
+export function amrProfileBadgeLabel(profile: string | null | undefined): string | null {
+  if (profile === 'test') return 'TEST';
+  if (profile === 'local') return 'LOCAL';
+  return null;
+}
+
 // Codes that mean a non-AMR agent hit "the model service rejected or could not
 // serve the run" — auth missing/invalid, quota/rate exhausted, or the upstream
 // model endpoint was unavailable. These are the failures worth promoting AMR

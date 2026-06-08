@@ -20,7 +20,7 @@ import {
   amrLoginStatusEventReason,
   notifyAmrLoginStatusChanged,
 } from './amrLoginPolling';
-import { amrConsoleUrlForProfile } from '../runtime/amr-guidance';
+import { amrConsoleUrlForProfile, amrProfileBadgeLabel } from '../runtime/amr-guidance';
 
 interface AmrLoginPillProps {
   className?: string;
@@ -84,12 +84,6 @@ function closeAmrActivationWindowBestEffort(): boolean {
   }
 }
 
-function profileBadgeLabel(profile: string | undefined): string | null {
-  if (profile === 'test') return 'TEST';
-  if (profile === 'local') return 'LOCAL';
-  return null;
-}
-
 function classNames(...names: Array<string | false | null | undefined>): string {
   return names.filter(Boolean).join(' ');
 }
@@ -121,7 +115,7 @@ export function AmrAccountControl({
   const isSigningIn = status === 'signing-in';
   const isCanceled = status === 'canceled';
   const hasError = status === 'error';
-  const badgeLabel = showProfileBadge ? profileBadgeLabel(profile) : null;
+  const badgeLabel = showProfileBadge ? amrProfileBadgeLabel(profile) : null;
   const visibleBadgeLabel = isSignedIn ? badgeLabel : null;
   const resolvedConsoleUrl = consoleUrl ?? amrConsoleUrlForProfile(profile);
   const loginErrorText = errorMessage || t('settings.amrLoginErrorCompact');

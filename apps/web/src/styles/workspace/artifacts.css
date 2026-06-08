@@ -1329,6 +1329,10 @@
 }
 .agent-card-meta .muted { color: var(--text-soft); font-style: italic; }
 .agent-card-amr-email {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
   margin-top: 4px;
   color: var(--text-muted);
   font-size: 11px;
@@ -1339,10 +1343,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.agent-card-amr-email span {
+.agent-card-amr-email-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.agent-card-amr-profile-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 999px;
+  color: var(--accent-strong);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 .agent-card-model-summary {
   display: flex;

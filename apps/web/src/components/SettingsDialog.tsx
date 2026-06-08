@@ -40,6 +40,7 @@ import {
   fetchVelaLoginStatus,
   type VelaLoginStatus,
 } from '../providers/daemon';
+import { amrProfileBadgeLabel } from '../runtime/amr-guidance';
 import { ExportDiagnosticsRow } from './ExportDiagnosticsButton';
 import { Icon } from './Icon';
 import {
@@ -3371,6 +3372,10 @@ export function SettingsDialog({
                             isAmrAgent && active && amrCardStatus?.loggedIn
                               ? amrCardStatus.user?.email || t('settings.amrSignedIn')
                               : '';
+                          const amrCardProfileBadge =
+                            isAmrAgent && active && amrCardStatus?.loggedIn
+                              ? amrProfileBadgeLabel(amrCardStatus.profile)
+                              : null;
                           const amrRevealPendingCancelAction =
                             isAmrAgent &&
                             active &&
@@ -3466,9 +3471,14 @@ export function SettingsDialog({
                                       ) : null}
                                       {amrCardEmail ? (
                                         <div className="agent-card-amr-email">
-                                          <span title={amrCardEmail}>
+                                          <span className="agent-card-amr-email-text" title={amrCardEmail}>
                                             {amrCardEmail}
                                           </span>
+                                          {amrCardProfileBadge ? (
+                                            <span className="agent-card-amr-profile-badge">
+                                              {amrCardProfileBadge}
+                                            </span>
+                                          ) : null}
                                         </div>
                                       ) : null}
                                       {!active && modelSummary ? (
