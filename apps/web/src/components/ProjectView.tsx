@@ -2508,7 +2508,11 @@ export function ProjectView({
         }
         updateMessageById(
           message.id,
-          (prev) => ({ ...prev, runStatus: status.status }),
+          (prev) => ({
+            ...prev,
+            runStatus: status.status,
+            ...(status.resumable !== undefined ? { resumable: status.resumable } : {}),
+          }),
           true,
         );
 
@@ -3743,6 +3747,25 @@ export function ProjectView({
     (assistantMessage: ChatMessage) => {
       if (currentConversationActionDisabled) return;
       void handleSend('', [], [], { retryOfAssistantId: assistantMessage.id });
+    },
+    [currentConversationActionDisabled, handleSend],
+  );
+
+  // "Continue" on a resumable failed run: send a fresh turn in the same
+  // conversation. For a session-resuming runtime (Claude) the daemon persisted
+  // the failed run's CLI session, so this turn resumes it (`--resume`) and the
+  // agent continues from its committed work instead of restarting. Mirrors the
+  // "Continue remaining tasks" affordance; unlike Retry it does not replay the
+  // prior turn from scratch.
+  const handleResumeRun = useCallback(
+    (_assistantMessage: ChatMessage) => {
+      if (currentConversationActionDisabled) return;
+      const prompt =
+        'The previous turn was interrupted by a transient failure. ' +
+        'Continue from where you left off — keep the work already done and ' +
+        'finish the original request. Inspect the current project files as ' +
+        'needed before making further changes.';
+      void handleSend(prompt, [], []);
     },
     [currentConversationActionDisabled, handleSend],
   );
@@ -5360,6 +5383,7 @@ export function ProjectView({
               onDeleteComment={(commentId) => void removePreviewComment(commentId)}
               onSend={handleSend}
               onRetry={handleRetry}
+              onResumeRun={handleResumeRun}
               onStop={handleStop}
               onRemoveQueuedSend={removeQueuedChatSend}
               onUpdateQueuedSend={updateQueuedChatSend}

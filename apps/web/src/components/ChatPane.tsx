@@ -450,6 +450,7 @@ interface Props {
     meta?: ChatSendMeta,
   ) => void;
   onRetry?: (assistantMessage: ChatMessage) => void;
+  onResumeRun?: (assistantMessage: ChatMessage) => void;
   onStop: () => void;
   // Skills available for @-mention assembly. ProjectView filters out the
   // user's disabled set before passing them in here.
@@ -659,6 +660,7 @@ export function ChatPane({
   onDeleteComment,
   onSend,
   onRetry,
+  onResumeRun,
   onStop,
   onRemoveQueuedSend,
   onUpdateQueuedSend,
@@ -2047,7 +2049,19 @@ export function ChatPane({
                               {t('chat.amrError.rechargeCta')}
                             </button>
                           ) : null}
-                          {runFailureUi.primaryAction === 'retry' || runFailureUi.secondaryRetry ? (
+                          {retryAssistant?.resumable && onResumeRun ? (
+                            // Resumable failure: continue the agent's existing
+                            // CLI session instead of restarting from scratch, so
+                            // partial work is kept. Replaces the from-scratch
+                            // Retry as the single primary recovery action.
+                            <button
+                              type="button"
+                              className="ghost chat-error-retry"
+                              onClick={() => onResumeRun(retryAssistant)}
+                            >
+                              {t('chat.resumeRunCta')}
+                            </button>
+                          ) : runFailureUi.primaryAction === 'retry' || runFailureUi.secondaryRetry ? (
                             <button
                               type="button"
                               className="ghost chat-error-retry"

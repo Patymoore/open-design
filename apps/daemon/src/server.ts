@@ -233,7 +233,7 @@ import { renderDesignSystemPreview } from './design-system-preview.js';
 import { renderDesignSystemShowcase } from './design-system-showcase.js';
 import { createChatRunService } from './runs.js';
 import { deriveRunErrorCode, runResultFromStatus } from './run-result.js';
-import { classifyRunFailure } from './run-failure-classification.js';
+import { classifyRunFailure, isResumableFailure } from './run-failure-classification.js';
 import { decideSafeRunRetry } from './run-retry-policy.js';
 import {
   hasExplicitRequestedModelForAnalytics,
@@ -11818,14 +11818,15 @@ export async function startServer({
         agentId: run.agentId,
         events: run.events,
       });
+      const sideEffects = {
+        ...scanRunEventsForRetrySideEffects(run.events),
+        cancelRequested: !!run.cancelRequested,
+      };
       const decision = decideSafeRunRetry({
         result,
         failure,
         attemptCount: run.retryAttemptCount ?? 0,
-        sideEffects: {
-          ...scanRunEventsForRetrySideEffects(run.events),
-          cancelRequested: !!run.cancelRequested,
-        },
+        sideEffects,
       });
       if (decision.shouldRetry && !design.runs.isTerminal(run.status)) {
         run.retryAttemptCount = decision.retryAttemptIndex;
@@ -11837,6 +11838,44 @@ export async function startServer({
         });
         restartSameRunAfterRetry();
         return true;
+      }
+      // Resume-on-failure: a terminal *resumable* failure (transient mid-stream
+      // drop / inactivity) on a session-resuming runtime is not a dead end.
+      // Persist the live CLI session so the next turn in this conversation
+      // continues it (`--resume <id>`) instead of opening a fresh session, and
+      // flag the run so the chat can surface a Continue affordance. The session
+      // id is the one we actually drove this attempt with: the resumed id when
+      // continuing, otherwise the freshly minted id we passed via --session-id.
+      //
+      // Gate on actual committed/streamed work this attempt: a single-turn
+      // disconnect that produced nothing has no session content to continue, so
+      // it stays a from-scratch restart (handled by the auto-retry above or a
+      // manual Retry). Resume only when there is a committed boundary to pick
+      // up — the same side-effect signal that suppresses a blind retry.
+      const committedWorkSeen = !!(
+        sideEffects.userVisibleOutputSeen ||
+        sideEffects.toolCallSeen ||
+        sideEffects.artifactWriteSeen ||
+        sideEffects.liveArtifactSeen
+      );
+      const liveSessionId = agentResumeCtx.isResuming
+        ? agentResumeCtx.resumeSessionId
+        : agentResumeCtx.newSessionId;
+      const resumableFailure =
+        result === 'failed' &&
+        def.resumesSessionViaCli === true &&
+        !!run.conversationId &&
+        !!liveSessionId &&
+        committedWorkSeen &&
+        isResumableFailure(failure);
+      run.resumable = resumableFailure;
+      if (resumableFailure) {
+        upsertAgentSession(db, {
+          conversationId: run.conversationId,
+          agentId: def.id,
+          sessionId: liveSessionId,
+          stablePromptHash: currentStableHash,
+        });
       }
       finalizeRetryTelemetry(status, decision, failure, errorCode);
       design.runs.finish(run, status, code, signal);

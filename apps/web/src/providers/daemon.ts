@@ -877,6 +877,11 @@ async function consumeDaemonRun({
   // failure response with `{code:1}` or `{code:null,signal:"SIGTERM"}` and
   // no `status` field still surfaces an error banner.
   let serverDeclaredSuccess = false;
+  // Set when the daemon reports this terminal failure can be recovered by
+  // resuming the agent's CLI session (transient upstream drop / inactivity on
+  // a session-resuming runtime). Carried onto the surfaced error so the chat
+  // can offer a Continue affordance. See ChatRunStatusResponse.resumable.
+  let endResumable = false;
   let lastEventId: string | null = initialLastEventId ?? null;
   let canceled = false;
   const cancelRun = () => {
@@ -990,13 +995,21 @@ async function consumeDaemonRun({
           if (event.event === 'error') {
             onRunStatus?.('failed');
             const data = event.data as SseErrorPayload;
-            handlers.onError(daemonSseError(data));
+            // The explicit error frame precedes the `end` frame (and we return
+            // here), so the resumable flag — computed by the daemon only at run
+            // finalize — is not on this payload. Read it from the authoritative
+            // run-status record before surfacing the error.
+            const failedStatus = await fetchChatRunStatus(runId).catch(() => null);
+            handlers.onError(
+              markErrorResumable(daemonSseError(data), failedStatus?.resumable === true),
+            );
             return;
           }
 
           if (event.event === 'end') {
             exitCode = typeof event.data.code === 'number' ? event.data.code : null;
             exitSignal = typeof event.data.signal === 'string' ? event.data.signal : null;
+            if (event.data.resumable === true) endResumable = true;
             // `serverDeclaredSuccess` records whether the server explicitly
             // set `status: 'succeeded'` in the end payload — the local
             // `'succeeded'` fallback below does not count and must keep
@@ -1021,6 +1034,7 @@ async function consumeDaemonRun({
         // explicit `'succeeded'` here is just as authoritative as the SSE
         // end-event success.
         serverDeclaredSuccess = status.status === 'succeeded';
+        if (status.resumable === true) endResumable = true;
         onRunStatus?.(endStatus);
       } else {
         onRunStatus?.('failed');
@@ -1062,7 +1076,10 @@ async function consumeDaemonRun({
       const fallbackTail =
         tail || (isAmrOpenCodeExitFallback(agentId, stderrBuf) ? AMR_OPENCODE_INCOMPLETE_MESSAGE : '');
       handlers.onError(
-        new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}${fallbackTail ? `\n${fallbackTail}` : ''}`),
+        markErrorResumable(
+          new Error(`agent exited with ${exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`}${fallbackTail ? `\n${fallbackTail}` : ''}`),
+          endResumable,
+        ),
       );
       return;
     }
@@ -1079,6 +1096,14 @@ async function consumeDaemonRun({
 
 function isChatRunStatus(value: unknown): value is ChatRunStatus {
   return value === 'queued' || value === 'running' || value === 'succeeded' || value === 'failed' || value === 'canceled';
+}
+
+/** Tag an error surfaced to the chat with whether the failed run can be
+ *  resumed (continued from its existing CLI session). Only stamps the property
+ *  when true so non-resumable failures stay undefined. */
+function markErrorResumable(err: Error, resumable: boolean): Error {
+  if (resumable) (err as Error & { resumable?: boolean }).resumable = true;
+  return err;
 }
 
 function normalizeToolInput(input: unknown): unknown {
