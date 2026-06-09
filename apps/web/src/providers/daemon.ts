@@ -993,16 +993,30 @@ async function consumeDaemonRun({
           }
 
           if (event.event === 'error') {
-            onRunStatus?.('failed');
             const data = event.data as SseErrorPayload;
-            // The error frame is emitted from the daemon's child-close handler
-            // BEFORE `finishWithRetryDecision()` computes and persists
-            // `run.resumable`, and we return here without reading the later
-            // `end` frame (which would carry it). A single status fetch could
-            // therefore race the finalizer and read a not-yet-set `resumable`
-            // on the exact transient failures this feature targets. Poll the
-            // run status until it is terminal so we read the FINALIZED bit.
+            // The daemon emits this error frame from the child-close handler
+            // BEFORE `finishWithRetryDecision()` runs, so a transient failure it
+            // can recover via a same-run retry is reported here first and only
+            // resolved (success or terminal failure) later. It also computes
+            // `run.resumable` at that same finalize step. So poll until the run
+            // is terminal before deciding what to surface:
+            //  - succeeded (auto-recovered by retry) or still running (a slow
+            //    retry in flight) -> do NOT surface this error; keep consuming
+            //    the stream so the retried run's deltas + `end` frame resolve it
+            //    (dropping the run here would turn a recovered run into a
+            //    visible failure and lose the later successful stream);
+            //  - failed / canceled -> surface the error, now with the finalized
+            //    `resumable` bit so the Continue affordance is correct.
             const terminal = await pollRunStatusUntilTerminal(runId);
+            if (terminal?.status === 'succeeded') {
+              // Definitively auto-recovered by a same-run retry — drop the
+              // transient error and keep consuming so the retried stream's
+              // `end` frame resolves the run as a success.
+              continue;
+            }
+            // Failed / canceled / unknown (status unreachable): surface the
+            // error — with the finalized `resumable` bit when we have it.
+            onRunStatus?.('failed');
             handlers.onError(
               markErrorResumable(daemonSseError(data), terminal?.resumable === true),
             );
@@ -1119,13 +1133,12 @@ async function pollRunStatusUntilTerminal(
   timeoutMs = 4000,
 ): Promise<ChatRunStatusResponse | null> {
   const startedAt = Date.now();
-  let last: ChatRunStatusResponse | null = null;
   for (;;) {
-    last = await fetchChatRunStatus(runId).catch(() => null);
-    if (
-      last &&
-      (last.status === 'failed' || last.status === 'canceled' || last.status === 'succeeded')
-    ) {
+    const last = await fetchChatRunStatus(runId).catch(() => null);
+    // Status unreachable: don't spin — let the caller fall back to surfacing
+    // the error (the safe default), rather than dropping a real failure.
+    if (!last) return null;
+    if (last.status === 'failed' || last.status === 'canceled' || last.status === 'succeeded') {
       return last;
     }
     if (Date.now() - startedAt >= timeoutMs) return last;
