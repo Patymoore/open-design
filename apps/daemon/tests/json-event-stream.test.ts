@@ -485,6 +485,50 @@ test('gemini stream emits prose immediately after file write when no artifact fo
   ]);
 });
 
+test('gemini stream flushes trailing partial artifact opener as prose', () => {
+  const { events, handler } = collectEvents('gemini');
+
+  handler.feed(
+    JSON.stringify({
+      type: 'tool_use',
+      tool_name: 'write_file',
+      tool_id: 'write_file__1',
+      parameters: {
+        file_path: 'index.html',
+        content: '<!doctype html><html></html>',
+      },
+    }) +
+    '\n' +
+    JSON.stringify({
+      type: 'message',
+      role: 'assistant',
+      content: 'Done <art',
+    }) +
+    '\n',
+  );
+  handler.flush();
+
+  assert.deepEqual(events, [
+    {
+      type: 'tool_use',
+      id: 'write_file__1',
+      name: 'write_file',
+      input: {
+        file_path: 'index.html',
+        content: '<!doctype html><html></html>',
+      },
+    },
+    {
+      type: 'text_delta',
+      delta: 'Done ',
+    },
+    {
+      type: 'text_delta',
+      delta: '<art',
+    },
+  ]);
+});
+
 test('gemini stream preserves later artifact text after suppressing immediate file-write echo', () => {
   const { events, handler } = collectEvents('gemini');
 

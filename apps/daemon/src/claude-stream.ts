@@ -528,8 +528,8 @@ export function createClaudeStreamHandler(onEvent: EventSink) {
   }
 
   function flushPendingArtifactText() {
-    if (!pendingArtifactText) return;
-    const text = pendingArtifactText;
+    const text = `${pendingArtifactText}${artifactOpenCandidate}`;
+    if (!text) return;
     pendingArtifactText = '';
     artifactOpenCandidate = '';
     suppressNextArtifactText = false;

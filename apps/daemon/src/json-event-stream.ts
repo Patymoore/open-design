@@ -455,8 +455,8 @@ function artifactOpenCandidateLength(text: string, openTag: string): number {
 }
 
 function flushPendingArtifactText(state: ParserState, onEvent: StreamEventHandler): void {
-  if (!state.pendingArtifactText) return;
-  const delta = state.pendingArtifactText;
+  const delta = `${state.pendingArtifactText}${state.artifactOpenCandidate}`;
+  if (!delta) return;
   state.pendingArtifactText = '';
   state.artifactOpenCandidate = '';
   state.suppressNextArtifactText = false;
