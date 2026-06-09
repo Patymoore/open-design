@@ -3308,6 +3308,13 @@ export function ProjectView({
           }));
         },
         onDone: (fullText = '') => {
+          const isCurrentRun =
+            abortRef.current === controller && cancelRef.current === cancelController;
+          if (!isCurrentRun) {
+            textBuffer.cancel();
+            cancelSendTextBuffer();
+            return;
+          }
           textBuffer.flush();
           textBuffer.cancel();
           cancelSendTextBuffer();

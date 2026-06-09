@@ -22,6 +22,7 @@ const fetchProjectFiles = vi.fn();
 const fetchLiveArtifacts = vi.fn();
 const fetchSkill = vi.fn();
 const fetchDesignSystem = vi.fn();
+const patchPreviewCommentStatus = vi.fn();
 const getTemplate = vi.fn();
 const fetchChatRunStatus = vi.fn();
 const listActiveChatRuns = vi.fn();
@@ -79,7 +80,7 @@ vi.mock('../../src/providers/registry', () => ({
   fetchLiveArtifacts: (...args: unknown[]) => fetchLiveArtifacts(...args),
   fetchProjectFiles: (...args: unknown[]) => fetchProjectFiles(...args),
   fetchSkill: (...args: unknown[]) => fetchSkill(...args),
-  patchPreviewCommentStatus: vi.fn(),
+  patchPreviewCommentStatus: (...args: unknown[]) => patchPreviewCommentStatus(...args),
   upsertPreviewComment: vi.fn(),
   writeProjectTextFile: vi.fn(),
 }));
@@ -868,7 +869,7 @@ describe('ProjectView conversation run isolation', () => {
     expect(payload.history?.at(-1)).toMatchObject({ role: 'user', content: 'hello from c' });
   });
 
-  it('keeps the replacement run active when the interrupted run reports canceled and done late', async () => {
+  it('ignores completion side effects when the interrupted run reports canceled and done late', async () => {
     const queuedSend = {
       id: 'queued-1',
       conversationId: 'conv-a',
@@ -883,6 +884,7 @@ describe('ProjectView conversation run isolation', () => {
     );
 
     conversationAMessages = [];
+    fetchPreviewComments.mockResolvedValue([previewComment]);
     const daemonRuns: Array<{
       handlers: { onDone: (fullText?: string) => void };
       onRunCreated?: (runId: string) => void;
@@ -908,6 +910,9 @@ describe('ProjectView conversation run isolation', () => {
     await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
     await waitFor(() => expect(screen.getByTestId('send-message')).toHaveProperty('disabled', false));
 
+    fireEvent.click(screen.getByTestId('attach-first-comment'));
+    await waitFor(() => expect(screen.getByTestId('attached-comment-count').textContent).toBe('1'));
+
     fireEvent.click(screen.getByTestId('send-message'));
 
     await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(1));
@@ -920,15 +925,33 @@ describe('ProjectView conversation run isolation', () => {
     await waitFor(() =>
       expect(screen.getByTestId('conversation-latest-runs').textContent).toContain('conv-a:running'),
     );
+    await waitFor(() =>
+      expect(patchPreviewCommentStatus).toHaveBeenCalledWith(
+        'project-1',
+        'conv-a',
+        previewComment.id,
+        'applying',
+      ),
+    );
+    patchPreviewCommentStatus.mockClear();
+    fetchProjectFiles.mockClear();
 
     await act(async () => {
       daemonRuns[0]?.onRunStatus?.('canceled');
       daemonRuns[0]?.handlers.onDone('interrupted done');
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
 
     await waitFor(() => expect(screen.getByTestId('streaming-state').textContent).toBe('streaming'));
     expect(screen.getByTestId('workspace-streaming-state').textContent).toBe('streaming');
     expect(screen.getByTestId('conversation-latest-runs').textContent).toContain('conv-a:running');
+    expect(patchPreviewCommentStatus).not.toHaveBeenCalledWith(
+      'project-1',
+      'conv-a',
+      previewComment.id,
+      'needs_review',
+    );
+    expect(fetchProjectFiles).not.toHaveBeenCalled();
     expect(streamViaDaemon).toHaveBeenLastCalledWith(expect.objectContaining({
       conversationId: 'conv-a',
       history: expect.arrayContaining([
