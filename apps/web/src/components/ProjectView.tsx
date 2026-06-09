@@ -855,6 +855,12 @@ export function ProjectView({
   // attach the runId to.
   const [messagesInitialized, setMessagesInitialized] = useState(false);
   const [previewComments, setPreviewComments] = useState<PreviewComment[]>([]);
+  // Mirror so the send-now interrupt path can read the current statuses
+  // synchronously without re-creating its callback on every comment change.
+  const previewCommentsRef = useRef<PreviewComment[]>([]);
+  useEffect(() => {
+    previewCommentsRef.current = previewComments;
+  }, [previewComments]);
   const [attachedComments, setAttachedComments] = useState<PreviewComment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null);
@@ -3800,6 +3806,25 @@ export function ProjectView({
       for (const controller of reattachControllersRef.current.values()) {
         supersededRunsRef.current.add(controller);
       }
+      // The interrupted turn moved its preview-comment attachments to
+      // 'applying' when it started; since we now suppress its terminal
+      // callbacks, reset them to 'open' here so they don't stay stuck as
+      // "applying" after the replacement send takes over.
+      const stuckApplying = previewCommentsRef.current.filter(
+        (comment) => comment.status === 'applying',
+      );
+      if (stuckApplying.length > 0) {
+        setPreviewComments((current) =>
+          current.map((comment) =>
+            comment.status === 'applying' ? { ...comment, status: 'open' } : comment,
+          ),
+        );
+        void Promise.all(
+          stuckApplying.map((comment) =>
+            patchPreviewCommentStatus(project.id, comment.conversationId, comment.id, 'open'),
+          ),
+        ).catch(() => {});
+      }
       prioritizeQueuedChatSend(id);
       handleStop();
       return;
@@ -3814,7 +3839,7 @@ export function ProjectView({
       );
       if (started) removeQueuedChatSend(id);
     })();
-  }, [armSlideNavForQueuedSend, currentConversationBusy, handleSend, handleStop, prioritizeQueuedChatSend, removeQueuedChatSend]);
+  }, [armSlideNavForQueuedSend, currentConversationBusy, handleSend, handleStop, prioritizeQueuedChatSend, project.id, removeQueuedChatSend]);
 
   useEffect(() => {
     if (currentConversationBusy) {

@@ -1151,6 +1151,53 @@ describe('ProjectView conversation run isolation', () => {
     expect(fetchProjectFiles).not.toHaveBeenCalled();
   });
 
+  it('clears stuck applying comment status when send-now interrupts a comment-bearing turn', async () => {
+    fetchPreviewComments.mockResolvedValue([previewComment]);
+    streamViaDaemon.mockImplementation(async (input: unknown) => {
+      const options = input as {
+        onRunCreated?: (runId: string) => void;
+        onRunStatus?: (status: NonNullable<ChatMessage['runStatus']>) => void;
+      };
+      options.onRunCreated?.('run-replacement');
+      options.onRunStatus?.('running');
+    });
+
+    renderProjectView();
+
+    await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
+    await waitFor(() => expect(screen.getByTestId('streaming-state').textContent).toBe('streaming'));
+
+    // Attach a comment and send while busy: the turn is queued and its comment
+    // attachment is moved to 'applying'.
+    fireEvent.click(screen.getByTestId('attach-first-comment'));
+    await waitFor(() => expect(screen.getByTestId('attached-comment-count').textContent).toBe('1'));
+    fireEvent.click(screen.getByTestId('send-message'));
+    await waitFor(() =>
+      expect(patchPreviewCommentStatus).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        previewComment.id,
+        'applying',
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId('send-queued-0')).toBeTruthy());
+
+    patchPreviewCommentStatus.mockClear();
+
+    // Send-now interrupts the in-flight turn; the stuck 'applying' comment must
+    // be reset to 'open' rather than left mid-apply forever.
+    fireEvent.click(screen.getByTestId('send-queued-0'));
+
+    await waitFor(() =>
+      expect(patchPreviewCommentStatus).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        previewComment.id,
+        'open',
+      ),
+    );
+  });
+
   it('auto-starts queued sends one at a time after the active run completes', async () => {
     let finishReattach: (() => void) | null = null;
     let reattachHandlers: { onDone: () => void } | null = null;
