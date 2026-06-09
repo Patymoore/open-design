@@ -27,6 +27,7 @@ import {
 import type { ToolPackConfig } from "../config.js";
 import { resolveToolPackLauncherLayout } from "../launcher-layout.js";
 import { readToolPackLauncherRuntimeSnapshot } from "../launcher-runtime-snapshot.js";
+import { readToolPackUpdateCacheLifecycleSnapshot } from "../update-cache-lifecycle-snapshot.js";
 import { DESKTOP_LOG_ECHO_ENV } from "./constants.js";
 import { listDirectories, pathExists, removeTree } from "./fs.js";
 import { readBuiltAppManifest } from "./manifest.js";
@@ -457,6 +458,8 @@ export async function inspectPackedWinApp(config: ToolPackConfig, options: { exp
   const stamp = desktopStamp(config);
   const status = await requestJsonIpc<DesktopStatusSnapshot>(stamp.ipc, { type: SIDECAR_MESSAGES.STATUS }, { timeoutMs: 2000 }).catch(() => null);
   const updateAction = resolveUpdateAction(options.updateAction);
+  const launcher = await readToolPackLauncherRuntimeSnapshot(config);
+  const updateCache = await readToolPackUpdateCacheLifecycleSnapshot(config);
   return {
     ...(options.expr == null ? {} : {
       eval: await requestJsonIpc<DesktopEvalResult>(
@@ -465,7 +468,18 @@ export async function inspectPackedWinApp(config: ToolPackConfig, options: { exp
         { timeoutMs: 5000 },
       ),
     }),
-    launcher: await readToolPackLauncherRuntimeSnapshot(config),
+    launcher,
+    launcherSource: {
+      kind: "tools-pack-runtime",
+      note: "launcher snapshot is read from the tools-pack runtime root; user-installed launcher state is reported by the running desktop status and its AppData paths",
+      root: launcher.root,
+    },
+    updateCache,
+    updateCacheSource: {
+      kind: "tools-pack-runtime",
+      note: "update cache snapshot is read from the tools-pack runtime root; user-installed update cache is reported by status.update.paths",
+      root: updateCache.updateRoot,
+    },
     ...(options.path == null ? {} : {
       screenshot: await requestJsonIpc<DesktopScreenshotResult>(
         stamp.ipc,

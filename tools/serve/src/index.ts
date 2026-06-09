@@ -4,6 +4,7 @@ import { startReleaseStorageFixtureServer } from "./release-storage-fixture.js";
 import { startUpdaterFixtureServer } from "./updater-fixture.js";
 
 type CliOptions = {
+  artifactPath?: string;
   channel?: "stable" | "beta" | "nightly" | "preview";
   host?: string;
   json?: boolean;
@@ -55,6 +56,7 @@ async function start(service: string, options: CliOptions): Promise<void> {
 
   if (service !== "updater") throw new Error(`unsupported tools-serve service: ${service}`);
   const server = await startUpdaterFixtureServer({
+    artifactPath: options.artifactPath,
     channel: options.channel,
     host: options.host,
     platform: parsePlatform(options.platform),
@@ -89,6 +91,7 @@ const cli = cac("tools-serve");
 
 cli
   .command("start <service>", "Start a local fixture service")
+  .option("--artifact-path <path>", "Serve a local update artifact file")
   .option("--channel <channel>", "Updater channel: stable|beta|nightly|preview", { default: "stable" })
   .option("--host <host>", "Host to bind", { default: "127.0.0.1" })
   .option("--json", "Print JSON")
