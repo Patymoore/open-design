@@ -1312,11 +1312,7 @@ export function upsertMessage(db: SqliteDb, conversationId: string, m: DbRow) {
 export function getMessageTelemetryFinalizationState(db: SqliteDb, messageId: string) {
   const row = db
     .prepare(
-      `SELECT telemetry_finalized_at AS telemetryFinalizedAt,
-              content,
-              attachments_json AS attachmentsJson,
-              comment_attachments_json AS commentAttachmentsJson,
-              produced_files_json AS producedFilesJson
+      `SELECT telemetry_finalized_at AS telemetryFinalizedAt
          FROM messages
         WHERE id = ?`,
     )
@@ -1325,19 +1321,12 @@ export function getMessageTelemetryFinalizationState(db: SqliteDb, messageId: st
     return {
       exists: false,
       finalizedAt: null,
-      hasBufferedPayload: false,
     };
   }
-  const hasBufferedPayload =
-    (typeof row.content === 'string' && row.content.trim().length > 0)
-    || jsonArrayHasItems(row.attachmentsJson)
-    || jsonArrayHasItems(row.commentAttachmentsJson)
-    || jsonArrayHasItems(row.producedFilesJson);
   return {
     exists: true,
     finalizedAt:
       typeof row.telemetryFinalizedAt === 'number' ? row.telemetryFinalizedAt : null,
-    hasBufferedPayload,
   };
 }
 
@@ -1711,11 +1700,6 @@ function parseJsonOrUndef(s: unknown): any {
   } catch {
     return undefined;
   }
-}
-
-function jsonArrayHasItems(s: unknown): boolean {
-  const parsed = parseJsonOrUndef(s);
-  return Array.isArray(parsed) && parsed.length > 0;
 }
 
 // ---------- routines ----------
