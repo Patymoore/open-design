@@ -370,6 +370,7 @@ export type DesktopRuntimeOptions = {
    */
   rendererLogPath?: string | null;
   requestQuit?: () => void;
+  showMainWindowImmediately?: boolean;
   /**
    * Optional pre-created splash window. The packaged entry creates the splash
    * BEFORE awaiting the daemon/web sidecars so the brand animation is on screen
@@ -1513,7 +1514,7 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     // app loads in here. We reveal this window only once the app has actually
     // mounted (see `revealWhenReady` below), so there is never a flash of the
     // web's own "Loading Open Design…" shell.
-    show: false,
+    show: options.showMainWindowImmediately === true,
     title: "Open Design",
     autoHideMenuBar: true,
     ...MAC_WINDOW_CHROME,

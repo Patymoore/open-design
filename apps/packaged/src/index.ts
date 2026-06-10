@@ -157,6 +157,7 @@ async function main(): Promise<void> {
   await runDesktopMain(runtime, {
     splashWindow: splash.window,
     splashStartedAt: splash.startedAt,
+    showMainWindowImmediately: process.platform === "win32",
     async beforeShutdown() {
       try {
         await sidecars.close();
