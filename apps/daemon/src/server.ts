@@ -13555,7 +13555,7 @@ export async function startServer({
       }
       if (agentStreamError) {
         markRpcCloseReason('stream_error');
-        return finishWithRetryDecision('failed', code ?? 1, signal ?? null);
+        return finishWithRetryDecision('failed', code === 0 ? 1 : (code ?? 1), signal ?? null);
       }
       if (
         code !== 0 &&
