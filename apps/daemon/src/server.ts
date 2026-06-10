@@ -26,6 +26,7 @@ import {
   shouldRenderCodexImagegenOverride,
 } from './prompts/system.js';
 import { expandHomePrefix, resolveProjectRelativePath } from './home-expansion.js';
+import { emittedRenderableQuestionForm } from './question-form-detect.js';
 import { resolveProjectRoot } from './project-root.js';
 import {
   applyBakedPreviews,
@@ -2609,77 +2610,10 @@ async function hasGeneratedPluginArtifacts(projectRoot) {
   }
 }
 
-// Canonical open tag is `<question-form>`; `<ask-question>` is an accepted
-// alias models drift to. Mirrors the open-tag set in the web parser.
-const QUESTION_FORM_OPEN_RE = /<(question-form|ask-question)\b[^>]*>/i;
-
-// True when `body` is a renderable question-form body: JSON (optionally
-// fenced) parsing to an object with a non-empty `questions` array. This is
-// the minimal contract `tryParseForm` enforces in
-// `apps/web/src/artifacts/question-form.ts`; a body that fails it is kept as
-// raw prose by the UI (no form card renders).
-function questionFormBodyIsRenderable(body) {
-  const trimmed = typeof body === 'string' ? body.trim() : '';
-  if (!trimmed) return false;
-  const stripped = trimmed
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
-  let data;
-  try {
-    data = JSON.parse(stripped);
-  } catch {
-    return false;
-  }
-  if (!data || typeof data !== 'object') return false;
-  const questions = data.questions;
-  return Array.isArray(questions) && questions.some((q) => q && typeof q === 'object');
-}
-
-// Locate `closeTag` (case-insensitively) at or after `from`, returning an
-// index in the ORIGINAL `text` coordinate space. Mirrors the web parser's
-// `findCloseTag`: scanning char-by-char and lowercasing each fixed-length
-// candidate slice keeps the result aligned with `openEnd`. Lowercasing the
-// whole string up front instead would desync the index, because some code
-// points expand under `toLowerCase()` (e.g. `"İ" -> "i̇"`) and shift every
-// offset after them — corrupting the body slice and failing a valid form.
-function findQuestionFormCloseTag(text, from, closeTag) {
-  const closeLower = closeTag.toLowerCase();
-  const tagLen = closeTag.length;
-  const maxStart = text.length - tagLen;
-  for (let i = from; i <= maxStart; i++) {
-    if (text.slice(i, i + tagLen).toLowerCase() === closeLower) return i;
-  }
-  return -1;
-}
-
-// Whether the agent's visible text contains a *renderable* clarifying form —
-// a closed `<question-form>`/`<ask-question>` block whose body satisfies the
-// parser contract above. The plugin-authoring missing-artifacts guard treats
-// this as a legitimate "paused to ask the user" turn rather than a failure.
-//
-// We deliberately mirror (not import) the web parser: the app boundary
-// forbids `apps/daemon` importing `apps/web/src`. Matching only the open tag
-// would let a malformed, non-renderable body suppress the failure — a false
-// success with no usable brief card. Keep this in sync with
-// `apps/web/src/artifacts/question-form.ts`, or promote a shared parser into
-// `packages/contracts` if the two drift.
-function emittedRenderableQuestionForm(text) {
-  if (typeof text !== 'string' || !text) return false;
-  let cursor = 0;
-  while (cursor < text.length) {
-    const m = QUESTION_FORM_OPEN_RE.exec(text.slice(cursor));
-    if (!m) return false;
-    const tagName = (m[1] ?? 'question-form').toLowerCase();
-    const closeTag = `</${tagName}>`;
-    const openEnd = cursor + m.index + m[0].length;
-    const closeIdx = findQuestionFormCloseTag(text, openEnd, closeTag);
-    if (closeIdx === -1) return false;
-    if (questionFormBodyIsRenderable(text.slice(openEnd, closeIdx))) return true;
-    cursor = closeIdx + closeTag.length;
-  }
-  return false;
-}
+// Renderable `<question-form>`/`<ask-question>` detection now lives in
+// `./question-form-detect.ts` so the missing-artifacts guard, awaiting-input
+// status, and run analytics all share ONE renderable-form check. See
+// `emittedRenderableQuestionForm` imported above.
 
 function assistantMessageEmittedQuestionForm(db, assistantMessageId) {
   if (!assistantMessageId) return false;

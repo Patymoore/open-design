@@ -300,10 +300,16 @@ function toolUse(name: string, id = freshId()) {
   ];
 }
 
-// Helper: emit assistant streamed text as a `text_delta` agent event — the
-// shape `runAskedUserQuestion` scans for a `<question-form>` clarification.
-function questionFormText(text = 'Quick brief <question-form id="q">…</question-form>') {
-  return [{ event: 'agent', data: { type: 'text_delta', text } }];
+// A renderable question-form body — JSON with a non-empty `questions` array.
+// `runAskedUserQuestion` requires a *closed, renderable* block, not a bare tag.
+const RENDERABLE_BODY = '{"questions":[{"question":"Which framework?"}]}';
+
+// Helper: emit assistant streamed text as a `text_delta` agent event. Note the
+// real persisted shape carries the chunk on `delta` (not `text`) — see
+// packages/contracts/src/sse/chat.ts. Building the wrong field here is exactly
+// what made the old tests pass while production runs detected nothing.
+function questionFormText(text = `Quick brief <question-form id="q">${RENDERABLE_BODY}</question-form>`) {
+  return [{ event: 'agent', data: { type: 'text_delta', delta: text } }];
 }
 
 describe('runAskedUserQuestion', () => {
@@ -311,15 +317,25 @@ describe('runAskedUserQuestion', () => {
     expect(runAskedUserQuestion([])).toBe(false);
   });
 
-  it('returns true when the run emitted a <question-form> clarification', () => {
+  it('returns true when the run emitted a renderable <question-form> clarification', () => {
     expect(runAskedUserQuestion(questionFormText())).toBe(true);
+  });
+
+  it('reads the `delta` field of text_delta events (the real persisted shape)', () => {
+    // Guards the production bug where the helper read `text` and so appended
+    // nothing for real runs, leaving run_finished.asked_user_question false.
+    expect(
+      runAskedUserQuestion([
+        { event: 'agent', data: { type: 'text_delta', delta: `<question-form id="q">${RENDERABLE_BODY}</question-form>` } },
+      ]),
+    ).toBe(true);
   });
 
   it('reassembles a marker split across text_delta chunks', () => {
     expect(
       runAskedUserQuestion([
-        { event: 'agent', data: { type: 'text_delta', text: 'ask a <question-' } },
-        { event: 'agent', data: { type: 'text_delta', text: 'form id="q">…</question-form>' } },
+        { event: 'agent', data: { type: 'text_delta', delta: 'ask a <question-form id="q">{"questions":[' } },
+        { event: 'agent', data: { type: 'text_delta', delta: '{"question":"X"}]}</question-form>' } },
       ]),
     ).toBe(true);
   });
@@ -328,12 +344,22 @@ describe('runAskedUserQuestion', () => {
   // the UI parser and the daemon open-tag matcher). A model that drifts to the
   // alias still renders the clarification banner, so the analytics signal must
   // recognize it too — otherwise the run gets misclassified in the funnel.
-  it('returns true for the <ask-question> alias of <question-form>', () => {
+  it('returns true for the renderable <ask-question> alias', () => {
     expect(
       runAskedUserQuestion([
-        { event: 'agent', data: { type: 'text_delta', text: 'one quick check <ask-question id="q">…</ask-question>' } },
+        { event: 'agent', data: { type: 'text_delta', delta: `one quick check <ask-question id="q">${RENDERABLE_BODY}</ask-question>` } },
       ]),
     ).toBe(true);
+  });
+
+  it('returns false when the tag is only shown as literal markup (no renderable body)', () => {
+    // A doc/code sample that mentions the markup must NOT be misclassified as a
+    // clarification turn and excluded from the artifact funnel.
+    expect(
+      runAskedUserQuestion([
+        { event: 'agent', data: { type: 'text_delta', delta: 'Use a `<question-form id="x">` block like this in your skill.' } },
+      ]),
+    ).toBe(false);
   });
 
   it('returns false for a run that only wrote artifacts', () => {

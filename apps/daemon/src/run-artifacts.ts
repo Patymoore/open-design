@@ -24,6 +24,8 @@
 // uniform zero on PostHog and made the same funnel useless from the
 // other direction.
 
+import { emittedRenderableQuestionForm } from './question-form-detect.js';
+
 // Tool names cover Claude-style, Codex-style, and the ACP/MCP shapes
 // the daemon proxies. Keep aligned with the web-side `WRITE_NAMES` /
 // `EDIT_NAMES` sets in `apps/web/src/runtime/file-ops.ts`.
@@ -212,11 +214,18 @@ export function countNewHtmlArtifacts(events: readonly RunEventLike[]): number {
 // text arrives as `text_delta` chunks, so the marker can straddle a chunk
 // boundary — concatenate the run's text before testing for it.
 //
-// `<ask-question>` is an accepted alias for `<question-form>` (whitelisted by
-// the UI parser in `apps/web/src/artifacts/question-form.ts` and the daemon
-// open-tag matcher in `apps/daemon/src/server.ts`). Match both tag names here
-// so a model that drifts to the alias still records the
-// `run_finished.asked_user_question` signal instead of misclassifying the run.
+// Two correctness points enforced here:
+//   1. Persisted `text_delta` events carry the chunk on `delta`
+//      (`{ type: 'text_delta'; delta }`, see packages/contracts/src/sse/chat.ts),
+//      NOT `text`. Reading `text` appended nothing for real runs, leaving the
+//      signal permanently false. We read `delta` first, and still accept a
+//      `text` field for any runtime that emits a whole-text event.
+//   2. We require a *renderable* closed `<question-form>`/`<ask-question>`
+//      block (shared `emittedRenderableQuestionForm`), not a raw open-tag
+//      match — so a run that merely shows the literal markup inside a generated
+//      doc, code sample, or HTML artifact is not misclassified as a
+//      clarification turn and wrongly excluded from the artifact funnel. The
+//      `<ask-question>` alias is covered by that shared matcher.
 export function runAskedUserQuestion(
   events: readonly RunEventLike[],
 ): boolean {
@@ -225,12 +234,13 @@ export function runAskedUserQuestion(
   for (const rec of events) {
     if (rec?.event !== 'agent') continue;
     const data = rec.data as
-      | { type?: unknown; text?: unknown }
+      | { type?: unknown; text?: unknown; delta?: unknown }
       | null
       | undefined;
     if (!data) continue;
     if (data.type !== 'text_delta' && data.type !== 'text') continue;
-    if (typeof data.text === 'string') text += data.text;
+    if (typeof data.delta === 'string') text += data.delta;
+    else if (typeof data.text === 'string') text += data.text;
   }
-  return /<(question-form|ask-question)\b/i.test(text);
+  return emittedRenderableQuestionForm(text);
 }

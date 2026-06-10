@@ -122,6 +122,29 @@ function parseLegacyAskUserQuestion(input: unknown): LegacyAuqQuestion[] {
   return out;
 }
 
+// Recover the user's persisted answer from a completed AUQ `tool_result`. The
+// retired interactive card serialized answers as one `${question}\n${answer}`
+// block per question, blocks joined by a blank line, with multi-select answers
+// written as `- option` bullet lines. Surfacing it keeps old conversations
+// auditable — two different answers no longer render identically.
+function parseLegacyAuqAnswer(content: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!content) return map;
+  for (const block of content.split('\n\n')) {
+    const nl = block.indexOf('\n');
+    if (nl === -1) continue;
+    const q = block.slice(0, nl).trim();
+    const a = block
+      .slice(nl + 1)
+      .split('\n')
+      .map((s) => s.replace(/^- /, '').trim())
+      .filter(Boolean)
+      .join(', ');
+    if (q && a) map.set(q, a);
+  }
+  return map;
+}
+
 function LegacyAskUserQuestionCard({
   input,
   result,
@@ -141,13 +164,22 @@ function LegacyAskUserQuestionCard({
   // Title + summary are model-authored text (already in the user's locale), so
   // no new i18n keys are needed for this historical-only surface.
   const title = first.header ?? truncate(first.question, 60);
-  const prompts = questions.map((q) => q.question).filter(Boolean).join(' · ');
+  const answers = result && !result.isError ? parseLegacyAuqAnswer(result.content) : new Map<string, string>();
+  // Surface the persisted pick(s) so completed history shows the actual answer,
+  // not just the prompt. Falls back to the bare prompt when no answer is stored.
+  const summary = questions
+    .map((q) => {
+      const answer = answers.get(q.question);
+      return answer ? `${q.question} → ${answer}` : q.question;
+    })
+    .filter(Boolean)
+    .join(' · ');
   return (
     <div className="op-card op-generic">
       <div className="op-card-head">
         <ResultBadge result={result} runStreaming={runStreaming} runSucceeded={runSucceeded} />
         <span className="op-title">{title}</span>
-        {prompts ? <span className="op-meta">{truncate(prompts, 200)}</span> : null}
+        {summary ? <span className="op-meta">{truncate(summary, 240)}</span> : null}
       </div>
     </div>
   );
