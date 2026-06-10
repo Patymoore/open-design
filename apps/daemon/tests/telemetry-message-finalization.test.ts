@@ -308,6 +308,7 @@ describe('Langfuse message finalization gate', () => {
         },
         projectId: 'project-1',
         conversationId: 'conv-1',
+        reportTrigger: 'terminal_fallback',
       },
     );
     await Promise.resolve();
@@ -322,7 +323,7 @@ describe('Langfuse message finalization gate', () => {
           langfuse_expected: true,
           langfuse_delivery_status: 'accepted',
           langfuse_report_result: 'accepted',
-          langfuse_report_trigger: 'final_message',
+          langfuse_report_trigger: 'terminal_fallback',
         }),
       }),
     );

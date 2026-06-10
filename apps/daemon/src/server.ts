@@ -2566,6 +2566,7 @@ async function ensureGhReady() {
 }
 
 const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
+const LANGFUSE_TERMINAL_FALLBACK_DELAY_MS = 15_000;
 
 function reconcileAssistantMessageOnRunEnd(db, runs, run) {
   if (!run.assistantMessageId) return;
@@ -3069,6 +3070,7 @@ export function createFinalizedMessageTelemetryReporter({
     durationMs,
     projectId,
     reportResult,
+    reportTrigger = 'final_message',
     run,
     runId,
     skipReason,
@@ -3093,7 +3095,7 @@ export function createFinalizedMessageTelemetryReporter({
           ? { langfuse_drop_reason: delivery.langfuse_drop_reason }
           : {}),
         langfuse_report_result: reportResult,
-        langfuse_report_trigger: 'final_message',
+        langfuse_report_trigger: reportTrigger,
         ...(skipReason ? { langfuse_report_skip_reason: skipReason } : {}),
         ...(durationMs !== undefined ? { report_duration_ms: durationMs } : {}),
         ...(terminalResult ? { result: terminalResult } : {}),
@@ -3118,6 +3120,7 @@ export function createFinalizedMessageTelemetryReporter({
           langfuse_drop_reason: 'network_error',
         },
         projectId: options.projectId,
+        reportTrigger: options.reportTrigger,
         reportResult: 'skipped',
         runId,
         skipReason: 'run_not_found',
@@ -3135,6 +3138,7 @@ export function createFinalizedMessageTelemetryReporter({
           langfuse_drop_reason: 'network_error',
         },
         projectId: options.projectId,
+        reportTrigger: options.reportTrigger,
         reportResult: 'skipped',
         run,
         runId: run.id,
@@ -3164,6 +3168,7 @@ export function createFinalizedMessageTelemetryReporter({
         delivery: state,
         durationMs: Date.now() - start,
         projectId: options.projectId,
+        reportTrigger: options.reportTrigger,
         reportResult: state.langfuse_expected === false
           ? 'skipped'
           : state.langfuse_delivery_status === 'accepted'
@@ -5850,6 +5855,37 @@ export async function startServer({
     reportedRuns,
     getAppVersion: () => cachedAppVersion,
   });
+  const reportRunCompletionTelemetryFallback = ({
+    analyticsContext,
+    run,
+    status,
+  }: {
+    analyticsContext: any;
+    run: any;
+    status: string;
+  }) => {
+    const timer = setTimeout(() => {
+      if (reportedRuns.has(run.id)) return;
+      reportFinalizedMessage(
+        {
+          id: run.assistantMessageId ?? `${run.id}-terminal`,
+          conversationId: run.conversationId,
+          endedAt: run.updatedAt,
+          role: 'assistant',
+          runId: run.id,
+          runStatus: status,
+        },
+        { telemetryFinalized: true },
+        {
+          analyticsContext,
+          conversationId: run.conversationId,
+          projectId: run.projectId,
+          reportTrigger: 'terminal_fallback',
+        },
+      );
+    }, LANGFUSE_TERMINAL_FALLBACK_DELAY_MS);
+    timer.unref?.();
+  };
 
   const reportFeedback = (req: {
     runId: string;
@@ -14830,6 +14866,11 @@ export async function startServer({
             token_count_source: usageAnalytics.token_count_source,
           },
           insertId: `${runInsertId}-finish`,
+        });
+        reportRunCompletionTelemetryFallback({
+          analyticsContext,
+          run,
+          status: status.status,
         });
       }).catch(() => {
         // wait() can't reject in current runs.ts impl, but guard anyway.
