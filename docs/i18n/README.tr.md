@@ -119,13 +119,13 @@ Bir projenin Studio'su içinde, aynı tasarım sistemi birden çok artifact tür
 | [Cursor](https://www.cursor.com/cli) | ✅ Destekleniyor | `od mcp install cursor` |
 | [VS Code + GitHub Copilot](https://github.com/features/copilot) | ✅ Destekleniyor | `od mcp install copilot` |
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | ✅ Destekleniyor | `od mcp install copilot` |
-| Gemini CLI | ✅ Destekleniyor | `od mcp install gemini` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | ✅ Destekleniyor | `od mcp install gemini` |
 | [OpenCode](https://opencode.ai/) | ✅ Destekleniyor | `od mcp install opencode` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | ✅ Destekleniyor | `od mcp install openclaw` |
 | [Antigravity](https://antigravity.google) | ✅ Destekleniyor | `od mcp install antigravity` |
 | [Cline](https://github.com/cline/cline) | ✅ Destekleniyor | `od mcp install cline` |
 | [Trae](https://www.trae.ai/) | ✅ Destekleniyor | `od mcp install trae` |
-| Kimi CLI | ✅ Destekleniyor | `od mcp install kimi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | ✅ Destekleniyor | `od mcp install kimi` |
 | [Pi Agent](https://github.com/badlogic/pi-mono) | ✅ Destekleniyor | `od mcp install pi` |
 | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) | ✅ Destekleniyor | `od mcp install vibe` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | ✅ Destekleniyor | `od mcp install hermes` |

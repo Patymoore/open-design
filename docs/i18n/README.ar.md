@@ -121,13 +121,13 @@
 | [Cursor](https://www.cursor.com/cli) | ✅ مدعوم | `od mcp install cursor` |
 | [VS Code + GitHub Copilot](https://github.com/features/copilot) | ✅ مدعوم | `od mcp install copilot` |
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | ✅ مدعوم | `od mcp install copilot` |
-| Gemini CLI | ✅ مدعوم | `od mcp install gemini` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | ✅ مدعوم | `od mcp install gemini` |
 | [OpenCode](https://opencode.ai/) | ✅ مدعوم | `od mcp install opencode` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | ✅ مدعوم | `od mcp install openclaw` |
 | [Antigravity](https://antigravity.google) | ✅ مدعوم | `od mcp install antigravity` |
 | [Cline](https://github.com/cline/cline) | ✅ مدعوم | `od mcp install cline` |
 | [Trae](https://www.trae.ai/) | ✅ مدعوم | `od mcp install trae` |
-| Kimi CLI | ✅ مدعوم | `od mcp install kimi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | ✅ مدعوم | `od mcp install kimi` |
 | [Pi Agent](https://github.com/badlogic/pi-mono) | ✅ مدعوم | `od mcp install pi` |
 | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) | ✅ مدعوم | `od mcp install vibe` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | ✅ مدعوم | `od mcp install hermes` |

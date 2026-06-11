@@ -119,13 +119,13 @@ Dentro del Studio de un proyecto, el mismo sistema de diseño produce múltiples
 | [Cursor](https://www.cursor.com/cli) | ✅ Compatible | `od mcp install cursor` |
 | [VS Code + GitHub Copilot](https://github.com/features/copilot) | ✅ Compatible | `od mcp install copilot` |
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | ✅ Compatible | `od mcp install copilot` |
-| Gemini CLI | ✅ Compatible | `od mcp install gemini` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | ✅ Compatible | `od mcp install gemini` |
 | [OpenCode](https://opencode.ai/) | ✅ Compatible | `od mcp install opencode` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | ✅ Compatible | `od mcp install openclaw` |
 | [Antigravity](https://antigravity.google) | ✅ Compatible | `od mcp install antigravity` |
 | [Cline](https://github.com/cline/cline) | ✅ Compatible | `od mcp install cline` |
 | [Trae](https://www.trae.ai/) | ✅ Compatible | `od mcp install trae` |
-| Kimi CLI | ✅ Compatible | `od mcp install kimi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | ✅ Compatible | `od mcp install kimi` |
 | [Pi Agent](https://github.com/badlogic/pi-mono) | ✅ Compatible | `od mcp install pi` |
 | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) | ✅ Compatible | `od mcp install vibe` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | ✅ Compatible | `od mcp install hermes` |

@@ -119,13 +119,13 @@ Open Design 是这样一种产物：Anthropic 随 Claude Design 推出的 **Agen
 | [Cursor](https://www.cursor.com/cli) | ✅ 支持 | `od mcp install cursor` |
 | [VS Code + GitHub Copilot](https://github.com/features/copilot) | ✅ 支持 | `od mcp install copilot` |
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | ✅ 支持 | `od mcp install copilot` |
-| Gemini CLI | ✅ 支持 | `od mcp install gemini` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | ✅ 支持 | `od mcp install gemini` |
 | [OpenCode](https://opencode.ai/) | ✅ 支持 | `od mcp install opencode` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | ✅ 支持 | `od mcp install openclaw` |
 | [Antigravity](https://antigravity.google) | ✅ 支持 | `od mcp install antigravity` |
 | [Cline](https://github.com/cline/cline) | ✅ 支持 | `od mcp install cline` |
 | [Trae](https://www.trae.ai/) | ✅ 支持 | `od mcp install trae` |
-| Kimi CLI | ✅ 支持 | `od mcp install kimi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | ✅ 支持 | `od mcp install kimi` |
 | [Pi Agent](https://github.com/badlogic/pi-mono) | ✅ 支持 | `od mcp install pi` |
 | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) | ✅ 支持 | `od mcp install vibe` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | ✅ 支持 | `od mcp install hermes` |

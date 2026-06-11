@@ -119,13 +119,13 @@ Un aperçu rapide de ce qu'est Open Design et de ce qu'il fait. Partez de la pag
 | [Cursor](https://www.cursor.com/cli) | ✅ Pris en charge | `od mcp install cursor` |
 | [VS Code + GitHub Copilot](https://github.com/features/copilot) | ✅ Pris en charge | `od mcp install copilot` |
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | ✅ Pris en charge | `od mcp install copilot` |
-| Gemini CLI | ✅ Pris en charge | `od mcp install gemini` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | ✅ Pris en charge | `od mcp install gemini` |
 | [OpenCode](https://opencode.ai/) | ✅ Pris en charge | `od mcp install opencode` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | ✅ Pris en charge | `od mcp install openclaw` |
 | [Antigravity](https://antigravity.google) | ✅ Pris en charge | `od mcp install antigravity` |
 | [Cline](https://github.com/cline/cline) | ✅ Pris en charge | `od mcp install cline` |
 | [Trae](https://www.trae.ai/) | ✅ Pris en charge | `od mcp install trae` |
-| Kimi CLI | ✅ Pris en charge | `od mcp install kimi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | ✅ Pris en charge | `od mcp install kimi` |
 | [Pi Agent](https://github.com/badlogic/pi-mono) | ✅ Pris en charge | `od mcp install pi` |
 | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) | ✅ Pris en charge | `od mcp install vibe` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | ✅ Pris en charge | `od mcp install hermes` |

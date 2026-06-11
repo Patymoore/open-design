@@ -119,13 +119,13 @@ Open Design — це те, що ви отримуєте, коли **agent-native
 | [Cursor](https://www.cursor.com/cli) | ✅ Підтримується | `od mcp install cursor` |
 | [VS Code + GitHub Copilot](https://github.com/features/copilot) | ✅ Підтримується | `od mcp install copilot` |
 | [GitHub Copilot CLI](https://github.com/features/copilot/cli) | ✅ Підтримується | `od mcp install copilot` |
-| Gemini CLI | ✅ Підтримується | `od mcp install gemini` |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | ✅ Підтримується | `od mcp install gemini` |
 | [OpenCode](https://opencode.ai/) | ✅ Підтримується | `od mcp install opencode` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | ✅ Підтримується | `od mcp install openclaw` |
 | [Antigravity](https://antigravity.google) | ✅ Підтримується | `od mcp install antigravity` |
 | [Cline](https://github.com/cline/cline) | ✅ Підтримується | `od mcp install cline` |
 | [Trae](https://www.trae.ai/) | ✅ Підтримується | `od mcp install trae` |
-| Kimi CLI | ✅ Підтримується | `od mcp install kimi` |
+| [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) | ✅ Підтримується | `od mcp install kimi` |
 | [Pi Agent](https://github.com/badlogic/pi-mono) | ✅ Підтримується | `od mcp install pi` |
 | [Mistral Vibe CLI](https://github.com/mistralai/mistral-vibe) | ✅ Підтримується | `od mcp install vibe` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | ✅ Підтримується | `od mcp install hermes` |
