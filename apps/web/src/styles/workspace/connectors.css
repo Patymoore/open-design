@@ -1,5 +1,14 @@
 /* -------- Design system picker (custom popover dropdown) ------------ */
 .ds-picker { position: relative; }
+/* While its popover is open, the picker must paint above its sibling
+   sections. Each `.newproj-section` keeps a transform applied after the
+   entrance animation (`od-fade-slide-up ... both` in entrance.css), which
+   makes every section its own stacking context — the popover's z-index
+   alone can't escape its section, so later siblings (Target platforms,
+   model picker, toggles, …) would cover the open list. Raising the open
+   picker's section above its `z-index: auto` siblings restores the
+   expected "dropdown on top" order. */
+.ds-picker:has(.ds-picker-popover) { z-index: 31; }
 .ds-picker-trigger {
   display: flex;
   align-items: center;

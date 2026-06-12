@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -96,6 +97,19 @@ export function spawnEnvForAgent(
   if (agentId === 'amr') {
     Object.assign(env, amrVelaProfileEnv(env));
     Object.assign(env, amrAnalyticsIdentityEnv(env));
+    // `execAgentFile` REPLACES the child environment (execFile with `env`
+    // set), so anything missing here is genuinely absent for vela. `vela model
+    // list` resolves its config home up front and exits non-zero with
+    // "$HOME is not defined" when HOME is unset — while `vela model preset`
+    // and `vela --version` do not need it. A packaged daemon spawned with a
+    // stripped env (or any caller that did not forward HOME) would therefore
+    // detect AMR and seed the picker from preset, yet fail every run's remote
+    // catalog probe. Backfill HOME from the OS so the authoritative catalog
+    // call is never silently decapitated by a missing home dir.
+    if (!env.HOME?.trim()) {
+      const home = os.homedir();
+      if (home) env.HOME = home;
+    }
     // Identify Open Design as the host so the vela CLI tags its command +
     // model_request analytics with source=open_design (revenue attribution).
     // Not PII (unlike the installation id above), so set it regardless of the
@@ -133,6 +147,12 @@ export function spawnEnvForAgent(
     return reapplySandboxRuntimeEnv(env, sandboxRuntime);
   }
   if (agentId === 'opencode') {
+    stripKeysCaseInsensitive(env, [
+      'OPENCODE',
+      'OPENCODE_PID',
+      'OPENCODE_RUN_ID',
+      'OPENCODE_SERVER_PASSWORD',
+    ]);
     // OpenCode is bun-based and, left to its defaults, walks up from its cwd to
     // the nearest project root and runs `bun install` there at startup to set up
     // local plugins. When that root is a pnpm workspace (the daemon's own repo,
@@ -224,5 +244,15 @@ function stripUnlessCustomBaseUrl(
   const secretKeysUpper = new Set(secretKeys.map((k) => k.toUpperCase()));
   for (const key of Object.keys(env)) {
     if (secretKeysUpper.has(key.toUpperCase())) delete env[key];
+  }
+}
+
+function stripKeysCaseInsensitive(
+  env: NodeJS.ProcessEnv,
+  keysToStrip: readonly string[],
+): void {
+  const keysUpper = new Set(keysToStrip.map((key) => key.toUpperCase()));
+  for (const key of Object.keys(env)) {
+    if (keysUpper.has(key.toUpperCase())) delete env[key];
   }
 }
