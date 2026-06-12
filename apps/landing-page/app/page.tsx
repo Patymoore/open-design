@@ -990,7 +990,7 @@ export default function Page({
         </section>
 
         {/* ====== FOOTER ====== */}
-        <footer className='sub-footer' data-od-id='sub-footer'>
+        <footer className='sub-footer' data-od-id='footer'>
           <div className='container sub-footer-inner'>
             <div className='sub-footer-grid'>
               <div className='sub-footer-col'>
