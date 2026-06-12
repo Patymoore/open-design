@@ -4,6 +4,52 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { en } from '../../src/i18n/locales/en';
 
+function installTestLocalStorage(): void {
+  const existingStorage = safeReadLocalStorage();
+  if (existingStorage && hasUsableLocalStorage(existingStorage)) return;
+
+  const values = new Map<string, string>();
+  const storage: Storage = {
+    get length() {
+      return values.size;
+    },
+    clear: () => {
+      values.clear();
+    },
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, String(value));
+    },
+  };
+
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+}
+
+function safeReadLocalStorage(): Storage | undefined {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasUsableLocalStorage(storage: Storage): boolean {
+  try {
+    storage.setItem('__od_test__', '1');
+    storage.removeItem('__od_test__');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const {
   playSoundMock,
   requestNotificationPermissionMock,
@@ -126,6 +172,15 @@ const availableAgents: AgentInfo[] = [
     models: [{ id: 'default', label: 'Default' }],
   },
 ];
+
+const claudeAgent: AgentInfo = {
+  id: 'claude',
+  name: 'Claude Code',
+  bin: 'claude',
+  available: true,
+  version: '1.0.0',
+  models: [{ id: 'default', label: 'Default' }],
+};
 
 const amrAgent: AgentInfo = {
   id: 'amr',
@@ -483,6 +538,20 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
 
     expect(byokTab.getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Anthropic API' })).toBeTruthy();
+  });
+
+  it('previews a Claude Code failure with the AMR rescue hint', () => {
+    window.history.pushState({}, '', '/?odPreview=cc-failure');
+    renderSettingsDialog(
+      { mode: 'api', agentId: null },
+      { agents: [claudeAgent, amrAgent] },
+    );
+
+    expect(screen.getByRole('tab', { name: /Local CLI.*2 installed/i }).getAttribute('aria-selected'))
+      .toBe('true');
+    expect(screen.getByTestId('settings-agent-card-claude').className).toContain('active');
+    expect(screen.getByRole('alert').textContent).toContain('Claude Code is not signed in');
+    expect(screen.getByText(/Try/).textContent).toContain('Open Design AMR');
   });
 
   it('only persists Max tokens overrides within the supported BYOK range', async () => {
@@ -3271,6 +3340,10 @@ describe('SettingsDialog MCP server interactions', () => {
 });
 
 describe('SettingsDialog language interactions', () => {
+  beforeEach(() => {
+    installTestLocalStorage();
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.removeItem('open-design:locale');

@@ -314,6 +314,9 @@ describe('EntryShell onboarding Open Design AMR runtime', () => {
 
     const amrCloud = screen.getByRole('button', { name: /Open Design AMR/i });
     expect(amrCloud.getAttribute('aria-pressed')).toBe('true');
+    expect(amrCloud.textContent).toContain('hosted official model access');
+    expect(amrCloud.textContent).toContain('no local CLI or API key setup');
+    expect(amrCloud.textContent).toContain('Sign in and recharge once');
     expect(amrCloud.textContent).toContain('Officially recommended');
     expect(amrCloud.textContent).toContain('No deploy needed');
     expect(amrCloud.textContent).toContain('Supports Claude Opus 4.8');

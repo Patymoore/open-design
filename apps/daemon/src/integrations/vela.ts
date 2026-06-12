@@ -69,6 +69,7 @@ const AMR_ENTRY_SOURCE_PAGE_BY_SOURCE: Record<
 const AMR_ANALYTICS_EVENTS_URL =
   'https://amr-api.open-design.ai/api/v1/analytics/events';
 const AMR_ANALYTICS_TIMEOUT_MS = 1500;
+const OPEN_DESIGN_RETURN_HOST = 'open-design.ai';
 
 type AmrAnalyticsEnv = 'local' | 'test' | 'staging' | 'production';
 
@@ -443,11 +444,13 @@ export function parseVelaLoginAttribution(input: unknown): AmrEntryAttribution |
   ) {
     return null;
   }
+  const returnUrl = safeOpenDesignReturnUrl(value.returnUrl);
   return {
     entryId: value.entryId,
     sourceProduct: value.sourceProduct,
     sourceDetail: value.sourceDetail as TrackingAmrEntrySource,
     occurredAt: value.occurredAt,
+    ...(returnUrl ? { returnUrl } : {}),
   };
 }
 
@@ -546,7 +549,22 @@ function velaLoginAttributionEnv(
     OPEN_DESIGN_AMR_ENTRY_SOURCE: attribution.sourceDetail,
     OPEN_DESIGN_AMR_ENTRY_AT: attribution.occurredAt,
     OPEN_DESIGN_AMR_ORIGIN: attribution.sourceProduct,
+    ...(attribution.returnUrl ? { OPEN_DESIGN_AMR_RETURN_URL: attribution.returnUrl } : {}),
   };
+}
+
+function safeOpenDesignReturnUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.hostname !== OPEN_DESIGN_RETURN_HOST) {
+      return null;
+    }
+    if (parsed.pathname.startsWith('/amr')) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 function buildAmrEntryAnalyticsCommon(

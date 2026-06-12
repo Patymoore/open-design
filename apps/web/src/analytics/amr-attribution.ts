@@ -15,8 +15,13 @@ interface RecordAmrEntryOptions {
   reuseExistingFrom?: readonly TrackingAmrEntrySource[];
 }
 
+interface AttributedAmrUrlOptions {
+  returnUrl?: string | null;
+}
+
 const AMR_ATTRIBUTION_STORAGE_KEY = 'open-design:amr-entry-attribution:v1';
 const AMR_ATTRIBUTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OPEN_DESIGN_RETURN_HOST = 'open-design.ai';
 
 const ENTRY_PAGE_BY_SOURCE: Record<TrackingAmrEntrySource, TrackingPageName> = {
   onboarding_amr_card: 'onboarding',
@@ -54,11 +59,13 @@ export function recordAmrEntry(
   const existing = readReusableAmrAttribution(now, options.reuseExistingFrom);
   if (existing) return existing;
 
+  const returnUrl = currentOpenDesignReturnUrl();
   const attribution: AmrEntryAttribution = {
     entryId: `od-amr-${randomId()}`,
     sourceProduct: 'open_design',
     sourceDetail,
     occurredAt: now.toISOString(),
+    ...(returnUrl ? { returnUrl } : {}),
   };
   writeAmrAttribution(attribution);
   trackAmrEntryClick(track, {
@@ -92,22 +99,34 @@ export function readAmrAttribution(now: Date = new Date()): AmrEntryAttribution 
   }
 }
 
-export function attributedAmrUrl(baseUrl: string, attribution: AmrEntryAttribution): string {
+export function attributedAmrUrl(
+  baseUrl: string,
+  attribution: AmrEntryAttribution,
+  options: AttributedAmrUrlOptions = {},
+): string {
+  const returnUrl = safeOpenDesignReturnUrl(
+    options.returnUrl === undefined
+      ? attribution.returnUrl ?? currentOpenDesignReturnUrl()
+      : options.returnUrl,
+  );
   try {
     const url = new URL(baseUrl);
     url.searchParams.set('od_origin', attribution.sourceProduct);
     url.searchParams.set('od_entry_id', attribution.entryId);
     url.searchParams.set('od_entry_source', attribution.sourceDetail);
     url.searchParams.set('od_entry_at', attribution.occurredAt);
+    if (returnUrl) url.searchParams.set('od_return_url', returnUrl);
     return url.toString();
   } catch {
-    const separator = baseUrl.includes('?') ? '&' : '?';
-    return `${baseUrl}${separator}${new URLSearchParams({
+    const params = new URLSearchParams({
       od_origin: attribution.sourceProduct,
       od_entry_id: attribution.entryId,
       od_entry_source: attribution.sourceDetail,
       od_entry_at: attribution.occurredAt,
-    }).toString()}`;
+    });
+    if (returnUrl) params.set('od_return_url', returnUrl);
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    return `${baseUrl}${separator}${params.toString()}`;
   }
 }
 
@@ -166,6 +185,25 @@ function isValidAmrAttribution(value: Partial<AmrEntryAttribution>): value is Am
     && value.sourceDetail in ENTRY_PAGE_BY_SOURCE
     && typeof value.occurredAt === 'string'
     && Number.isFinite(Date.parse(value.occurredAt));
+}
+
+function currentOpenDesignReturnUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  return safeOpenDesignReturnUrl(window.location.href);
+}
+
+function safeOpenDesignReturnUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:' || parsed.hostname !== OPEN_DESIGN_RETURN_HOST) {
+      return null;
+    }
+    if (parsed.pathname.startsWith('/amr')) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 function randomId(): string {

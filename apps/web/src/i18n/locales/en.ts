@@ -115,7 +115,7 @@ export const en: Dict = {
   'settings.onboardingSystemsTitle': 'Bring your design system',
   'settings.onboardingSystemsBody': 'Pick or create a brand system so generated work follows real colors, typography, and product language.',
   'settings.onboardingExecutionTitle': 'Choose how generation runs',
-  'settings.onboardingExecutionBody': 'Official CLI with one-click setup and ready-to-use defaults. Use one key to choose from many models with better pricing.',
+  'settings.onboardingExecutionBody': 'Open Design recommends AMR for first runs: hosted official model access with no local CLI or API key setup. Sign in and recharge once, then use Claude, Codex, and other supported models directly in your task.',
   'settings.onboardingAmrCloudBenefitOfficial': 'Officially recommended',
   'settings.onboardingAmrCloudBenefitReady': 'No deploy needed',
   'settings.onboardingAmrCloudBenefitModels': 'Supports Claude Opus 4.8',

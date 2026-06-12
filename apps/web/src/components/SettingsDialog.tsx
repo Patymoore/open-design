@@ -1071,13 +1071,20 @@ export function SettingsDialog({
     return new URLSearchParams(window.location.search).get('odPreview');
   }, []);
   const previewByokFailure = settingsPreviewMode === 'byok-failure';
+  const previewCcFailure =
+    settingsPreviewMode === 'cc-failure' || settingsPreviewMode === 'cli-failure';
   // Backfill the fixed-origin base URL on mount too, so a config persisted with
   // an empty baseUrl (e.g. selected AIHubMix before this resolution existed)
   // isn't stuck blocking the live model fetch until the user re-selects the tab.
-  const [cfg, setCfg] = useState<AppConfig>(() => ({
-    ...initial,
-    baseUrl: resolveFixedOriginBaseUrl(initial.apiProtocol ?? 'anthropic', initial.baseUrl),
-  }));
+  const [cfg, setCfg] = useState<AppConfig>(() => {
+    const initialConfig = {
+      ...initial,
+      baseUrl: resolveFixedOriginBaseUrl(initial.apiProtocol ?? 'anthropic', initial.baseUrl),
+    };
+    return previewCcFailure
+      ? { ...initialConfig, mode: 'daemon' as const, agentId: 'claude' }
+      : initialConfig;
+  });
   const [maxTokensInput, setMaxTokensInput] = useState(
     initial.maxTokens == null ? '' : String(initial.maxTokens),
   );
@@ -1184,6 +1191,21 @@ export function SettingsDialog({
   const providerTestStateForRender: TestState = previewProviderFailureResult
     ? { status: 'done', result: previewProviderFailureResult }
     : providerTestState;
+  const previewAgentFailureResult = useMemo<ConnectionTestResponse | null>(
+    () =>
+      previewCcFailure
+        ? {
+            ok: false,
+            kind: 'agent_auth_required',
+            latencyMs: 428,
+            model: 'Default (CLI config)',
+            agentName: 'Claude Code',
+            detail:
+              'Claude Code is not signed in. Run `claude /login` in your terminal, then test again.',
+          }
+        : null,
+    [previewCcFailure],
+  );
 
   useEffect(() => {
     onAmrLoginStatusChange?.(amrCardStatus);
@@ -3589,8 +3611,12 @@ export function SettingsDialog({
                       <div className="agent-grid agent-grid-installed">
                         {installedAgents.map((a) => {
                           const active = cfg.agentId === a.id;
+                          const agentTestStateForRender =
+                            active && previewAgentFailureResult
+                              ? { status: 'done' as const, result: previewAgentFailureResult }
+                              : agentTestState;
                           const running =
-                            active && agentTestState.status === 'running';
+                            active && agentTestStateForRender.status === 'running';
                           const description = AGENT_SHORT_DESCRIPTIONS[a.id];
                           const agentName = displayAgentName(a);
                           const diagnosticHandlers = diagnosticHandlersForAgent(a);
@@ -3709,13 +3735,13 @@ export function SettingsDialog({
                               {active ? renderAgentModelConfig(a) : null}
                             </div>
                           );
-                          if (active && agentTestState.status !== 'idle') {
+                          if (active && agentTestStateForRender.status !== 'idle') {
                             const resultRow = (
                               <div
                                 key={`${a.id}__test-result`}
                                 className="agent-test-result-row"
                               >
-                                {agentTestState.status === 'running' ? (
+                                {agentTestStateForRender.status === 'running' ? (
                                   <p
                                     className="settings-test-status running"
                                     role="status"
@@ -3728,25 +3754,25 @@ export function SettingsDialog({
                                     <p
                                       className={
                                         'settings-test-status ' +
-                                        testStatusVariant(agentTestState.result)
+                                        testStatusVariant(agentTestStateForRender.result)
                                       }
                                       role={
-                                        agentTestState.result.ok
+                                        agentTestStateForRender.result.ok
                                           ? 'status'
                                           : 'alert'
                                       }
                                       title={
-                                        agentTestState.result.ok
+                                        agentTestStateForRender.result.ok
                                           ? undefined
-                                          : agentTestState.result.detail
+                                          : agentTestStateForRender.result.detail
                                       }
                                     >
                                       {renderTestMessage(
-                                        agentTestState.result,
+                                        agentTestStateForRender.result,
                                         'cli',
                                       )}
                                     </p>
-                                    {!agentTestState.result.ok &&
+                                    {!agentTestStateForRender.result.ok &&
                                     amrRescueAvailable ? (
                                       <AmrRescueInlineHint
                                         onUseAmr={handleUseAmrRescue}
@@ -3754,7 +3780,7 @@ export function SettingsDialog({
                                     ) : null}
                                     {cfg.agentId === 'codex' && (() => {
                                       const repair = codexPathRepairState(
-                                        agentTestState.result,
+                                        agentTestStateForRender.result,
                                       );
                                       if (!repair) return null;
                                       const codexStrings = codexPathStrings(locale);

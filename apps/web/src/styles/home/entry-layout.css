@@ -2533,6 +2533,17 @@
   font-size: 13px;
 }
 
+.onboarding-view__card-body--amr {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  max-width: 720px;
+  margin-top: -4px;
+}
+
+.onboarding-view__card--amr.onboarding-view__card--has-body .onboarding-view__card-model {
+  grid-row: 3;
+}
+
 .onboarding-view__benefit-stack {
   display: grid;
   gap: 9px;

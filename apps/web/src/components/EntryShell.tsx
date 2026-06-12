@@ -2961,6 +2961,7 @@ function OnboardingChoiceCard({
     </span>
   ) : null;
   const modelUnderLogo = variant === 'amr' && modelSlot;
+  const amrBody = variant === 'amr' && body.trim().length > 0 ? body : null;
   const iconNode = (
     <span
       className={
@@ -3003,7 +3004,7 @@ function OnboardingChoiceCard({
         featured ? ' onboarding-view__card--featured' : ''
       }${variant ? ` onboarding-view__card--${variant}` : ''}${
         benefitPlacement === 'aside' ? ' onboarding-view__card--benefit-aside' : ''
-      }`}
+      }${amrBody ? ' onboarding-view__card--has-body' : ''}`}
       onClick={onClick}
       onKeyDown={handleKeyDown}
       aria-pressed={selected}
@@ -3026,6 +3027,11 @@ function OnboardingChoiceCard({
       ) : null}
       {benefitPlacement === 'aside' && benefitStack ? (
         <span className="onboarding-view__benefit-aside">{benefitStack}</span>
+      ) : null}
+      {amrBody ? (
+        <small className="onboarding-view__card-body onboarding-view__card-body--amr">
+          {amrBody}
+        </small>
       ) : null}
       {statusSlot ? (
         <span className="onboarding-view__card-status">

@@ -10,15 +10,18 @@ import {
 
 describe('AMR attribution helper', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
+    installTestLocalStorage();
     window.localStorage.clear();
     fetchMock = vi.fn(async () => new Response('{}', { status: 202 }));
-    vi.stubGlobal('fetch', fetchMock);
+    globalThis.fetch = fetchMock as typeof fetch;
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    window.localStorage.clear();
+    globalThis.fetch = originalFetch;
   });
 
   it('accepts every AMR entry source defined for Open Design entry points', () => {
@@ -151,4 +154,76 @@ describe('AMR attribution helper', () => {
       'https://open-design.ai/amr/wallet?tab=recharge&od_origin=open_design&od_entry_id=od-amr-entry-123&od_entry_source=generation_preview_recharge&od_entry_at=2026-06-03T12%3A00%3A00.000Z',
     );
   });
+
+  it('adds a safe Open Design return URL to AMR wallet URLs', () => {
+    expect(
+      attributedAmrUrl(
+        'https://open-design.ai/amr/wallet?tab=recharge',
+        {
+          entryId: 'od-amr-entry-456',
+          sourceProduct: 'open_design',
+          sourceDetail: 'chat_error_recharge',
+          occurredAt: '2026-06-03T12:00:00.000Z',
+        },
+        { returnUrl: 'https://open-design.ai/projects/preview-task?chat=1#run' },
+      ),
+    ).toBe(
+      'https://open-design.ai/amr/wallet?tab=recharge&od_origin=open_design&od_entry_id=od-amr-entry-456&od_entry_source=chat_error_recharge&od_entry_at=2026-06-03T12%3A00%3A00.000Z&od_return_url=https%3A%2F%2Fopen-design.ai%2Fprojects%2Fpreview-task%3Fchat%3D1%23run',
+    );
+  });
+
+  it('omits unsafe Open Design return URLs from AMR wallet URLs', () => {
+    expect(
+      attributedAmrUrl(
+        'https://open-design.ai/amr/wallet?tab=recharge',
+        {
+          entryId: 'od-amr-entry-789',
+          sourceProduct: 'open_design',
+          sourceDetail: 'chat_error_recharge',
+          occurredAt: '2026-06-03T12:00:00.000Z',
+        },
+        { returnUrl: 'https://evil.example/projects/preview-task' },
+      ),
+    ).toBe(
+      'https://open-design.ai/amr/wallet?tab=recharge&od_origin=open_design&od_entry_id=od-amr-entry-789&od_entry_source=chat_error_recharge&od_entry_at=2026-06-03T12%3A00%3A00.000Z',
+    );
+  });
 });
+
+function installTestLocalStorage(): void {
+  if (hasUsableLocalStorage(window.localStorage)) return;
+
+  const values = new Map<string, string>();
+  const storage: Storage = {
+    get length() {
+      return values.size;
+    },
+    clear: () => {
+      values.clear();
+    },
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, String(value));
+    },
+  };
+
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+}
+
+function hasUsableLocalStorage(storage: Storage | undefined): storage is Storage {
+  if (!storage) return false;
+  try {
+    storage.setItem('__od_test__', '1');
+    storage.removeItem('__od_test__');
+    return true;
+  } catch {
+    return false;
+  }
+}

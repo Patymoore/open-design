@@ -115,7 +115,7 @@ export const zhCN: Dict = {
   'settings.onboardingSystemsTitle': '接入你的设计系统',
   'settings.onboardingSystemsBody': '选择或创建品牌系统，让生成结果跟随真实的颜色、字体和产品语言。',
   'settings.onboardingExecutionTitle': '选择生成方式',
-  'settings.onboardingExecutionBody': '官方 CLI，一键配置、开箱即用。一个 Key 自由选择海量模型，价格更优惠。',
+  'settings.onboardingExecutionBody': 'Open Design 首次使用推荐 AMR：官方托管模型能力，无需安装 CLI 或配置 API Key。登录并充值后，就可以直接用 Claude、Codex 等模型继续当前任务。',
   'settings.onboardingAmrCloudBenefitOfficial': '官方推荐',
   'settings.onboardingAmrCloudBenefitReady': '免部署即用',
   'settings.onboardingAmrCloudBenefitModels': '支持 Claude Opus 4.8',

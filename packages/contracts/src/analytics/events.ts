@@ -144,6 +144,7 @@ export interface AmrEntryAttribution {
   sourceProduct: 'open_design';
   sourceDetail: TrackingAmrEntrySource;
   occurredAt: string;
+  returnUrl?: string;
 }
 
 // The six tabs inside the New project modal (CSV row 7 tab_name).
