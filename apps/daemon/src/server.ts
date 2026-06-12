@@ -13245,6 +13245,30 @@ export async function startServer({
     // guard below skips them via `trackingSubstantiveOutput`.
     let agentProducedOutput = false;
     let trackingSubstantiveOutput = false;
+    const looksLikeGeminiJsonEventStream = (text: string) => {
+      const lines = text
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length === 0) return false;
+      return lines.every((line) => {
+        try {
+          const obj = JSON.parse(line);
+          if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+          const type = obj.type;
+          return (
+            type === 'init' ||
+            type === 'message' ||
+            type === 'tool_use' ||
+            type === 'tool_result' ||
+            type === 'error' ||
+            type === 'result'
+          );
+        } catch {
+          return false;
+        }
+      });
+    };
     // Event types that count as "the agent actually produced something the
     // user can see." Lifecycle markers (`status`) and meter readings
     // (`usage`) deliberately do NOT count — a model can emit token-usage
@@ -13848,6 +13872,22 @@ export async function startServer({
           { retryable: true },
         ));
         return finishWithRetryDecision('failed', 0, signal);
+      }
+      if (
+        def.id === 'antigravity' &&
+        plaintextStdoutBuffer.length > 0
+      ) {
+        const bufferedStdout = plaintextStdoutBuffer.join('');
+        if (looksLikeGeminiJsonEventStream(bufferedStdout)) {
+          const handler = createJsonEventStreamHandler('gemini', sendAgentEvent);
+          handler.feed(bufferedStdout);
+          handler.flush();
+          plaintextStdoutBuffer.length = 0;
+          if (agentStreamError) {
+            markRpcCloseReason('stream_error');
+            return finishWithRetryDecision('failed', code === 0 ? 1 : (code ?? 1), signal ?? null);
+          }
+        }
       }
       // ACP agents that don't shut down on stdin.end() (e.g. Devin for
       // Terminal) are forced to exit via SIGTERM from attachAcpSession after

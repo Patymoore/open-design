@@ -1978,6 +1978,50 @@ process.exit(0);
     );
   });
 
+  it('parses successful Antigravity Gemini JSONL output instead of forwarding raw stdout', async () => {
+    await withFakeAgent(
+      'agy',
+      `
+const args = process.argv.slice(2);
+if (args[0] === '--version') {
+  console.log('1.107.0-test');
+  process.exit(0);
+}
+process.stdout.write(JSON.stringify({ type: 'init', session_id: 'agy-1', model: 'gemini-3.5-flash' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'message', role: 'assistant', content: 'Hello from Antigravity.', delta: true }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'result', status: 'success', stats: { input_tokens: 4, output_tokens: 5, cached: 0, duration_ms: 25 } }) + '\\n');
+process.exit(0);
+`,
+      async () => {
+        const createResponse = await fetch(`${baseUrl}/api/runs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: 'antigravity',
+            message: 'hello',
+          }),
+        });
+        expect(createResponse.status).toBe(202);
+        const { runId } = await createResponse.json() as { runId: string };
+
+        const eventsController = new AbortController();
+        const eventsResponse = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+          signal: eventsController.signal,
+        });
+        const eventsBody = await readSseUntil(eventsResponse, 'event: final');
+        eventsController.abort();
+        const statusBody = await waitForRunStatus(baseUrl, runId);
+
+        expect(eventsBody).toContain('event: agent');
+        expect(eventsBody).toContain('"type":"text_delta","delta":"Hello from Antigravity."');
+        expect(eventsBody).toContain('"type":"usage"');
+        expect(eventsBody).not.toContain('event: stdout');
+        expect(eventsBody).not.toContain('"role":"assistant"');
+        expect(statusBody.status).toBe('succeeded');
+      },
+    );
+  });
+
   it('surfaces Qoder assistant error records through the SSE error channel', async () => {
     const qoderErrorLine = JSON.stringify({
       type: 'assistant',
