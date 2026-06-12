@@ -233,7 +233,7 @@ async function advanceToGenerateStep() {
   fireEvent.click(screen.getByRole('button', { name: /^Continue$/i }));
   await screen.findByRole('heading', { name: /Confirm the starter brief/i });
   fireEvent.click(screen.getByRole('button', { name: /^Continue$/i }));
-  await screen.findByRole('heading', { name: /Choose how generation runs/i });
+  await screen.findByRole('heading', { name: /Log in to AMR/i });
 }
 
 afterEach(() => {
@@ -357,10 +357,12 @@ describe('EntryShell onboarding starter generation flow', () => {
     expect(screen.getByText('https://example.com/product')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /^Continue$/i }));
-    await screen.findByRole('heading', { name: /Choose how generation runs/i });
-    expect(screen.getByRole('button', { name: /Use starter credit/i }).getAttribute('aria-pressed')).toBe('true');
+    await screen.findByRole('heading', { name: /Log in to AMR/i });
+    expect(screen.getByRole('button', { name: /AMR is connected/i }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: /Continue to generation/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /Generate starter result/i }));
+    await screen.findByRole('heading', { name: /Start generating/i });
+    fireEvent.click(screen.getByRole('button', { name: /Start generating/i }));
 
     await waitFor(() => {
       expect(props.onCreateProject).toHaveBeenCalledTimes(1);
@@ -397,7 +399,7 @@ describe('EntryShell onboarding starter generation flow', () => {
     });
   });
 
-  it('signs into AMR on the final step and generates after device authorization completes', async () => {
+  it('signs into AMR before generation and keeps the user in control of the start', async () => {
     let statusCalls = 0;
     const fetchMock = vi.fn(async (input, init) => {
       const url = String(input);
@@ -423,7 +425,7 @@ describe('EntryShell onboarding starter generation flow', () => {
     const props = renderOnboarding({ onCreateProject: vi.fn(async () => true) });
     await advanceToGenerateStep();
     const signIn = await screen.findByRole('button', {
-      name: /Log in, claim starter credit, and generate/i,
+      name: /Log in to AMR and check credit/i,
     });
 
     vi.useFakeTimers();
@@ -457,6 +459,13 @@ describe('EntryShell onboarding starter generation flow', () => {
     });
 
     await vi.waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Start generating/i })).toBeTruthy();
+    });
+    expect(props.onCreateProject).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Start generating/i }));
+
+    await vi.waitFor(() => {
       expect(props.onCreateProject).toHaveBeenCalledTimes(1);
     });
     expect(props.onCompleteOnboarding).toHaveBeenCalledTimes(1);
@@ -469,7 +478,7 @@ describe('EntryShell onboarding starter generation flow', () => {
     renderOnboarding();
     await advanceToGenerateStep();
 
-    fireEvent.click(screen.getByRole('button', { name: /Local CLI \/ BYOK advanced options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Local CLI \/ BYOK backup options/i }));
     vi.useFakeTimers();
     fireEvent.click(screen.getByRole('button', { name: /Local coding agent/i }));
     await act(async () => {
@@ -479,7 +488,7 @@ describe('EntryShell onboarding starter generation flow', () => {
     const localPanel = screen.getByText('Local CLI').closest('.onboarding-view__setup-panel');
     expect(localPanel?.textContent).toContain('Claude Code');
     expect(localPanel?.textContent).not.toContain('AMR');
-    expect(screen.getByRole('button', { name: /Generate starter result/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Continue to generation/i })).toBeTruthy();
   });
 
   it('persists the BYOK config before generating the starter project', async () => {
@@ -513,7 +522,7 @@ describe('EntryShell onboarding starter generation flow', () => {
     const props = renderOnboarding({ onCreateProject: vi.fn(async () => true) });
     await advanceToGenerateStep();
 
-    fireEvent.click(screen.getByRole('button', { name: /Local CLI \/ BYOK advanced options/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Local CLI \/ BYOK backup options/i }));
     fireEvent.click(screen.getByRole('button', { name: /Bring your own key/i }));
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'test-api-key' } });
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://api.anthropic.com' } });
@@ -527,7 +536,9 @@ describe('EntryShell onboarding starter generation flow', () => {
       expect(screen.getByText(/Connected\. Replied in 12 ms/i)).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Generate starter result/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue to generation/i }));
+    await screen.findByRole('heading', { name: /Start generating/i });
+    fireEvent.click(screen.getByRole('button', { name: /Start generating/i }));
 
     await waitFor(() => {
       expect(props.onCreateProject).toHaveBeenCalledTimes(1);
@@ -563,9 +574,12 @@ describe('EntryShell onboarding starter generation flow', () => {
     expect(skeleton?.getAttribute('aria-busy')).toBe('true');
     expect(skeleton?.querySelectorAll('.onboarding-view__skeleton-line--benefit').length).toBe(4);
     expect(skeleton?.querySelector('.onboarding-view__skeleton-model-bar')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Use starter credit/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /Local CLI \/ BYOK advanced options/i })).toBeTruthy();
-    const primary = screen.getByRole('button', { name: /Choose a generation method/i });
+    const realAmrCard = document.querySelector(
+      '.onboarding-view__amr-cloud-card .onboarding-view__card:not(.onboarding-view__card--skeleton)',
+    );
+    expect(realAmrCard).toBeNull();
+    expect(screen.getByRole('button', { name: /Local CLI \/ BYOK backup options/i })).toBeTruthy();
+    const primary = screen.getByRole('button', { name: /Choose AMR, Local CLI, or BYOK/i });
     expect(primary).toBeInstanceOf(HTMLButtonElement);
     expect((primary as HTMLButtonElement).disabled).toBe(true);
   });

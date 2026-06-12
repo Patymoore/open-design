@@ -272,7 +272,7 @@ describe('onboarding -> home AMR selection (end to end)', () => {
     render(<App />);
 
     // Bootstrap routes a first-run user into onboarding. The user states the
-    // target first; AMR is not a cold-start decision until the final Generate
+    // target first; AMR login/credit check happens before the final Generate
     // screen.
     const continueButton = await screen.findByRole(
       'button',
@@ -287,7 +287,10 @@ describe('onboarding -> home AMR selection (end to end)', () => {
     const briefContinue = await screen.findByRole('button', { name: /^Continue$/i });
     fireEvent.click(briefContinue);
 
-    const generate = await screen.findByRole('button', { name: /Generate starter result/i });
+    const amrContinue = await screen.findByRole('button', { name: /Continue to generation/i });
+    fireEvent.click(amrContinue);
+
+    const generate = await screen.findByRole('button', { name: /Start generating/i });
     fireEvent.click(generate);
 
     // The starter result opens as a project. Return to Home and verify the

@@ -1227,26 +1227,7 @@ function OnboardingView({
   useEffect(() => {
     const onboardingSessionId = onboardingSessionIdRef.current;
     if (!onboardingSessionId) return;
-    let area: TrackingOnboardingArea;
-    let stepIndex: TrackingOnboardingStepIndex;
-    let stepName: TrackingOnboardingStepName;
-    if (step === 0) {
-      area = 'goal';
-      stepIndex = '1';
-      stepName = 'goal';
-    } else if (step === 1) {
-      area = 'source';
-      stepIndex = '2';
-      stepName = 'source';
-    } else if (step === 2) {
-      area = 'brief';
-      stepIndex = '3';
-      stepName = 'brief';
-    } else {
-      area = 'runtime';
-      stepIndex = '4';
-      stepName = 'generation';
-    }
+    const { area, stepIndex, stepName } = stepInfo(step);
     trackPageView(analytics.track, {
       page_name: 'onboarding',
       area,
@@ -1279,7 +1260,8 @@ function OnboardingView({
     if (stepIdx === 0) return { area: 'goal', stepIndex: '1', stepName: 'goal' };
     if (stepIdx === 1) return { area: 'source', stepIndex: '2', stepName: 'source' };
     if (stepIdx === 2) return { area: 'brief', stepIndex: '3', stepName: 'brief' };
-    return { area: 'runtime', stepIndex: '4', stepName: 'generation' };
+    if (stepIdx === 3) return { area: 'runtime', stepIndex: '4', stepName: 'connect' };
+    return { area: 'generation_progress', stepIndex: 'progress', stepName: 'generation' };
   }
   function emitOnboardingClick(
     element: TrackingOnboardingClickElement,
@@ -1354,9 +1336,12 @@ function OnboardingView({
     t('settings.onboardingStepConnect'),
     t('settings.onboardingStepProfile'),
     t('settings.onboardingStepNewsletter'),
+    t('settings.onboardingConnectTitle'),
     t('settings.onboardingStepDesignSystem'),
   ];
   const isLastStep = step === steps.length - 1;
+  const isAmrConnectStep = step === 3;
+  const isGenerateStep = isLastStep;
   const onboardingGoals: OnboardingGoal[] = [
     {
       id: 'deck',
@@ -1590,25 +1575,30 @@ function OnboardingView({
     setGenerateError(null);
     setAmrLoginError(null);
     if (!isLastStep) {
+      if (isAmrConnectStep && runtime === 'amr' && amrSelectedAndSignedOut) {
+        const attribution = recordAmrEntry(
+          analytics.track,
+          'onboarding_amr_sign_in_continue',
+          new Date(),
+          { reuseExistingFrom: ['onboarding_amr_card'] },
+        );
+        void handleAmrSignInToContinue(attribution);
+        return;
+      }
       emitOnboardingClick('continue', 'continue');
       setStep((current) => current + 1);
       return;
     }
     if (runtime === 'amr' && amrSelectedAndSignedOut) {
-      const attribution = recordAmrEntry(
-        analytics.track,
-        'onboarding_amr_sign_in_continue',
-        new Date(),
-        { reuseExistingFrom: ['onboarding_amr_card'] },
-      );
-      void handleAmrSignInToContinue(attribution);
+      setStep(3);
+      setGenerateError('Log in to AMR and check starter credit before generating.');
       return;
     }
     await createStarterProject();
   }
 
   async function continueAfterAmrReady() {
-    if (isLastStep) {
+    if (isGenerateStep) {
       await createStarterProject();
       return;
     }
@@ -1952,18 +1942,25 @@ function OnboardingView({
   }
 
   const onboardingNavigationLocked = generating || amrLoginPending || amrLoginCancelPending;
-  const primaryActionLabel = isLastStep && generating
+  const primaryActionLabel = isGenerateStep && generating
     ? t('common.loading')
-    : isLastStep && amrLoginPending
+    : isAmrConnectStep && amrLoginPending
     ? t('settings.amrSigningIn')
-    : isLastStep && runtime === null
-      ? 'Choose a generation method'
-    : isLastStep && runtime === 'amr' && amrSelectedAndSignedOut
-      ? 'Log in, claim starter credit, and generate'
-    : isLastStep
-      ? 'Generate starter result'
+    : isAmrConnectStep && runtime === null
+      ? 'Choose AMR, Local CLI, or BYOK'
+    : isAmrConnectStep && runtime === 'amr' && amrSelectedAndSignedOut
+      ? 'Log in to AMR and check credit'
+    : isAmrConnectStep
+      ? 'Continue to generation'
+    : isGenerateStep && runtime === null
+      ? 'Choose AMR, Local CLI, or BYOK'
+    : isGenerateStep && runtime === 'amr' && amrSelectedAndSignedOut
+      ? 'Log in to AMR first'
+    : isGenerateStep
+      ? 'Start generating'
       : t('settings.onboardingContinue');
-  const primaryDisabled = onboardingNavigationLocked || (isLastStep && runtime === null);
+  const primaryDisabled =
+    onboardingNavigationLocked || ((isAmrConnectStep || isGenerateStep) && runtime === null);
 
   return (
     <section className="onboarding-view" aria-labelledby="onboarding-title">
@@ -2134,8 +2131,8 @@ function OnboardingView({
           {step === 3 ? (
             <div className="onboarding-view__panel">
               <OnboardingPanelHeader
-                title={t('settings.onboardingExecutionTitle')}
-                body="The default path uses official AMR starter credit. Local CLI and BYOK stay available as advanced options."
+                title={t('settings.onboardingConnectTitle')}
+                body="Connect AMR before generation so Open Design can claim or check starter credit for this brief. Local CLI and BYOK stay available as advanced options."
               />
               <div className="onboarding-view__runtime-stack">
                 {showAmrCloudOption ? (
@@ -2143,16 +2140,17 @@ function OnboardingView({
                     <OnboardingChoiceCard
                       icon="orbit"
                       agentIconId="amr"
-                      title="Use starter credit"
-                      body="No key setup. Built-in model. Recharge later if you want to expand the result."
+                      title={amrSignedIn ? 'AMR is connected' : 'Log in to AMR'}
+                      body="No Open Design account needed. AMR login unlocks the built-in model and lets us check starter credit before the first run."
                       benefits={[
-                        'No API key required',
+                        'No Open Design signup',
+                        'No API key setup',
                         'Built-in model',
-                        'Starter scope covered',
-                        'Recharge to expand',
+                        'Starter credit check',
+                        'Recharge or switch if needed',
                       ]}
                       benefitPlacement="aside"
-                      metaLabel={amrSignedIn ? 'Signed in' : 'Login may be required'}
+                      metaLabel={amrSignedIn ? 'Signed in' : 'Sign in required'}
                       modelSlot={
                         amrModels.length > 0 ? (
                           <OnboardingAmrModelSelect
@@ -2198,7 +2196,7 @@ function OnboardingView({
                   className="onboarding-view__advanced-toggle"
                   onClick={() => setAdvancedOpen((current) => !current)}
                 >
-                  <span>Local CLI / BYOK advanced options</span>
+                  <span>Local CLI / BYOK backup options</span>
                   <Icon name={advancedOpen ? 'chevron-down' : 'chevron-right'} size={16} />
                 </button>
                 {advancedOpen ? (
@@ -2278,6 +2276,73 @@ function OnboardingView({
                   </>
                 ) : null}
               </div>
+            </div>
+          ) : null}
+
+          {step === 4 ? (
+            <div className="onboarding-view__panel">
+              <OnboardingPanelHeader
+                title="Start generating"
+                body="Your brief is saved. Open Design will create a first version in the starter scope, then you can edit, export, regenerate, or save it as a template."
+              />
+              <div className="onboarding-view__brief-grid">
+                <div>
+                  <span>Target artifact</span>
+                  <strong>{selectedGoal.artifact}</strong>
+                </div>
+                <div>
+                  <span>Starter scope</span>
+                  <strong>{selectedGoal.starterScope}</strong>
+                </div>
+                <div>
+                  <span>Content source</span>
+                  <strong>{sourceSummary}</strong>
+                </div>
+                <div>
+                  <span>Generation path</span>
+                  <strong>
+                    {runtime === 'amr'
+                      ? 'AMR built-in model'
+                      : runtime === 'local'
+                        ? selectedAgent?.name ?? 'Local CLI'
+                        : runtime === 'byok'
+                          ? 'BYOK model provider'
+                          : 'Not selected yet'}
+                  </strong>
+                </div>
+                <div>
+                  <span>AMR credit</span>
+                  <strong>
+                    {runtime === 'amr'
+                      ? amrSignedIn
+                        ? 'Ready to check on run start'
+                        : 'Login required before run'
+                      : runtime === null
+                        ? 'Choose AMR, Local CLI, or BYOK first'
+                        : 'Not used for this run'}
+                  </strong>
+                </div>
+                <div>
+                  <span>Fallback</span>
+                  <strong>Brief stays saved if balance or setup blocks generation</strong>
+                </div>
+              </div>
+              {runtime === 'amr' ? (
+                <div className="onboarding-view__setup-panel">
+                  <div className="onboarding-view__setup-head">
+                    <div>
+                      <strong>
+                        {amrSignedIn ? 'AMR is ready for this brief' : 'AMR login is still needed'}
+                      </strong>
+                      <p>
+                        {amrSignedIn
+                          ? 'If this task needs more than the starter credit, Open Design will keep the brief and let you recharge or switch to CLI/BYOK.'
+                          : 'Go back one step to log in to AMR, then return here to start generating.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

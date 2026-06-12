@@ -111,7 +111,7 @@ export const zhTW: Dict = {
   'settings.onboardingStepNewsletter': 'Brief',
   'settings.onboardingNewsletterTitle': '保持同步',
   'settings.onboardingNewsletterBody': '在信箱裡收到產品更新、新模版、設計系統與大使活動。選填——可以跳過。',
-  'settings.onboardingConnectTitle': '選擇執行方式',
+  'settings.onboardingConnectTitle': '登入 AMR',
   'settings.onboardingConnectBody': '',
   'settings.onboardingRecommended': '推荐',
   'settings.onboardingAmrCloudOfficialBadge': '官方',

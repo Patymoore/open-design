@@ -111,7 +111,7 @@ export const zhCN: Dict = {
   'settings.onboardingStepNewsletter': 'Brief',
   'settings.onboardingNewsletterTitle': '获取最新动态',
   'settings.onboardingNewsletterBody': '留下邮箱，接收产品更新、新模板、设计系统资源和社区活动。',
-  'settings.onboardingConnectTitle': '选择运行方式',
+  'settings.onboardingConnectTitle': '登录 AMR',
   'settings.onboardingConnectBody': '',
   'settings.onboardingRecommended': '推荐',
   'settings.onboardingAmrCloudOfficialBadge': '官方',

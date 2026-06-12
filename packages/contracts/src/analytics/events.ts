@@ -437,8 +437,9 @@ export type TrackingChatPanelPageViewSource =
 //
 // CSV row "Onboarding / page_view". Fires once per step exposure inside the
 // welcome flow. The current first-run flow is Goal → Source → Brief →
-// Generation; the older about-you/newsletter/design-system literals remain
-// in the contract for historical rows and post-result follow-ups.
+// Connect AMR → Generation; the older about-you/newsletter/design-system
+// literals remain in the contract for historical rows and post-result
+// follow-ups.
 export type TrackingOnboardingArea =
   | 'goal'
   | 'source'
