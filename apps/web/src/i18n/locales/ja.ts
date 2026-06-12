@@ -515,6 +515,7 @@ export const ja: Dict = {
   'homeHero.chip.prototype': 'プロトタイプ',
   'homeHero.chip.liveArtifact': 'ライブアーティファクト',
   'homeHero.chip.deck': 'スライドデッキ',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': '画像',
   'homeHero.chip.video': '動画',
   'homeHero.chip.hyperframes': 'HyperFrames',

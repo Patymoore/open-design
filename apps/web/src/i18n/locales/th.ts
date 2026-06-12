@@ -515,6 +515,7 @@ export const th: Dict = {
   'homeHero.chip.prototype': 'ต้นแบบ',
   'homeHero.chip.liveArtifact': 'Artifact แบบเรียลไทม์',
   'homeHero.chip.deck': 'ชุดสไลด์',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': 'รูปภาพ',
   'homeHero.chip.video': 'วิดีโอ',
   'homeHero.chip.hyperframes': 'HyperFrames',

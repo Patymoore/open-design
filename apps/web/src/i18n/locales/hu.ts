@@ -515,6 +515,7 @@ export const hu: Dict = {
   'homeHero.chip.prototype': 'Prototípus',
   'homeHero.chip.liveArtifact': 'Élő artifact',
   'homeHero.chip.deck': 'Diasor',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': 'Kép',
   'homeHero.chip.video': 'Videó',
   'homeHero.chip.hyperframes': 'HyperFrames',

@@ -1091,6 +1091,11 @@ function renderMetadataBlock(
       '- **connector-source rule**: if the user names a connector/source (for example Notion) and daemon connector tools are available, list connectors before asking where the data comes from. When the named connector is `connected`, use its read-only tools and ask follow-up questions only for missing topic/page/database details, multiple equally plausible matches, or an unconnected/missing connector.',
     );
   }
+  if (metadata.intent === 'diagram') {
+    lines.push(
+      '- **intent**: diagram — the user chose Diagram. Turn the supplied text or brief into a commercial editorial diagram, not a generic prototype page. Prefer the active Diagram plugin guidance, choose a visual grammar before drawing, and output a self-contained HTML file with inline SVG.',
+    );
+  }
 
   if (metadata.kind === 'prototype') {
     lines.push(

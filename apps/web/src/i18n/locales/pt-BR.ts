@@ -515,6 +515,7 @@ export const ptBR: Dict = {
   'homeHero.chip.prototype': 'Protótipo',
   'homeHero.chip.liveArtifact': 'Artefato ao vivo',
   'homeHero.chip.deck': 'Apresentação de slides',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': 'Imagem',
   'homeHero.chip.video': 'Vídeo',
   'homeHero.chip.hyperframes': 'HyperFrames',

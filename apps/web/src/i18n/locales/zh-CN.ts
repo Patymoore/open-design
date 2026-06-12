@@ -515,6 +515,7 @@ export const zhCN: Dict = {
   'homeHero.chip.prototype': '原型',
   'homeHero.chip.liveArtifact': '实时看板',
   'homeHero.chip.deck': '幻灯片',
+  'homeHero.chip.diagram': '图解',
   'homeHero.chip.image': '图片',
   'homeHero.chip.video': '视频',
   'homeHero.chip.hyperframes': 'HyperFrames',

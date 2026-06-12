@@ -42,6 +42,10 @@ describe('defaultScenarioPluginIdForKind', () => {
       kind: 'prototype',
       intent: 'live-artifact',
     })).toBe('example-live-artifact');
+    expect(defaultScenarioPluginIdForProjectMetadata({
+      kind: 'prototype',
+      intent: 'diagram',
+    })).toBe('example-diagram');
     expect(defaultScenarioPluginIdForProjectMetadata({ kind: 'prototype' }))
       .toBe('example-web-prototype');
     expect(defaultScenarioPluginIdForProjectMetadata(undefined)).toBeNull();

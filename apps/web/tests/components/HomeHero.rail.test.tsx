@@ -433,5 +433,15 @@ describe('HomeHero intent rail', () => {
         fidelity: 'high-fidelity',
       },
     });
+    expect(findChip('diagram')?.action).toMatchObject({
+      kind: 'apply-scenario',
+      pluginId: 'example-diagram',
+      projectKind: 'prototype',
+      projectMetadata: {
+        kind: 'prototype',
+        intent: 'diagram',
+        fidelity: 'high-fidelity',
+      },
+    });
   });
 });

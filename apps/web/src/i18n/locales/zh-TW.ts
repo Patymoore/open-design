@@ -515,6 +515,7 @@ export const zhTW: Dict = {
   'homeHero.chip.prototype': '原型',
   'homeHero.chip.liveArtifact': '即時看板',
   'homeHero.chip.deck': '簡報',
+  'homeHero.chip.diagram': '圖解',
   'homeHero.chip.image': '圖片',
   'homeHero.chip.video': '影片',
   'homeHero.chip.hyperframes': 'HyperFrames',

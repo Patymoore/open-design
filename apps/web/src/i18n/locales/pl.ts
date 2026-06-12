@@ -515,6 +515,7 @@ export const pl: Dict = {
   'homeHero.chip.prototype': 'Prototyp',
   'homeHero.chip.liveArtifact': 'Aktywny artefakt',
   'homeHero.chip.deck': 'Prezentacja',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': 'Obraz',
   'homeHero.chip.video': 'Wideo',
   'homeHero.chip.hyperframes': 'HyperFrames',

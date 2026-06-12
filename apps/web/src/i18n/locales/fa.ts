@@ -515,6 +515,7 @@ export const fa: Dict = {
   'homeHero.chip.prototype': 'نمونه اولیه',
   'homeHero.chip.liveArtifact': 'آرتیفکت زنده',
   'homeHero.chip.deck': 'اسلاید',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': 'تصویر',
   'homeHero.chip.video': 'ویدیو',
   'homeHero.chip.hyperframes': 'HyperFrames',

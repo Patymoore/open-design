@@ -1,0 +1,191 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "example-diagram",
+  "title": "Diagram",
+  "title_i18n": {
+    "en": "Diagram",
+    "zh-CN": "图解",
+    "zh-TW": "圖解"
+  },
+  "version": "0.1.0",
+  "description": "Create commercial editorial diagrams from existing text: flows, architecture maps, timelines, decision trees, Venn diagrams, org charts, funnels, and other structured visual explanations.",
+  "description_i18n": {
+    "en": "Create commercial editorial diagrams from existing text: flows, architecture maps, timelines, decision trees, Venn diagrams, org charts, funnels, and other structured visual explanations.",
+    "zh-CN": "把现有文本转成商业级图解：流程图、架构图、时间线、决策树、Venn 图、组织结构图、漏斗图和其他结构化视觉说明。",
+    "zh-TW": "將現有文字轉成商業級圖解：流程圖、架構圖、時間線、決策樹、Venn 圖、組織圖、漏斗圖和其他結構化視覺說明。"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Open Design",
+    "url": "https://github.com/nexu-io"
+  },
+  "homepage": "https://github.com/nexu-io/open-design/tree/main/plugins/_official/examples/diagram",
+  "tags": [
+    "example",
+    "first-party",
+    "diagram",
+    "infographic",
+    "flowchart",
+    "architecture",
+    "timeline",
+    "decision-tree",
+    "venn",
+    "editorial",
+    "svg",
+    "prototype"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "scenario",
+    "taskKind": "new-generation",
+    "mode": "prototype",
+    "scenario": "presentation",
+    "surface": "web",
+    "preview": {
+      "type": "html",
+      "entry": "./example.html"
+    },
+    "useCase": {
+      "query": {
+        "en": "Turn {{sourceText}} into a {{visualStyle}} diagram. Select the best diagram grammar when {{diagramType}} is auto, use {{brandDirection}} for visual direction, and output a single self-contained HTML file with inline SVG using the {{outputVariant}} variant.",
+        "zh-CN": "把 {{sourceText}} 转成 {{visualStyle}} 图解。若 {{diagramType}} 为 auto，请自动选择最合适的图解语法；视觉方向使用 {{brandDirection}}；用 {{outputVariant}} 变体输出一个内联 SVG 的单文件 HTML。"
+      },
+      "exampleOutputs": [
+        {
+          "path": "./example.html",
+          "title": "Editorial architecture diagram"
+        }
+      ]
+    },
+    "inputs": [
+      {
+        "name": "sourceText",
+        "label": "Source text",
+        "type": "string",
+        "required": true,
+        "placeholder": "Paste the text, notes, process, architecture, or explanation to turn into a diagram.",
+        "default": "the user's brief"
+      },
+      {
+        "name": "diagramType",
+        "label": "Diagram type",
+        "type": "select",
+        "required": true,
+        "options": [
+          "auto",
+          "architecture",
+          "flowchart",
+          "sequence",
+          "timeline",
+          "swimlane",
+          "quadrant",
+          "venn",
+          "tree",
+          "org-chart",
+          "layers",
+          "pyramid",
+          "cycle",
+          "radial",
+          "process-pipeline",
+          "infographic",
+          "er",
+          "state",
+          "nested"
+        ],
+        "default": "auto"
+      },
+      {
+        "name": "visualStyle",
+        "label": "Visual style",
+        "type": "string",
+        "required": true,
+        "placeholder": "commercial editorial, clean investor-grade, hand-drawn whiteboard",
+        "default": "commercial editorial"
+      },
+      {
+        "name": "brandDirection",
+        "label": "Brand direction",
+        "type": "string",
+        "placeholder": "the active project design system, Linear-like, editorial monochrome",
+        "default": "the active project design system"
+      },
+      {
+        "name": "outputVariant",
+        "label": "Output variant",
+        "type": "select",
+        "required": true,
+        "options": [
+          "minimal light",
+          "minimal dark",
+          "full editorial"
+        ],
+        "default": "minimal light"
+      }
+    ],
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ],
+      "designSystem": {
+        "primary": true
+      },
+      "assets": [
+        "./example.html",
+        "./assets/template.html",
+        "./assets/template-dark.html",
+        "./assets/template-full.html",
+        "./references/style-guide.md",
+        "./references/type-architecture.md",
+        "./references/type-flowchart.md",
+        "./references/type-sequence.md",
+        "./references/type-state.md",
+        "./references/type-er.md",
+        "./references/type-timeline.md",
+        "./references/type-swimlane.md",
+        "./references/type-quadrant.md",
+        "./references/type-nested.md",
+        "./references/type-tree.md",
+        "./references/type-org-chart.md",
+        "./references/type-layers.md",
+        "./references/type-venn.md",
+        "./references/type-pyramid.md",
+        "./references/type-cycle.md",
+        "./references/type-process-pipeline.md",
+        "./references/infographic-patterns.md",
+        "./references/primitive-annotation.md",
+        "./references/primitive-sketchy.md",
+        "./LICENSE.third-party.md"
+      ]
+    },
+    "pipeline": {
+      "stages": [
+        {
+          "id": "discovery",
+          "atoms": [
+            "discovery-question-form"
+          ]
+        },
+        {
+          "id": "generate",
+          "atoms": [
+            "file-write",
+            "live-artifact"
+          ]
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject",
+      "fs:write"
+    ]
+  }
+}

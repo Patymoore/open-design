@@ -124,6 +124,30 @@ export const HOME_HERO_CHIPS: ReadonlyArray<HomeHeroChip> = [
     action: { kind: 'apply-scenario', pluginId: 'example-hyperframes', projectKind: 'video' },
   },
   {
+    id: 'diagram',
+    label: 'Diagram',
+    icon: 'grid',
+    group: 'create',
+    hint: 'Turn text into commercial diagrams, flows, infographics, maps, timelines, and decision visuals.',
+    action: {
+      kind: 'apply-scenario',
+      pluginId: 'example-diagram',
+      projectKind: 'prototype',
+      projectMetadata: {
+        kind: 'prototype',
+        intent: 'diagram',
+        fidelity: 'high-fidelity',
+      },
+      inputs: {
+        sourceText: 'the user brief',
+        diagramType: 'auto',
+        visualStyle: 'commercial editorial',
+        brandDirection: 'the active project design system',
+        outputVariant: 'minimal light',
+      },
+    },
+  },
+  {
     id: 'live-artifact',
     label: 'Live artifact',
     icon: 'refresh',

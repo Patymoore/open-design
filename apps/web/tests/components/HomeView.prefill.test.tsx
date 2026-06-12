@@ -245,6 +245,67 @@ const LIVE_ARTIFACT_PLUGIN = {
   },
 };
 
+const DIAGRAM_PLUGIN = {
+  ...DEFAULT_PLUGIN,
+  id: 'example-diagram',
+  title: 'Diagram',
+  source: '/tmp/diagram',
+  fsPath: '/tmp/diagram',
+  manifest: {
+    ...DEFAULT_PLUGIN.manifest,
+    name: 'example-diagram',
+    title: 'Diagram',
+    description: 'Create commercial editorial diagrams from text.',
+    od: {
+      kind: 'scenario',
+      taskKind: 'new-generation',
+      mode: 'prototype',
+      scenario: 'presentation',
+      useCase: {
+        query: 'Turn {{sourceText}} into a {{visualStyle}} diagram using {{brandDirection}}.',
+      },
+      inputs: [
+        {
+          name: 'sourceText',
+          type: 'string',
+          required: true,
+          default: 'the user brief',
+          label: 'Source text',
+        },
+        {
+          name: 'diagramType',
+          type: 'select',
+          required: true,
+          options: ['auto', 'architecture', 'flowchart', 'timeline'],
+          default: 'auto',
+          label: 'Diagram type',
+        },
+        {
+          name: 'visualStyle',
+          type: 'string',
+          required: true,
+          default: 'commercial editorial',
+          label: 'Visual style',
+        },
+        {
+          name: 'brandDirection',
+          type: 'string',
+          default: 'the active project design system',
+          label: 'Brand direction',
+        },
+        {
+          name: 'outputVariant',
+          type: 'select',
+          required: true,
+          options: ['minimal light', 'minimal dark', 'full editorial'],
+          default: 'minimal light',
+          label: 'Output variant',
+        },
+      ],
+    },
+  },
+};
+
 const LIVE_ARTIFACT_IMAGE_TEMPLATE_PLUGIN = {
   ...LIVE_ARTIFACT_PLUGIN,
   id: 'image-template-notion-team-dashboard-live-artifact',
@@ -409,6 +470,25 @@ const LIVE_ARTIFACT_APPLY_RESULT = {
   projectMetadata: {
     skillId: 'live-artifact',
   },
+};
+
+const DIAGRAM_APPLY_RESULT = {
+  ...AUTHORING_APPLY_RESULT,
+  query: DIAGRAM_PLUGIN.manifest.od.useCase.query,
+  inputs: DIAGRAM_PLUGIN.manifest.od.inputs,
+  appliedPlugin: {
+    ...AUTHORING_APPLY_RESULT.appliedPlugin,
+    snapshotId: 'snap-diagram',
+    pluginId: 'example-diagram',
+    inputs: {
+      sourceText: 'the user brief',
+      diagramType: 'auto',
+      visualStyle: 'commercial editorial',
+      brandDirection: 'the active project design system',
+      outputVariant: 'minimal light',
+    },
+  },
+  projectMetadata: {},
 };
 
 function stubAnimationFrame() {
@@ -1205,6 +1285,71 @@ describe('HomeView prompt handoff', () => {
       projectKind: 'deck',
       projectMetadata: expect.objectContaining({
         kind: 'deck',
+      }),
+    })));
+  });
+
+  it('binds the Diagram chip without replacing the prompt and submits diagram intent metadata', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url) => {
+      if (typeof url === 'string' && url === '/api/plugins') {
+        return new Response(JSON.stringify({ plugins: [DIAGRAM_PLUGIN] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (typeof url === 'string' && url.includes('/api/plugins/example-diagram/apply')) {
+        return new Response(JSON.stringify(DIAGRAM_APPLY_RESULT), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    stubAnimationFrame();
+    const onSubmit = vi.fn();
+
+    render(
+      <HomeView
+        projects={[]}
+        designSystems={[REFLY_DESIGN_SYSTEM]}
+        defaultDesignSystemId="ds-refly"
+        onSubmit={onSubmit}
+        onOpenProject={() => undefined}
+        onViewAllProjects={() => undefined}
+      />,
+    );
+
+    await clearActiveTypeChip();
+    await setPromptAndSettle('Turn these launch notes into a visual decision tree.');
+    fireEvent.click(await screen.findByTestId('home-hero-rail-diagram'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Diagram');
+    });
+    expect(homeHeroPromptText()).toBe('Turn these launch notes into a visual decision tree.');
+    expect(fetchMock.mock.calls.some(([url]) => (
+      typeof url === 'string' && url.includes('/api/plugins/example-diagram/apply')
+    ))).toBe(false);
+
+    fireEvent.click(screen.getByTestId('home-hero-submit'));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/plugins/example-diagram/apply',
+      expect.anything(),
+    ));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      pluginId: 'example-diagram',
+      projectKind: 'prototype',
+      projectMetadata: expect.objectContaining({
+        kind: 'prototype',
+        intent: 'diagram',
+        fidelity: 'high-fidelity',
+      }),
+      pluginInputs: expect.objectContaining({
+        sourceText: 'the user brief',
+        diagramType: 'auto',
+        visualStyle: 'commercial editorial',
       }),
     })));
   });

@@ -515,6 +515,7 @@ export const ko: Dict = {
   'homeHero.chip.prototype': '프로토타입',
   'homeHero.chip.liveArtifact': '라이브 아티팩트',
   'homeHero.chip.deck': '슬라이드 덱',
+  'homeHero.chip.diagram': 'Diagram',
   'homeHero.chip.image': '이미지',
   'homeHero.chip.video': '동영상',
   'homeHero.chip.hyperframes': 'HyperFrames',
