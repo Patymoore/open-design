@@ -2230,6 +2230,298 @@ test('[P0] sending another prompt while a run is active queues it and starts it 
   );
 });
 
+test('[P0] editing a queued prompt updates the next run request before it starts', async ({ page }) => {
+  await routeMockAgents(page);
+
+  let runCount = 0;
+  const runBodies: Array<Record<string, unknown>> = [];
+  let releaseFirstRun!: () => void;
+  const firstRunReleased = new Promise<void>((resolve) => {
+    releaseFirstRun = resolve;
+  });
+
+  await page.route('**/api/runs', async (route) => {
+    const raw = route.request().postData();
+    if (raw) runBodies.push(JSON.parse(raw) as Record<string, unknown>);
+    runCount += 1;
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ runId: `edited-queued-run-${runCount}` }),
+    });
+  });
+
+  let eventCount = 0;
+  await page.route('**/api/runs/*/events', async (route) => {
+    eventCount += 1;
+    if (eventCount === 1) {
+      await firstRunReleased;
+      await route.fulfill({
+        status: 200,
+        headers: {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+        },
+        body: [
+          'event: start',
+          'data: {"bin":"mock-agent"}',
+          '',
+          'event: end',
+          'data: {"code":0,"status":"succeeded"}',
+          '',
+          '',
+        ].join('\n'),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+      body: [
+        'event: start',
+        'data: {"bin":"mock-agent"}',
+        '',
+        'event: stdout',
+        `data: ${JSON.stringify({
+          chunk:
+            '<artifact identifier="edited-queued-artifact" type="text/html" title="Edited Queued Artifact"><!doctype html><html><body><main><h1>Edited Queued Artifact</h1></main></body></html></artifact>',
+        })}`,
+        '',
+        'event: end',
+        'data: {"code":0,"status":"succeeded"}',
+        '',
+        '',
+      ].join('\n'),
+    });
+  });
+
+  await createEmptyProject(page, 'Queued run edit before send');
+  await expectWorkspaceReady(page);
+
+  await sendPrompt(page, 'first queued edit prompt');
+  await expect.poll(() => runCount).toBe(1);
+
+  const input = page.getByTestId('chat-composer-input');
+  await input.click();
+  await input.fill('queued prompt before edit');
+  await page.getByTestId('chat-send').click();
+
+  const queuedStrip = page.getByTestId('chat-queued-send-strip');
+  await expect(queuedStrip).toBeVisible();
+  await expect(queuedStrip).toContainText('queued prompt before edit');
+  expect(runCount).toBe(1);
+
+  await queuedStrip.getByRole('button', { name: /^Edit$/i }).click();
+  await expect(input).toHaveText('queued prompt before edit');
+  await input.fill('queued prompt after edit');
+  await page.getByTestId('chat-send').click();
+
+  await expect(queuedStrip).toContainText('queued prompt after edit');
+  await expect(queuedStrip).not.toContainText('queued prompt before edit');
+  expect(runCount).toBe(1);
+
+  const release: () => void = releaseFirstRun ?? (() => { throw new Error('first run release handle missing'); });
+  release();
+
+  await expect.poll(() => runCount).toBe(2);
+  expect(runBodies[1]?.message).toContain('queued prompt after edit');
+  expect(runBodies[1]?.message).not.toContain('queued prompt before edit');
+  await expect(queuedStrip).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: /edited-queued-artifact\.html/i })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+});
+
+test('[P0] editing a queued prompt from an artifact file route keeps the file editing surface active', async ({ page }) => {
+  await routeMockAgents(page);
+
+  let runCount = 0;
+  const runBodies: Array<Record<string, unknown>> = [];
+  let releaseFirstRun!: () => void;
+  const firstRunReleased = new Promise<void>((resolve) => {
+    releaseFirstRun = resolve;
+  });
+
+  await page.route('**/api/runs', async (route) => {
+    const raw = route.request().postData();
+    if (raw) runBodies.push(JSON.parse(raw) as Record<string, unknown>);
+    runCount += 1;
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ runId: `artifact-file-queued-run-${runCount}` }),
+    });
+  });
+
+  let eventCount = 0;
+  await page.route('**/api/runs/*/events', async (route) => {
+    eventCount += 1;
+    if (eventCount === 1) {
+      await firstRunReleased;
+    }
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+      body: [
+        'event: start',
+        'data: {"bin":"mock-agent"}',
+        '',
+        'event: end',
+        'data: {"code":0,"status":"succeeded"}',
+        '',
+        '',
+      ].join('\n'),
+    });
+  });
+
+  const projectId = await createEmptyProject(page, 'Artifact file queued edit context');
+  await seedHtmlArtifact(page, projectId, 'active-edit.html', manualEditHtml());
+  await gotoProjectRoute(page, `/projects/${projectId}/files/active-edit.html`);
+
+  await expect(tabBySuffix(page, 'active-edit.html')).toBeVisible();
+  await expect(artifactPreview(page)).toBeVisible();
+  await expect(
+    artifactPreviewFrame(page).getByRole('heading', { name: 'Original Hero' }),
+  ).toBeVisible();
+  await page.getByTestId('manual-edit-mode-toggle').click();
+  await expect(artifactPreviewFrame(page).locator('html[data-od-edit-mode]')).toHaveCount(1);
+
+  await sendPrompt(page, 'first artifact file edit prompt');
+  await expect.poll(() => runCount).toBe(1);
+
+  const input = page.getByTestId('chat-composer-input');
+  await input.click();
+  await input.fill('queued artifact file prompt before edit');
+  await page.getByTestId('chat-send').click();
+
+  const queuedStrip = page.getByTestId('chat-queued-send-strip');
+  await expect(queuedStrip).toBeVisible();
+  await expect(queuedStrip).toContainText('queued artifact file prompt before edit');
+  expect(runCount).toBe(1);
+
+  await queuedStrip.getByRole('button', { name: /^Edit$/i }).click();
+  await expect(input).toHaveText('queued artifact file prompt before edit');
+  await input.fill('queued artifact file prompt after edit');
+  await page.getByTestId('chat-send').click();
+
+  await expect(queuedStrip).toContainText('queued artifact file prompt after edit');
+  await expect(queuedStrip).not.toContainText('queued artifact file prompt before edit');
+
+  const release: () => void = releaseFirstRun ?? (() => { throw new Error('first run release handle missing'); });
+  release();
+
+  await expect.poll(() => runCount).toBe(2);
+  expect(runBodies[1]?.message).toContain('queued artifact file prompt after edit');
+  expect(runBodies[1]?.message).not.toContain('queued artifact file prompt before edit');
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/(?:conversations/[^/]+/)?files/active-edit\\.html$`));
+  await expect(artifactPreviewFrame(page).locator('html[data-od-edit-mode]')).toHaveCount(1);
+  await expect(queuedStrip).toHaveCount(0);
+});
+
+test('[P1] composer plus menu design toolbox action seeds the next run request', async ({ page }) => {
+  await routeMockAgents(page);
+
+  const runBodies: Array<Record<string, unknown>> = [];
+  await page.route('**/api/runs', async (route) => {
+    const raw = route.request().postData();
+    if (raw) runBodies.push(JSON.parse(raw) as Record<string, unknown>);
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: '{"runId":"toolbox-action-run"}',
+    });
+  });
+  await page.route('**/api/runs/*/events', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+      body: [
+        'event: start',
+        'data: {"bin":"mock-agent"}',
+        '',
+        'event: end',
+        'data: {"code":0,"status":"succeeded"}',
+        '',
+        '',
+      ].join('\n'),
+    });
+  });
+
+  await createEmptyProject(page, 'Composer toolbox action run context');
+  await expectWorkspaceReady(page);
+
+  await page.getByTestId('chat-composer-input').fill('Make this dashboard feel premium.');
+  await page.getByTestId('chat-plus-trigger').click();
+  await page.getByRole('menuitem', { name: 'Design toolbox' }).click();
+  await page.getByRole('menuitem', { name: 'Match next step' }).click();
+
+  const input = page.getByTestId('chat-composer-input');
+  await expect(input).toContainText('Creative Director orchestrator');
+  await expect(input).toContainText('Preserve the intent already in the composer: Make this dashboard feel premium.');
+
+  await page.getByTestId('chat-send').click();
+  expect(runBodies[0]?.message).toContain('Creative Director orchestrator');
+  expect(runBodies[0]?.message).toContain('Make this dashboard feel premium.');
+  expect(runBodies[0]?.message).toContain('Global resource index');
+});
+
+test('[P0] composer session mode switch is carried into the next daemon run request', async ({ page }) => {
+  await routeMockAgents(page);
+
+  const runBodies: Array<Record<string, unknown>> = [];
+  await page.route('**/api/runs', async (route) => {
+    const raw = route.request().postData();
+    if (raw) runBodies.push(JSON.parse(raw) as Record<string, unknown>);
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: '{"runId":"session-mode-run"}',
+    });
+  });
+  await page.route('**/api/runs/*/events', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+      body: [
+        'event: start',
+        'data: {"bin":"mock-agent"}',
+        '',
+        'event: end',
+        'data: {"code":0,"status":"succeeded"}',
+        '',
+        '',
+      ].join('\n'),
+    });
+  });
+
+  await createEmptyProject(page, 'Composer session mode payload context');
+  await expectWorkspaceReady(page);
+
+  await page.getByTestId('session-mode-trigger').click();
+  await page.getByRole('menuitemradio', { name: 'Ask mode' }).click();
+  await expect(page.getByTestId('session-mode-trigger')).toContainText('Ask');
+
+  await page.getByTestId('chat-composer-input').fill('Explain what changed in this artifact.');
+  await page.getByTestId('chat-send').click();
+
+  expect(runBodies[0]?.message).toContain('Explain what changed in this artifact.');
+  expect(runBodies[0]?.sessionMode).toBe('chat');
+});
+
 async function routeMockAgents(page: Page) {
   await page.route('**/api/agents', async (route) => {
     await route.fulfill({
@@ -2775,8 +3067,12 @@ async function gotoProjectRoute(page: Page, path: string) {
 async function createPrototypeProject(page: Page, projectName: string) {
   await openNewProjectModal(page);
   await page.getByTestId('new-project-tab-prototype').click();
-  await page.getByTestId('new-project-name').fill(projectName);
+  await page.getByTestId('new-project-name').fill(uniqueProjectName(projectName));
   await page.getByTestId('create-project').click();
+}
+
+function uniqueProjectName(base: string): string {
+  return `${base} ${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function expectProjectsView(page: Page) {

@@ -105,7 +105,11 @@ test('[P2] captures the home plugin catalog surface', async ({ page }) => {
   // unambiguous.
   const home = page.getByTestId('entry-view-home');
   await expect(page.getByTestId('recent-projects-strip')).toBeVisible();
-  await expect(home.getByTestId('plugins-home-section')).toBeVisible();
+  const community = home.getByTestId('plugins-home-section');
+  await expect(community).toBeVisible();
+  await community.scrollIntoViewIfNeeded();
+  await expect(home.locator('article.plugins-home__card--gallery').first()).toBeVisible();
+  await expect(home.getByTestId('plugins-home-search')).toBeVisible();
 
   await captureVisual(page, 'visual-home-catalog');
 });
