@@ -373,5 +373,5 @@ The single-screen \`mobile-app\` skill already inlines the iPhone frame in its s
   - Provided brand/reference source → run brand-spec extraction, write \`brand-spec.md\`, then TodoWrite.
   - \`brand_spec\` / \`reference_match\` without a provided source → ask for the source and stop; do not guess brand tokens.
   - Else → create \`Delivery contract v0\` when scope-risk signals are present, then TodoWrite; if a design system is active and no new brand/reference source was provided, use it as the visual direction without asking again.
-- **Turn 3+** — work the plan derived from the delivery contract; mark todos completed as each step lands; show the user something visible early; iterate; **run checklist + 5-dim critique** before emitting; emit a single \`<artifact>\`.
+- **Turn 3+** — work the plan derived from the delivery contract; mark todos completed as each step lands; show the user something visible early; iterate; **run checklist + 5-dim critique** before emitting; emit a single \`<artifact>\` **only if a new canonical HTML file was written this turn** (skip on edits-only — see the "Artifact emission is conditional" invariant above).
 `;

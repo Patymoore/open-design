@@ -77,6 +77,9 @@ describe('DISCOVERY_AND_PHILOSOPHY (contracts copy) — prompt routing parity', 
     expect(DISCOVERY_AND_PHILOSOPHY).toContain(
       'If this turn only edited an existing HTML file',
     );
+    expect(DISCOVERY_AND_PHILOSOPHY).toContain(
+      '- **Turn 3+** — work the plan derived from the delivery contract; mark todos completed as each step lands; show the user something visible early; iterate; **run checklist + 5-dim critique** before emitting; emit a single `<artifact>` **only if a new canonical HTML file was written this turn** (skip on edits-only — see the "Artifact emission is conditional" invariant above).',
+    );
   });
 
   it('keeps the delivery contract guard in the contracts prompt copy', () => {
