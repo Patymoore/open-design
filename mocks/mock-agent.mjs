@@ -21,6 +21,7 @@ import { renderAsCodex }       from './lib/format-codex.mjs';
 import { renderAsClaude }      from './lib/format-claude.mjs';
 import { renderAsGemini }      from './lib/format-gemini.mjs';
 import { renderAsCursorAgent } from './lib/format-cursor-agent.mjs';
+import { renderAsKimi }        from './lib/format-kimi.mjs';
 import { renderAsPlain }       from './lib/format-plain.mjs';
 import { runAcpServer }        from './lib/format-acp.mjs';
 import { runVelaAcpServer }    from './lib/format-vela.mjs';
@@ -70,7 +71,8 @@ async function main() {
       'mock-agent: --as <agent> required\n' +
       '  supported: opencode | claude | amp | codex | gemini | cursor-agent |\n' +
       '             deepseek | qwen | grok | plain |\n' +
-      '             devin | hermes | kilo | kimi | kiro | vibe   (ACP)\n' +
+      '             kimi                                         (stream-json)\n' +
+      '             devin | hermes | kilo | kiro | vibe          (ACP)\n' +
       '             vela                                          (AMR — vela CLI)\n',
     );
     process.exit(2);
@@ -90,7 +92,7 @@ async function main() {
   // ACP agents read JSON-RPC messages off stdin one line at a time, so the
   // bulk-prompt buffering logic below doesn't apply — pickRecording sees no
   // prompt for hash-mode (use OD_MOCKS_TRACE or _POOL instead).
-  const ACP_AGENTS = new Set(['devin', 'hermes', 'kilo', 'kimi', 'kiro', 'vibe', 'vela']);
+  const ACP_AGENTS = new Set(['devin', 'hermes', 'kilo', 'kiro', 'vibe', 'vela']);
   const isAcp = ACP_AGENTS.has(opts.as);
   const prompt = isAcp ? '' : await readStdinIfPiped();
   const picked = await pickRecording({ prompt });
@@ -128,11 +130,11 @@ async function main() {
     case 'qwen':
     case 'grok':
     case 'plain':        await renderAsPlain(events, renderOpts);       break;
+    case 'kimi':         await renderAsKimi(events, renderOpts);        break;
     // ACP family — JSON-RPC server over stdio.
     case 'devin':
     case 'hermes':
     case 'kilo':
-    case 'kimi':
     case 'kiro':
     case 'vibe':         await runAcpServer(events, renderOpts);        break;
     // AMR (vela CLI) — ACP with vela-specific protocol extensions
