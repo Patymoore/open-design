@@ -47,7 +47,7 @@ jobs:
           OD_PLAYWRIGHT_TIMEOUT: 90000
         run: |
           pnpm -C e2e exec tsx scripts/playwright.ts clean
-          pnpm -C e2e exec playwright test -c playwright.visual.config.ts --grep "\\[P0\\]|\\[P1\\]|@critical"
+          pnpm -C e2e exec playwright test -c playwright.visual.config.ts
 
       - name: Write capture manifest
         run: |
