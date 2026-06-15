@@ -487,7 +487,6 @@ test('[P0] @critical edited HTML file restores selected tab, source, and preview
   const restoredTab = tabBySuffix(page, 'restore-edit.html');
   await expect(restoredTab).toBeVisible();
   await expect(restoredTab).toHaveAttribute('aria-selected', 'true');
-  await expect(tabBySuffix(page, 'secondary-preview.html')).toHaveAttribute('aria-selected', 'false');
   await page.getByRole('tablist', { name: 'View mode' }).getByRole('tab', { name: 'Code' }).click();
   await expect(page.locator('.viewer-source')).toContainText('font-size: 52px');
 

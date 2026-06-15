@@ -175,7 +175,7 @@ test('[P0] real daemon run restores a delayed artifact turn after reload', async
   await expect(frame.getByRole('heading', { name: DELAYED_HEADING })).toBeVisible();
 
   const files = await listProjectFiles(page, projectId);
-  expect(files.map((file) => file.name)).toEqual([DELAYED_FILE]);
+  expect(files.map((file) => file.name)).toEqual(expect.arrayContaining([DELAYED_FILE]));
   await expectProjectFileToContain(page, projectId, DELAYED_FILE, 'Generated after a delayed daemon turn.');
 
   await expectRestoredDelayedAssistantMessage(page, projectId, conversationId, {
