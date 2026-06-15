@@ -90,5 +90,7 @@ export function canAutoRenameProjectFromPrompt(
   if (project.metadata?.nameSource !== 'prompt' || !prompt) return false;
 
   const promptHead = prompt.trim().split(/\s+/).slice(0, 8).join(' ');
-  return Boolean(promptHead) && project.name.trim() === promptHead;
+  const summarized = summarizeProjectNameFromPrompt(prompt);
+  const currentName = project.name.trim();
+  return Boolean(promptHead) && (currentName === promptHead || currentName === summarized);
 }

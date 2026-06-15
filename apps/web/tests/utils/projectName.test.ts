@@ -57,6 +57,15 @@ describe('summarizeProjectNameFromPrompt', () => {
     expect(
       canAutoRenameProjectFromPrompt(
         {
+          name: 'Infographic 5 Habits Effective Code Reviewers',
+          metadata: { kind: 'prototype', nameSource: 'prompt' },
+        },
+        'Turn this into an infographic: "5 habits of effective code reviewers"',
+      ),
+    ).toBe(true);
+    expect(
+      canAutoRenameProjectFromPrompt(
+        {
           name: 'Design Router',
           metadata: { kind: 'prototype', nameSource: 'prompt' },
         },

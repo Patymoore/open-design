@@ -2601,6 +2601,9 @@ function daemonAgentPayloadToPersistedAgentEvent(data) {
   if (type === 'text_delta' && typeof data.delta === 'string') {
     return { kind: 'text', text: data.delta };
   }
+  if (type === 'conversation_title' && typeof data.title === 'string') {
+    return { kind: 'conversation_title', title: data.title };
+  }
   if (type === 'thinking_delta' && typeof data.delta === 'string') {
     return { kind: 'thinking', text: data.delta };
   }
@@ -10724,6 +10727,7 @@ export async function startServer({
       locale,
       research,
       context,
+      titleGeneration,
     } = chatBody;
     run.analyticsTelemetry = {
       ...(run.analyticsTelemetry ?? {}),
@@ -11179,9 +11183,23 @@ export async function startServer({
       currentStableHash,
     );
     const browserUsePromptGuard = renderBrowserUseUnavailablePrompt(run.browserUse ?? null);
+    const titleGenerationRequested =
+      titleGeneration &&
+      typeof titleGeneration === 'object' &&
+      titleGeneration.enabled === true &&
+      !agentResumeCtx.isResuming;
+    const titleGenerationPrompt = titleGenerationRequested
+      ? [
+          'Internal title task:',
+          'Before answering the user request, emit exactly one short title marker:',
+          '<od-title>Title Here</od-title>',
+          'Rules: 2-6 words, preserve the user request language, no quotes, no markdown, no punctuation unless necessary.',
+          'Do not mention this title task to the user. Continue with the normal answer after the title marker.',
+        ].join('\n')
+      : '';
     const clientInstructionParts = includeStableInstructions
-      ? [researchCommandContract, runContextPrompt, browserUsePromptGuard, systemPrompt]
-      : [researchCommandContract, runContextPrompt, browserUsePromptGuard];
+      ? [researchCommandContract, runContextPrompt, browserUsePromptGuard, titleGenerationPrompt, systemPrompt]
+      : [researchCommandContract, runContextPrompt, browserUsePromptGuard, titleGenerationPrompt];
     const clientInstructionPrompt = clientInstructionParts
       .map((part) => (typeof part === 'string' ? part.trim() : ''))
       .filter(Boolean)
@@ -12771,6 +12789,81 @@ export async function startServer({
     // Claude has its own per-message guards in claude-stream.ts.
     const runGuard = createRoleMarkerGuard('run');
     let runWarned = false;
+    const TITLE_OPEN_TAG = '<od-title>';
+    const TITLE_CLOSE_TAG = '</od-title>';
+    const TITLE_MARKER_SCAN_LIMIT = 512;
+    let titleMarkerBuffer = '';
+    let titleMarkerScanning = titleGenerationRequested;
+    let titleMarkerEmitted = false;
+
+    function sanitizeAgentGeneratedTitle(value) {
+      if (typeof value !== 'string') return '';
+      return value
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/[`*_#>\[\](){}]/g, ' ')
+        .replace(/[“”"']/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80);
+    }
+
+    function emitAgentGeneratedTitle(value) {
+      if (titleMarkerEmitted) return;
+      const title = sanitizeAgentGeneratedTitle(value);
+      if (!title) return;
+      titleMarkerEmitted = true;
+      send('agent', { type: 'conversation_title', title });
+    }
+
+    function titleTagPrefixSuffixLength(text) {
+      const max = Math.min(text.length, TITLE_OPEN_TAG.length - 1);
+      for (let len = max; len > 0; len -= 1) {
+        if (TITLE_OPEN_TAG.startsWith(text.slice(-len))) return len;
+      }
+      return 0;
+    }
+
+    function stripAgentTitleMarker(delta) {
+      if (!titleMarkerScanning || titleMarkerEmitted) return delta;
+      titleMarkerBuffer += delta;
+      const openIndex = titleMarkerBuffer.indexOf(TITLE_OPEN_TAG);
+      if (openIndex === -1) {
+        const keep = titleTagPrefixSuffixLength(titleMarkerBuffer);
+        const visible = titleMarkerBuffer.slice(0, titleMarkerBuffer.length - keep);
+        titleMarkerBuffer = keep > 0 ? titleMarkerBuffer.slice(-keep) : '';
+        return visible;
+      }
+      const visiblePrefix = titleMarkerBuffer.slice(0, openIndex);
+      if (visiblePrefix) {
+        titleMarkerBuffer = titleMarkerBuffer.slice(openIndex);
+        return visiblePrefix;
+      }
+      const titleStart = TITLE_OPEN_TAG.length;
+      const closeIndex = titleMarkerBuffer.indexOf(TITLE_CLOSE_TAG, titleStart);
+      if (closeIndex === -1) {
+        if (titleMarkerBuffer.length > TITLE_MARKER_SCAN_LIMIT) {
+          titleMarkerBuffer = '';
+          titleMarkerScanning = false;
+          return '';
+        }
+        return '';
+      }
+      const title = titleMarkerBuffer.slice(titleStart, closeIndex);
+      const after = titleMarkerBuffer.slice(closeIndex + TITLE_CLOSE_TAG.length);
+      titleMarkerBuffer = '';
+      titleMarkerScanning = false;
+      emitAgentGeneratedTitle(title);
+      return after;
+    }
+
+    function flushAgentTitleMarkerBuffer() {
+      if (!titleMarkerScanning || titleMarkerEmitted || !titleMarkerBuffer) return;
+      const openIndex = titleMarkerBuffer.indexOf(TITLE_OPEN_TAG);
+      const visible = openIndex === -1 ? titleMarkerBuffer : titleMarkerBuffer.slice(0, openIndex);
+      titleMarkerBuffer = '';
+      titleMarkerScanning = false;
+      if (visible) emitGuardedTextDelta(visible);
+    }
 
     function guardTextDelta(delta) {
       return runGuard.feedText(delta);
@@ -12883,14 +12976,19 @@ export async function startServer({
       }
       lastAgentEventPhase = summarizeAgentEventForInactivity(ev);
       noteAgentActivity();
+      // Role-marker guard for qoder / json-event-stream / pi-rpc (#3247).
+      if (ev?.type === 'text_delta' && typeof ev.delta === 'string') {
+        const visibleDelta = stripAgentTitleMarker(ev.delta);
+        if (visibleDelta) {
+          noteFirstTokenAt();
+          agentProducedOutput = true;
+          emitGuardedTextDelta(visibleDelta);
+        }
+        return;
+      }
       noteFirstTokenFromAgentEvent(ev);
       if (ev?.type && SUBSTANTIVE_AGENT_EVENT_TYPES.has(ev.type)) {
         agentProducedOutput = true;
-      }
-      // Role-marker guard for qoder / json-event-stream / pi-rpc (#3247).
-      if (ev?.type === 'text_delta' && typeof ev.delta === 'string') {
-        emitGuardedTextDelta(ev.delta);
-        return;
       }
       send('agent', ev);
     };
@@ -13177,6 +13275,7 @@ export async function startServer({
       }
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
+      flushAgentTitleMarkerBuffer();
       if (acpSession?.hasFatalError()) {
         markRpcCloseReason('fatal_rpc_error');
         return finishWithRetryDecision('failed', code ?? 1, signal ?? null);
