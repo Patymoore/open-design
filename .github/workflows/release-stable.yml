@@ -1016,21 +1016,15 @@ jobs:
     name: Publish stable Docker image
     needs:
       - metadata
-      - verify
-      - build_mac
-      - build_mac_intel
-      - build_win
-      - build_linux
+      - publish
     if: >-
       ${{
+        always() &&
+        !cancelled() &&
         needs.metadata.outputs.dry_run != 'true' &&
         needs.metadata.outputs.github_release_enabled == 'true' &&
         needs.metadata.result == 'success' &&
-        needs.verify.result == 'success' &&
-        needs.build_mac.result == 'success' &&
-        needs.build_mac_intel.result == 'success' &&
-        needs.build_win.result == 'success' &&
-        (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped')
+        needs.publish.result == 'success'
       }}
     permissions:
       contents: read
@@ -1052,7 +1046,6 @@ jobs:
       - build_mac_intel
       - build_win
       - build_linux
-      - publish_docker_image
     if: >-
       ${{
         always() &&
@@ -1063,11 +1056,7 @@ jobs:
         needs.build_mac.result == 'success' &&
         needs.build_mac_intel.result == 'success' &&
         needs.build_win.result == 'success' &&
-        (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped') &&
-        (
-          needs.metadata.outputs.github_release_enabled != 'true' ||
-          needs.publish_docker_image.result == 'success'
-        )
+        (needs.build_linux.result == 'success' || needs.build_linux.result == 'skipped')
       }}
     runs-on: ubuntu-latest
     outputs:
