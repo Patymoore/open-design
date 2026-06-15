@@ -154,6 +154,16 @@ else
   fail "kimi prompt-mode stream-json smoke failed"
 fi
 
+kimi_legacy_err="$amr_sandbox/kimi-legacy.err"
+if kimi acp -p "Reply with only: ok" --output-format stream-json \
+  > /dev/null 2> "$kimi_legacy_err"; then
+  fail "kimi legacy positional launch unexpectedly succeeded"
+elif grep -q 'too many arguments' "$kimi_legacy_err"; then
+  pass "kimi legacy positional launch fails with too many arguments"
+else
+  fail "kimi legacy positional launch failed without too many arguments"
+fi
+
 # ACP agents — JSON-RPC server. Send initialize+session/new+prompt and
 # verify the protocol responses come back in order.
 # kiro-cli and vibe-acp are the primary OD-facing bin names; test them

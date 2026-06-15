@@ -29,11 +29,13 @@ import { runVelaLogin, runVelaModels } from './lib/vela-subcommands.mjs';
 
 function parseArgs(argv) {
   const opts = { as: null, noDelay: false, reportFile: null, positionals: [] };
+  const flagsWithValue = new Set(['--as', '--agent', '--report-file', '-p', '--output-format', '--model', '-r']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--as' || a === '--agent') { opts.as = argv[++i]; continue; }
     if (a === '--no-delay')              { opts.noDelay = true; continue; }
     if (a === '--report-file')           { opts.reportFile = argv[++i]; continue; }
+    if (flagsWithValue.has(a))           { i++; continue; }
     if (a.startsWith('-')) continue;     // Unknown flag — silently skip (model/permission flags etc.)
     // Anything left is a positional — used by vela subcommand dispatch.
     opts.positionals.push(a);
@@ -49,6 +51,11 @@ function parseArgs(argv) {
     opts.reportFile = process.env.REPORT_FILE;
   }
   return opts;
+}
+
+function failUsage(message) {
+  process.stderr.write(`mock-agent: ${message}\n`);
+  process.exit(2);
 }
 
 async function readStdinIfPiped() {
@@ -67,15 +74,14 @@ async function readStdinIfPiped() {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.as) {
-    process.stderr.write(
-      'mock-agent: --as <agent> required\n' +
+    failUsage(
+      '--as <agent> required\n' +
       '  supported: opencode | claude | amp | codex | gemini | cursor-agent |\n' +
       '             deepseek | qwen | grok | plain |\n' +
       '             kimi                                         (stream-json)\n' +
       '             devin | hermes | kilo | kiro | vibe          (ACP)\n' +
       '             vela                                          (AMR — vela CLI)\n',
     );
-    process.exit(2);
   }
 
   // `vela` dispatches by the first positional arg passed by OD (login /
@@ -87,6 +93,12 @@ async function main() {
     if (cmd === 'models') return runVelaModels();
     // Default: `agent run --runtime opencode` — fall through to the ACP
     // server below with the vela-flavored protocol.
+  }
+
+  // Modern Kimi rejects the old `kimi acp ...` launch shape; keep the
+  // shared mock aligned so adapter regressions fail fast in tests.
+  if (opts.as === 'kimi' && opts.positionals.length > 0) {
+    failUsage(`too many arguments: ${opts.positionals.join(' ')}`);
   }
 
   // ACP agents read JSON-RPC messages off stdin one line at a time, so the
@@ -141,8 +153,7 @@ async function main() {
     // (agentCapabilities + models block + strict set_model gate).
     case 'vela':         await runVelaAcpServer(events, renderOpts);    break;
     default:
-      process.stderr.write(`mock-agent: unknown agent "${opts.as}"\n`);
-      process.exit(2);
+      failUsage(`unknown agent "${opts.as}"`);
   }
 }
 
