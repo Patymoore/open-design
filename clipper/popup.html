@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>OD Clipper</title>
+  </head>
+  <body>
+    <header class="head">
+      <h1>OD Clipper</h1>
+      <span id="status" class="status">…</span>
+    </header>
+
+    <section class="block">
+      <label class="label" for="daemon">Daemon URL</label>
+      <div class="row">
+        <input id="daemon" type="text" placeholder="http://127.0.0.1:7456" />
+        <button id="save-daemon" class="btn btn-ghost">Save</button>
+      </div>
+    </section>
+
+    <section id="pair-block" class="block">
+      <label class="label" for="code">Pairing code</label>
+      <p class="hint">In Open Design, open the <strong>Library</strong> tab → <em>Connect extension</em> to get a code.</p>
+      <div class="row">
+        <input id="code" type="text" inputmode="numeric" maxlength="6" placeholder="123456" />
+        <button id="pair" class="btn btn-primary">Pair</button>
+      </div>
+    </section>
+
+    <section id="capture-block" class="block">
+      <div class="capture-row">
+        <button id="shot" class="btn btn-primary">📸 Capture screenshot</button>
+        <button id="imgs" class="btn btn-ghost">🖼️ Grab images</button>
+      </div>
+      <button id="unpair" class="btn btn-link">Unpair this browser</button>
+    </section>
+
+    <p id="msg" class="msg" role="status"></p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

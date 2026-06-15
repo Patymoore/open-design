@@ -1,0 +1,110 @@
+:root {
+  color-scheme: light;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  width: 320px;
+  margin: 0;
+  padding: 14px 16px 18px;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #111827;
+  background: #fff;
+}
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.head h1 {
+  font-size: 15px;
+  margin: 0;
+}
+.status {
+  font-size: 12px;
+  color: #6b7280;
+}
+.status[data-paired='true'] {
+  color: #16a34a;
+}
+.block {
+  margin-bottom: 14px;
+}
+.label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 0 0 8px;
+}
+.row {
+  display: flex;
+  gap: 8px;
+}
+.row input {
+  flex: 1;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.capture-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms, border-color 160ms;
+}
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+}
+.btn-primary:hover {
+  background: #1d4ed8;
+}
+.btn-ghost {
+  background: #fff;
+  border-color: #e5e7eb;
+  color: #111827;
+}
+.btn-ghost:hover {
+  background: #f9fafb;
+}
+.btn-link {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-weight: 500;
+  padding: 4px 0;
+  text-align: left;
+}
+.btn-link:hover {
+  color: #dc2626;
+}
+.msg {
+  font-size: 12px;
+  margin: 6px 0 0;
+  min-height: 16px;
+}
+.msg[data-kind='ok'] {
+  color: #16a34a;
+}
+.msg[data-kind='err'] {
+  color: #dc2626;
+}

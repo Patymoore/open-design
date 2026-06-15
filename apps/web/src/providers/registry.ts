@@ -2288,3 +2288,70 @@ export async function uninstallDesignSystem(
     return { error: 'Network error' };
   }
 }
+
+// --- OD Library ------------------------------------------------------------
+
+import type {
+  LibraryAsset,
+  LibraryAssetListResponse,
+  LibraryConnectionStatus,
+  LibraryPairingStartResponse,
+} from '@open-design/contracts';
+
+/** Raw bytes URL for a library asset (image src / download href). */
+export function libraryAssetRawUrl(id: string): string {
+  return `/api/library/assets/${encodeURIComponent(id)}/raw`;
+}
+
+export interface LibraryAssetQuery {
+  kind?: string;
+  source?: string;
+  q?: string;
+  date?: string;
+  tag?: string;
+}
+
+export async function fetchLibraryAssets(query: LibraryAssetQuery = {}): Promise<LibraryAsset[]> {
+  try {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value) params.set(key, value);
+    }
+    const qs = params.toString();
+    const resp = await fetch(`/api/library/assets${qs ? `?${qs}` : ''}`);
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as LibraryAssetListResponse;
+    return json.assets ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteLibraryAsset(id: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/library/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function startLibraryPairing(): Promise<LibraryPairingStartResponse | null> {
+  try {
+    const resp = await fetch('/api/library/pair', { method: 'POST' });
+    if (!resp.ok) return null;
+    return (await resp.json()) as LibraryPairingStartResponse;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchLibraryConnection(): Promise<LibraryConnectionStatus | null> {
+  try {
+    const resp = await fetch('/api/library/connection');
+    if (!resp.ok) return null;
+    return (await resp.json()) as LibraryConnectionStatus;
+  } catch {
+    return null;
+  }
+}

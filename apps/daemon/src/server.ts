@@ -530,6 +530,12 @@ import {
   isAllowedBrowserOrigin,
   isLocalSameOrigin,
 } from './origin-validation.js';
+import { registerLibraryRoutes } from './routes/library.js';
+import {
+  libraryExtensionAllowedOrigins,
+  seedLibraryExtensionOrigins,
+} from './library-tokens.js';
+import { listLibraryTokenOrigins } from './library-store.js';
 
 /** @typedef {import('@open-design/contracts').ApiErrorCode} ApiErrorCode */
 /** @typedef {import('@open-design/contracts').ApiError} ApiError */
@@ -1495,8 +1501,12 @@ const ALL_SKILL_LIKE_ROOTS = [
   SKILLS_DIR,
   DESIGN_TEMPLATES_DIR,
 ];
+// Global OD Library data root — owned, content-addressed assets captured by
+// the clipper / `od library import`. Derived from RUNTIME_DATA_DIR per the
+// daemon data directory contract.
+const LIBRARY_DIR = path.join(RUNTIME_DATA_DIR, 'library');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
-for (const dir of [USER_SKILLS_DIR, USER_DESIGN_SYSTEMS_DIR, USER_DESIGN_TEMPLATES_DIR, PLUGIN_REGISTRY_ROOTS.userPluginsRoot]) {
+for (const dir of [USER_SKILLS_DIR, USER_DESIGN_SYSTEMS_DIR, USER_DESIGN_TEMPLATES_DIR, PLUGIN_REGISTRY_ROOTS.userPluginsRoot, LIBRARY_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 fs.mkdirSync(CRITIQUE_ARTIFACTS_DIR, { recursive: true });
@@ -4924,6 +4934,12 @@ export async function startServer({
     // the structured error shape and preflight headers for preview embeds.
     if (/^\/live-artifacts\/[^/]+\/preview$/.test(req.path)) return next();
 
+    // Extension pairing handshake: the extension's chrome-extension:// origin
+    // is not allowlisted until pairing completes, so this one route must be
+    // reachable from an unknown origin. The short-lived pairing code is the
+    // gate; the route sets its own CORS headers.
+    if (req.path === '/library/pair/confirm') return next();
+
     const origin = req.headers.origin;
     // Non-browser client → allow.
     if (origin == null || origin === '') return next();
@@ -4945,7 +4961,10 @@ export async function startServer({
     }
 
     const ports = allowedBrowserPorts(resolvedPort);
-    if (!isAllowedBrowserOrigin(origin, req.headers.host, ports, host, extraAllowedOrigins)) {
+    // Paired browser-extension origins are persisted in library_tokens and
+    // seeded into this in-memory allowlist at boot / on pairing.
+    const allowedOrigins = [...extraAllowedOrigins, ...libraryExtensionAllowedOrigins()];
+    if (!isAllowedBrowserOrigin(origin, req.headers.host, ports, host, allowedOrigins)) {
       if (req.method !== 'GET' || !isPortlessLoopbackOrigin(String(origin))) {
         return res.status(403).json({ error: 'Cross-origin requests are not allowed' });
       }
@@ -4953,6 +4972,14 @@ export async function startServer({
     next();
   });
   const db = openDatabase(PROJECT_ROOT, { dataDir: RUNTIME_DATA_DIR });
+  // Restore paired browser-extension origins into the in-memory allowlist the
+  // /api origin middleware above consults, so a paired clipper survives daemon
+  // restarts without re-pairing.
+  try {
+    seedLibraryExtensionOrigins(listLibraryTokenOrigins(db));
+  } catch {
+    // best-effort: a fresh db with no library_tokens is fine
+  }
   // Wire the upload-destination bridge to this db so multer can route
   // file uploads into baseDir-rooted projects' actual folders.
   projectMetadataLookup = (id) => {
@@ -5796,6 +5823,7 @@ export async function startServer({
     PROJECT_ROOT,
     PROJECTS_DIR,
     ARTIFACTS_DIR,
+    LIBRARY_DIR,
     RUNTIME_DATA_DIR,
     RUNTIME_DATA_DIR_CANONICAL,
     DESIGN_SYSTEMS_DIR,
@@ -6004,6 +6032,14 @@ export async function startServer({
     paths: pathDeps,
     projectStore: projectStoreDeps,
     projectFiles: projectFileDeps,
+  });
+  // OD Library — global asset registry (clipper ingest, grid, pairing, apply).
+  registerLibraryRoutes(app, {
+    db,
+    http: httpDeps,
+    paths: pathDeps,
+    projectStore: projectStoreDeps,
+    auth: authDeps,
   });
   registerSocialShareRoutes(app, { http: httpDeps });
   registerProjectRoutes(app, {

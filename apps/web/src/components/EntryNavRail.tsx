@@ -20,6 +20,7 @@ export type EntryView =
   | 'tasks'
   | 'plugins'
   | 'design-systems'
+  | 'library'
   | 'integrations';
 
 interface Props {
@@ -173,6 +174,15 @@ export function EntryNavRail({ view, onViewChange, onNewProject, open, onClose }
           testId="entry-nav-plugins"
         >
           <Icon name="grid" size={18} />
+        </NavButton>
+        <NavButton
+          active={view === 'library'}
+          ariaLabel="Library"
+          tooltip="Library"
+          onClick={() => selectView('library')}
+          testId="entry-nav-library"
+        >
+          <Icon name="image" size={18} />
         </NavButton>
         <NavButton
           active={view === 'integrations'}

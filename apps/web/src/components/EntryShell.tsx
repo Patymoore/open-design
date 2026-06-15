@@ -82,6 +82,7 @@ import { DesignsTab } from './DesignsTab';
 import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 import { DesignSystemsTab } from './DesignSystemsTab';
 import { EntryNavRail, type EntryView as EntryViewKind } from './EntryNavRail';
+import { LibrarySection } from './LibrarySection';
 import { UpdaterPopup } from './UpdaterPopup';
 import { GithubStarBadge } from './GithubStarBadge';
 import {
@@ -860,6 +861,14 @@ export function EntryShell({
                   />
                 </div>
               )}
+            </div>
+            <div data-testid="entry-view-library" data-active={view === 'library' ? 'true' : 'false'} {...inactiveViewProps(view === 'library')}>
+              <LibrarySection
+                active={view === 'library'}
+                onOpenProject={(projectId) =>
+                  navigate({ kind: 'project', projectId, conversationId: null, fileName: null })
+                }
+              />
             </div>
             {view === 'integrations' ? (
               <IntegrationsView

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "OD Clipper",
+  "version": "0.1.0",
+  "description": "Capture images, screenshots, and pages from any site into your Open Design Library.",
+  "permissions": ["scripting", "storage", "contextMenus", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "OD Clipper"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

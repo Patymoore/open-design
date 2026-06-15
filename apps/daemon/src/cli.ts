@@ -174,6 +174,12 @@ const DAEMON_BOOLEAN_FLAGS = new Set([
 ]);
 const LIBRARY_STRING_FLAGS = new Set(['daemon-url', 'query', 'tag']);
 const LIBRARY_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
+// `od library …` (OD Library asset registry). Hoisted so the dispatcher can
+// parse flags without hitting a temporal-dead-zone on these sets.
+const LIBRARY_ASSET_STRING_FLAGS = new Set([
+  'daemon-url', 'kind', 'tag', 'source', 'date', 'query', 'project', 'label',
+]);
+const LIBRARY_ASSET_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const DIAGNOSTICS_STRING_FLAGS = new Set(['daemon-url', 'output']);
 const DIAGNOSTICS_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
 const CONFIG_STRING_FLAGS = new Set(['daemon-url', 'value', 'value-json']);
@@ -281,6 +287,7 @@ const SUBCOMMAND_MAP = {
   version: runVersion,
   doctor: runDoctor,
   config: runConfig,
+  library: runLibrary,
 };
 
 if (argv[0] === 'mcp' && argv[1] === 'live-artifacts') {
@@ -6310,6 +6317,147 @@ Common options:
     default:
       console.error(`unknown subcommand: od atoms ${sub}`);
       process.exit(2);
+  }
+}
+
+function printLibraryHelp() {
+  console.log(`Usage: od library <command> [options]
+
+Commands:
+  list                      List library assets. Filters: --kind --tag --source --date
+  get <id>                  Print one asset (JSON).
+  rm <id>                   Delete an asset.
+  search <query>            Keyword search across captions / tags / titles.
+  import <file|url>         Import a local file or remote URL into the library.
+  pair                      Mint a browser-extension pairing code.
+
+Options:
+  --json                    Machine-readable output.
+  --daemon-url <url>        Override daemon URL (default: auto-discover).
+  --kind <image|video|...>  Filter/declare asset kind.
+  --tag <tag>               Filter by / attach a tag.
+  --source <kind>           Filter by source (clipper|manual-upload|agent-task|design-system|generated).
+  --date <YYYY-MM-DD>       Filter by archive date.`);
+}
+
+async function runLibrary(args) {
+  const sub = args.find((a) => !a.startsWith('-')) || '';
+  if (!sub || sub === 'help' || sub === '-h' || sub === '--help') {
+    printLibraryHelp();
+    process.exit(sub ? 0 : 2);
+  }
+  const idx = args.indexOf(sub);
+  const rest = [...args.slice(0, idx), ...args.slice(idx + 1)];
+  let flags;
+  try {
+    flags = parseFlags(rest, {
+      string: LIBRARY_ASSET_STRING_FLAGS,
+      boolean: LIBRARY_ASSET_BOOLEAN_FLAGS,
+    });
+  } catch (err) {
+    console.error(err.message);
+    process.exit(2);
+  }
+  const base = await cliDaemonBaseUrl(flags);
+  const pos = positionalArgs(rest, LIBRARY_ASSET_STRING_FLAGS);
+  const writeJson = (data) => process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+
+  try {
+    switch (sub) {
+      case 'list':
+      case 'search': {
+        const params = new URLSearchParams();
+        const query = sub === 'search' ? flags.query || pos[0] : flags.query;
+        if (query) params.set('q', query);
+        if (flags.kind) params.set('kind', flags.kind);
+        if (flags.tag) params.set('tag', flags.tag);
+        if (flags.source) params.set('source', flags.source);
+        if (flags.date) params.set('date', flags.date);
+        if (flags.project) params.set('projectId', flags.project);
+        const qs = params.toString();
+        const resp = await fetch(`${base}/api/library/assets${qs ? `?${qs}` : ''}`);
+        if (!resp.ok) return structuredHttpFailure(resp);
+        const data = await resp.json();
+        if (flags.json) return writeJson(data);
+        for (const asset of data.assets ?? []) {
+          const dims = asset.width && asset.height ? `${asset.width}x${asset.height}` : '';
+          const label = asset.sourceTitle || asset.sourceUrl || asset.caption || '';
+          console.log(`${asset.id}\t${asset.kind}\t${dims}\t${label}`);
+        }
+        return;
+      }
+      case 'get': {
+        const id = pos[0];
+        if (!id) {
+          console.error('Usage: od library get <id>');
+          process.exit(2);
+        }
+        const resp = await fetch(`${base}/api/library/assets/${encodeURIComponent(id)}`);
+        if (!resp.ok) return structuredHttpFailure(resp);
+        return writeJson(await resp.json());
+      }
+      case 'rm': {
+        const id = pos[0];
+        if (!id) {
+          console.error('Usage: od library rm <id>');
+          process.exit(2);
+        }
+        const resp = await fetch(`${base}/api/library/assets/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+        });
+        if (!resp.ok) return structuredHttpFailure(resp);
+        if (flags.json) return writeJson(await resp.json());
+        console.log(`deleted ${id}`);
+        return;
+      }
+      case 'import': {
+        const src = pos[0];
+        if (!src) {
+          console.error('Usage: od library import <file|url>');
+          process.exit(2);
+        }
+        const body = {};
+        if (/^https?:\/\//i.test(src)) {
+          body.url = src;
+          body.sourceUrl = src;
+        } else {
+          const { readFile } = await import('node:fs/promises');
+          const nodePath = await import('node:path');
+          const bytes = await readFile(src);
+          // Empty mediatype → daemon sniffs the bytes for the real mime.
+          body.dataUrl = `data:;base64,${bytes.toString('base64')}`;
+          body.filename = nodePath.basename(src);
+        }
+        if (flags.kind) body.kind = flags.kind;
+        if (flags.tag) body.tags = [flags.tag];
+        const resp = await fetch(`${base}/api/library/ingest`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!resp.ok) return structuredHttpFailure(resp);
+        const data = await resp.json();
+        if (flags.json) return writeJson(data);
+        console.log(`${data.asset.id}\t${data.deduped ? 'deduped' : 'imported'}\t${data.asset.kind}`);
+        return;
+      }
+      case 'pair': {
+        const resp = await fetch(`${base}/api/library/pair`, { method: 'POST' });
+        if (!resp.ok) return structuredHttpFailure(resp);
+        const data = await resp.json();
+        if (flags.json) return writeJson(data);
+        console.log(`Pairing code: ${data.code}`);
+        console.log('Enter this code in the OD Clipper extension popup within 5 minutes.');
+        return;
+      }
+      default:
+        console.error(`unknown subcommand: od library ${sub}`);
+        printLibraryHelp();
+        process.exit(2);
+    }
+  } catch (err) {
+    surfaceFetchError(err, base);
+    process.exit(3);
   }
 }
 
