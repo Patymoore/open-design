@@ -19,15 +19,19 @@ describe('manualEditKindForElement', () => {
     expect(manualEditKindForElement(makeEl('<div><p>one</p><p>two</p></div>'))).toBe('container');
   });
 
-  it('treats a div wrapping only inline formatting as editable text', () => {
-    expect(manualEditKindForElement(makeEl('<div>Hello <strong>world</strong></div>'))).toBe('text');
+  it('treats an element with inline child markup as a container, not text', () => {
+    // The source patcher rejects a set-text commit when the target has element
+    // children ("This element contains nested markup"), so we must NOT offer a
+    // caret there — it would type then fail to persist. Style-only container.
+    expect(manualEditKindForElement(makeEl('<div>Hello <strong>world</strong></div>'))).toBe('container');
+    expect(manualEditKindForElement(makeEl('<p>See <a href="#">link</a> now</p>'))).toBe('container');
   });
 
-  it('treats list items as editable text', () => {
+  it('treats list items (text-only) as editable text', () => {
     expect(manualEditKindForElement(makeEl('<li>Backlog item</li>'))).toBe('text');
   });
 
-  it('treats table cells as editable text', () => {
+  it('treats table cells (text-only) as editable text', () => {
     const table = document.createElement('table');
     table.innerHTML = '<tbody><tr><td>3 pts</td></tr></tbody>';
     expect(manualEditKindForElement(table.querySelector('td')!)).toBe('text');
@@ -36,10 +40,6 @@ describe('manualEditKindForElement', () => {
   it('treats h4/h5/h6 headings as editable text', () => {
     expect(manualEditKindForElement(makeEl('<h4>Sub heading</h4>'))).toBe('text');
     expect(manualEditKindForElement(makeEl('<h6>Fine print</h6>'))).toBe('text');
-  });
-
-  it('keeps paragraphs with inline children editable', () => {
-    expect(manualEditKindForElement(makeEl('<p>See <a href="#">link</a> now</p>'))).toBe('text');
   });
 
   it('keeps anchors as links and images as images', () => {

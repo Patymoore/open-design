@@ -11,15 +11,6 @@ export const MANUAL_EDIT_HOST_NODE_SELECTOR = [
   '[data-od-deck-fix]',
 ].join(',');
 
-// Tags that, when they appear as a child, still leave the parent as a single
-// run of editable text rather than a structural container. Block-level
-// children (another <div>, <p>, <li>, <table>…) flip an element to a container.
-export const MANUAL_EDIT_INLINE_TAGS = new Set<string>([
-  'a', 'span', 'strong', 'em', 'b', 'i', 'u', 's', 'small', 'mark', 'sub', 'sup',
-  'code', 'kbd', 'samp', 'var', 'abbr', 'time', 'cite', 'q', 'br', 'wbr', 'del',
-  'ins', 'bdi', 'bdo', 'data', 'dfn', 'label', 'output', 'ruby', 'rt', 'rp',
-]);
-
 export type ManualEditKind = 'text' | 'link' | 'image' | 'container';
 
 export function manualEditDomPathForElement(el: Element): string {
@@ -56,23 +47,21 @@ export function isSourceMappableManualEditElement(el: Element): boolean {
 }
 
 /**
- * An element is a "text leaf" when it carries visible text and every element
- * child is inline formatting (no nested block that would make it a layout
- * container). This — not the tag name — is what decides whether a click drops
- * a text caret: a bare `<div>Title</div>` or an `<li>`/`<td>`/`<h4>` is just as
- * editable as a `<p>`, while a `<div>` wrapping other blocks stays a container
- * you style rather than type into.
+ * A "text leaf" carries visible text and has NO element children, so a click
+ * can drop a caret and the committed text round-trips through the source
+ * patcher. This — not the tag name — is what makes a bare `<div>Title</div>`,
+ * an `<li>`, a `<td>`, or an `<h4>` editable, exactly like a `<p>`.
+ *
+ * Elements with element children (even inline ones like `<strong>`/`<a>`) are
+ * deliberately NOT text leaves: `applyManualEditPatch` rejects a `set-text`
+ * patch whenever the target `hasElementChildren`, so offering a caret there
+ * would let the user type and then fail to persist. Those stay containers
+ * (style-only) until the patcher can persist nested markup.
  */
-export function manualEditElementHasOnlyInlineContent(el: Element): boolean {
+export function manualEditElementIsTextLeaf(el: Element): boolean {
   const text = (el.textContent || '').trim();
   if (!text) return false;
-  const children = el.children;
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i];
-    const tag = child && child.tagName ? child.tagName.toLowerCase() : '';
-    if (!MANUAL_EDIT_INLINE_TAGS.has(tag)) return false;
-  }
-  return true;
+  return el.children.length === 0;
 }
 
 /**
@@ -87,7 +76,7 @@ export function manualEditKindForElement(el: Element): ManualEditKind {
   const tag = el.tagName ? el.tagName.toLowerCase() : '';
   if (tag === 'a') return 'link';
   if (tag === 'img') return 'image';
-  if (manualEditElementHasOnlyInlineContent(el)) return 'text';
+  if (manualEditElementIsTextLeaf(el)) return 'text';
   return 'container';
 }
 
@@ -180,7 +169,6 @@ export function buildManualEditBridge(enabled: boolean): string {
   var discoverySelector = ${JSON.stringify(MANUAL_EDIT_DISCOVERY_SELECTOR)};
   var hostNodeSelector = ${JSON.stringify(MANUAL_EDIT_HOST_NODE_SELECTOR)};
   var sourcePathAttr = ${JSON.stringify(MANUAL_EDIT_SOURCE_PATH_ATTR)};
-  var inlineTags = ${JSON.stringify(Array.from(MANUAL_EDIT_INLINE_TAGS).reduce((acc, tag) => { acc[tag] = true; return acc; }, {} as Record<string, true>))};
   var styleProps = ['fontFamily','fontSize','fontWeight','color','textAlign','lineHeight','letterSpacing','width','height','minHeight','gap','flexDirection','justifyContent','alignItems','backgroundColor','opacity','padding','paddingTop','paddingRight','paddingBottom','paddingLeft','margin','marginTop','marginRight','marginBottom','marginLeft','border','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','borderStyle','borderColor','borderRadius'];
   function isHostNode(el){
     return !!(el && el.matches && el.matches(hostNodeSelector));
@@ -210,15 +198,10 @@ export function buildManualEditBridge(enabled: boolean): string {
   function isDiscoveryTarget(el){
     return !!(el && el.matches && el.matches(discoverySelector));
   }
-  function hasOnlyInlineContent(el){
+  function isTextLeaf(el){
     var text = (el.textContent || '').trim();
     if (!text) return false;
-    var children = el.children;
-    for (var i = 0; i < children.length; i++) {
-      var tag = children[i].tagName ? children[i].tagName.toLowerCase() : '';
-      if (!inlineTags[tag]) return false;
-    }
-    return true;
+    return el.children.length === 0;
   }
   function inferKind(el){
     var explicit = el.getAttribute('data-od-edit');
@@ -226,7 +209,7 @@ export function buildManualEditBridge(enabled: boolean): string {
     var tag = el.tagName ? el.tagName.toLowerCase() : '';
     if (tag === 'a') return 'link';
     if (tag === 'img') return 'image';
-    if (hasOnlyInlineContent(el)) return 'text';
+    if (isTextLeaf(el)) return 'text';
     return 'container';
   }
   function labelFor(el, id, kind){
