@@ -40,14 +40,14 @@ describe("tools-dev local env loading", () => {
     const result = loadWorkspaceLocalEnv({ workspaceRoot, env });
 
     assert.equal(result.loaded, true);
-    assert.equal(env.POSTHOG_KEY, "phc_from_parent");
+    assert.equal(env.POSTHOG_KEY, "phc_from_file");
     assert.equal(env.LANGFUSE_PUBLIC_KEY, "pk_from_file");
     assert.equal(env[TELEMETRY_ENV_KEY], LOCAL_DEVELOPMENT_TELEMETRY_ENV);
     assert.deepEqual(result.loadedFiles, [".env.local"]);
-    assert.deepEqual(result.keys, ["LANGFUSE_PUBLIC_KEY", TELEMETRY_ENV_KEY]);
+    assert.deepEqual(result.keys, ["LANGFUSE_PUBLIC_KEY", TELEMETRY_ENV_KEY, "POSTHOG_KEY"]);
   });
 
-  it("loads workspace env files in precedence order without overriding earlier values", async () => {
+  it("loads workspace env files in precedence order without overriding higher-priority files", async () => {
     const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "od-local-env-"));
     await writeFile(path.join(workspaceRoot, ".env"), "FROM_BASE=base\nSHARED=base\n");
     await writeFile(path.join(workspaceRoot, ".env.development"), "FROM_DEV=dev\nSHARED=dev\n");

@@ -39,7 +39,7 @@ export function loadWorkspaceLocalEnv(options: {
 
     const parsed = parseDotEnvLocal(readFileSync(envPath, "utf8"));
     for (const [key, value] of Object.entries(parsed)) {
-      if (env[key] !== undefined) continue;
+      if (loadedKeys.has(key)) continue;
       env[key] = value;
       loadedKeys.add(key);
     }
