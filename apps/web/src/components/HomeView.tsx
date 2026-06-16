@@ -362,18 +362,6 @@ export function HomeView({
     },
     [analytics.track],
   );
-  const handleCommunityOpenExternal = useCallback(
-    (record: InstalledPluginRecord) => {
-      trackCommunityGalleryClick(analytics.track, {
-        page_name: 'home',
-        area: 'community_gallery',
-        element: 'card_open_external',
-        plugin_id: record.sourceMarketplaceEntryName ?? record.id,
-        plugin_type: record.marketplaceTrust ?? 'official',
-      });
-    },
-    [analytics.track],
-  );
   const inputRef = useRef<HomeHeroHandle | null>(null);
   const homeViewRef = useRef<HTMLDivElement | null>(null);
   const consumedHandoffIdRef = useRef<number | null>(null);
@@ -1699,7 +1687,6 @@ export function HomeView({
           pendingApplyId={pendingApplyId}
           onUse={(record, action) => void routePluginUse(record, action)}
           onOpenDetails={handleCommunityOpenDetails}
-          onOpenExternal={handleCommunityOpenExternal}
           onBrowseRegistry={onBrowseRegistry}
           preferDefaultFacet={false}
           cardLayout="gallery"

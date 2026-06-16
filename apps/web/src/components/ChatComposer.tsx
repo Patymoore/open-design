@@ -41,6 +41,7 @@ import type { AppConfig, ChatAttachment, ChatCommentAttachment, Project, Project
 import type {
   ContextItem,
   AppliedPluginSnapshot,
+  ChatAnalyticsEntryFrom,
   ChatSessionMode,
   ConnectorDetail,
   InstalledPluginRecord,
@@ -308,6 +309,10 @@ export interface ChatSendMeta {
   // for this run only is composed with the extra skill bodies, without
   // touching the project's persistent `skillId`.
   skillIds?: string[];
+  /** Overrides the run_created / run_finished `entry_from` analytics prop for
+   *  this send (e.g. 'mark' when the turn is sent from the Mark draw overlay).
+   *  Behavior never depends on it; it only shapes PostHog props. */
+  entryFrom?: ChatAnalyticsEntryFrom;
 }
 
 /**
@@ -396,6 +401,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
     const [stagedVisualComments, setStagedVisualComments] = useState<ChatCommentAttachment[]>([]);
     const streamingAnnotationSendPendingRef = useRef(false);
+    // Remembers the entry_from that the deferred streaming send must carry once
+    // it flushes. The Mark draw-overlay tags 'mark' synchronously; without this
+    // the flush effect would report the run as the default composer entry.
+    const streamingAnnotationSendEntryFromRef = useRef<ChatSendMeta['entryFrom']>(undefined);
     const [streamingAnnotationSendPending, setStreamingAnnotationSendPendingState] = useState(false);
     // Skills the user has @-mentioned for this turn. We dedupe on id and
     // strip the chip when the user removes the corresponding `@<skill>`
@@ -472,6 +481,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     const applyDesignToolboxActionRef = useRef<(action: DesignToolboxAction) => void>(() => {});
     // Same latest-closure trick for picking a skill by id from the next-step card.
     const applyDesignToolboxSkillByIdRef = useRef<(skillId: string) => void>(() => {});
+    // Best-effort entry_from carried from a guided Next-step action: the card
+    // only seeds the composer, so the tag is stashed here and consumed by the
+    // next `sendComposedTurn` (then cleared). An explicit meta.entryFrom always
+    // wins over this pending value.
+    const pendingEntryFromRef = useRef<ChatAnalyticsEntryFrom | null>(null);
     const petEnabled = Boolean(onAdoptPet && onTogglePet);
     const linkedDirs = projectMetadata?.linkedDirs ?? [];
     // The project's working directory: the local folder the agent can read
@@ -937,9 +951,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         applyDesignToolboxAction: (id: DesignToolboxActionId) => {
           const action = getDesignToolboxAction(id);
           if (!action) return;
+          pendingEntryFromRef.current = 'next_step';
           applyDesignToolboxActionRef.current(action);
         },
         applyDesignToolboxSkill: (skillId: string) => {
+          pendingEntryFromRef.current = 'next_step';
           applyDesignToolboxSkillByIdRef.current(skillId);
         },
         openDesignToolbox: () => {
@@ -1031,7 +1047,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               ...attachments,
             ]
           : attachments;
-      onSend(prompt, nextAttachments, nextCommentAttachments, meta);
+      // Apply a pending Next-step tag if the caller didn't set its own
+      // entry_from, then clear it so it only colours the immediate next send.
+      const pendingEntryFrom = pendingEntryFromRef.current;
+      pendingEntryFromRef.current = null;
+      const effectiveMeta: ChatSendMeta | undefined =
+        pendingEntryFrom && !meta?.entryFrom
+          ? { ...(meta ?? {}), entryFrom: pendingEntryFrom }
+          : meta;
+      onSend(prompt, nextAttachments, nextCommentAttachments, effectiveMeta);
       reset();
       return true;
     }
@@ -1545,7 +1569,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               const prompt = [draft.trim(), detail.note].filter(Boolean).join('\n');
               const attachments = sortChatAttachmentsByOrder([...staged, ...uploaded]);
               const nextCommentAttachments = currentCommentAttachments(visualAttachment ? [visualAttachment] : []);
-              sendComposedTurn(prompt, attachments, nextCommentAttachments, queueMeta(currentRunContextMeta()));
+              // Mark draw-overlay → run: tag entry_from='mark' so the dashboard
+              // separates annotation-driven runs from plain composer sends.
+              sendComposedTurn(prompt, attachments, nextCommentAttachments, { ...queueMeta(currentRunContextMeta()), entryFrom: 'mark' });
               ack({ ok: true });
               return;
             }
@@ -1553,6 +1579,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
             if (detail.action === 'send') {
               if (streaming) {
                 appendAnnotationToComposer();
+                // Carry entry_from='mark' through the deferred send so the
+                // flush effect below reports the run as a Mark annotation
+                // rather than the default composer entry.
+                streamingAnnotationSendEntryFromRef.current = 'mark';
                 setStreamingAnnotationSendPending(true);
                 ack({ ok: true });
                 return;
@@ -1565,7 +1595,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               const prompt = [draft.trim(), detail.note].filter(Boolean).join('\n');
               const attachments = sortChatAttachmentsByOrder([...staged, ...uploaded]);
               const nextCommentAttachments = currentCommentAttachments(visualAttachment ? [visualAttachment] : []);
-              sendComposedTurn(prompt, attachments, nextCommentAttachments, currentRunContextMeta());
+              // Mark draw-overlay → run: tag entry_from='mark' so the dashboard
+              // separates annotation-driven runs from plain composer sends.
+              sendComposedTurn(prompt, attachments, nextCommentAttachments, { ...currentRunContextMeta(), entryFrom: 'mark' });
               ack({ ok: true });
               return;
             }
@@ -1610,7 +1642,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       // handler writes draftRef synchronously, so the ref is authoritative even
       // if this effect's render closure predates the last accumulation.
       const prompt = draftRef.current.trim();
-      sendComposedTurn(prompt, staged, currentCommentAttachments(), currentRunContextMeta());
+      // Consume the entry_from captured when the send was deferred (Mark
+      // draw-overlay sets 'mark'); clear it so a later plain send is unaffected.
+      const pendingEntryFrom = streamingAnnotationSendEntryFromRef.current;
+      streamingAnnotationSendEntryFromRef.current = undefined;
+      const baseMeta = currentRunContextMeta();
+      const meta = pendingEntryFrom ? { ...baseMeta, entryFrom: pendingEntryFrom } : baseMeta;
+      sendComposedTurn(prompt, staged, currentCommentAttachments(), meta);
     }, [
       commentAttachments,
       draft,
@@ -2525,9 +2563,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               invalid={workingDirMissing}
               recentDirs={recentDirs}
               onOpen={() => void checkWorkingDir()}
-              onPickDirectory={() => void handlePickWorkingDir()}
-              onSelectRecent={(dir) => void setWorkingDirFolder(dir)}
-              onClear={() => void clearWorkingDir()}
+              onPickDirectory={() => {
+                // Fire on the click itself (intent), matching the home
+                // composer's working_dir* elements so one dashboard counts the
+                // action across both surfaces.
+                trackComposerBar({ element: 'working_dir' });
+                void handlePickWorkingDir();
+              }}
+              onSelectRecent={(dir) => {
+                trackComposerBar({ element: 'working_dir_recent' });
+                void setWorkingDirFolder(dir);
+              }}
+              onClear={() => {
+                trackComposerBar({ element: 'working_dir_clear' });
+                void clearWorkingDir();
+              }}
             />
           </div>
         ) : null}

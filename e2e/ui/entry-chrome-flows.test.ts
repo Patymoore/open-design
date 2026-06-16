@@ -1119,6 +1119,36 @@ test('[P0] @critical required home plugin prompt parameters gate submit and bind
   expect(applyBodies.at(-1)?.inputs).toMatchObject(body.pluginInputs ?? {});
 });
 
+test('[P0] @critical home Ask mode creates a chat conversation without the default design router plugin', async ({ page }) => {
+  await gotoEntryHome(page);
+
+  await page.getByTestId('session-mode-trigger').click();
+  await page.getByRole('menuitemradio', { name: 'Ask mode' }).click();
+  await expect(page.getByTestId('session-mode-trigger')).toContainText('Ask');
+
+  const input = page.getByTestId('home-hero-input');
+  const prompt =
+    'Turn this into an infographic: "5 habits of effective code reviewers — read the PR description first, review tests before implementation"';
+  await input.fill(prompt);
+
+  const projectRequestPromise = page.waitForRequest(isCreateProjectRequest);
+  await page.getByTestId('home-hero-submit').click();
+
+  const request = await projectRequestPromise;
+  const body = request.postDataJSON() as {
+    name?: string;
+    pendingPrompt?: string;
+    conversationMode?: string;
+    pluginId?: string | null;
+    metadata?: { kind?: string };
+  };
+  expect(body.name).toBe('Infographic 5 Habits Effective Code Reviewers');
+  expect(body.pendingPrompt).toBe(prompt);
+  expect(body.conversationMode).toBe('chat');
+  expect(body.pluginId).toBeUndefined();
+  expect(body.metadata?.kind).toBe('other');
+});
+
 test('[P0] @critical home working directory creates the project with linked dirs instead of importing files', async ({ page }) => {
   const workingDir = '/Users/mac/Projects/Dashboard-UI-Liquid-Glass';
   await page.route('**/api/recent-dirs', async (route) => {
