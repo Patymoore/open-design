@@ -18,9 +18,15 @@
 // which already declare both — a no-op here) or a template/plugin.
 //
 // Deliberately OUT OF SCOPE:
-//   - Pure media generation (image/video/audio — generate atoms like
-//     `image-generate` / `video-generate`) stays generate-only; a raw
-//     image has nothing for critique-theater to score.
+//   - Pure media generation (image/video/audio) stays generate-only; a
+//     raw image/video/audio has nothing for critique-theater to score.
+//     This is gated on the manifest's media `mode` (image/video/audio),
+//     NOT on atom shape alone: bundled media scenarios such as
+//     `image-poster` / `audio-jingle` ship an example-driven
+//     `generate: [file-write, live-artifact]` pipeline (they seed an
+//     `example.html`), so the atom shape is indistinguishable from a
+//     code/document artifact. The media `mode` is the only explicit
+//     non-media signal, so it must win before the atom-shape check.
 //   - `task-type` / `discovery` question forms are NOT injected: a
 //     template already knows its task type and locked direction, and
 //     re-raising those GenUI surfaces would interrogate the user for
@@ -39,6 +45,12 @@ import type { PluginPipeline, PipelineStage } from '@open-design/contracts';
 // code/document artifact that benefits from plan + critique.
 const DESIGN_ARTIFACT_ATOMS = new Set(['file-write', 'live-artifact']);
 
+// Manifest media modes whose output is a raw image/video/audio asset.
+// A pipeline in any of these modes stays generate-only even when its
+// atoms look like a code artifact (bundled media scenarios seed an
+// `example.html`, so the atom shape alone is not decisive).
+const MEDIA_MODES = new Set(['image', 'video', 'audio']);
+
 // Mirrors the `plan` / `critique` stages declared by the bundled
 // od-new-generation scenario, minus `direction-picker` (see header).
 function buildPlanStage(): PipelineStage {
@@ -56,17 +68,24 @@ function buildCritiqueStage(): PipelineStage {
 export interface EnsureCoreStagesInput {
   pipeline: PluginPipeline | undefined;
   taskKind: string;
+  // Manifest `od.mode` (image/video/audio/web/deck/...). Media modes are
+  // excluded from injection regardless of atom shape.
+  mode?: string | undefined;
 }
 
 // Returns the pipeline with `plan` + `critique` guaranteed when the
 // pipeline produces a design artifact; otherwise returns it unchanged
 // (same reference when nothing is injected).
 export function ensureCoreQualityStages(input: EnsureCoreStagesInput): PluginPipeline | undefined {
-  const { pipeline, taskKind } = input;
+  const { pipeline, taskKind, mode } = input;
   if (!pipeline || !Array.isArray(pipeline.stages)) return pipeline;
   // Scope to the design-generation taskKind; migration / authoring /
   // media-generation flows own their own stage contracts.
   if (taskKind !== 'new-generation') return pipeline;
+  // Pure media (image/video/audio) stays generate-only even when the
+  // pipeline's atoms look like a code artifact — bundled media scenarios
+  // ship an example-driven `file-write`/`live-artifact` pipeline.
+  if (mode && MEDIA_MODES.has(mode)) return pipeline;
 
   const stages = pipeline.stages;
   const generateIdx = stages.findIndex(

@@ -102,6 +102,45 @@ describe('core quality-stage floor', () => {
     expect(stageIds(result.pipeline)).toEqual(['generate']);
   });
 
+  // Regression for the blocking review: bundled media scenarios seed an
+  // `example.html`, so they ship `generate: [file-write, live-artifact]`
+  // — the SAME atom shape as a code artifact. The media `mode` must keep
+  // them generate-only; gating on atom shape alone would wrongly rewrite
+  // them to plan -> generate -> critique.
+  it.each([
+    ['image', 'plugins/_official/examples/image-poster/open-design.json'],
+    ['audio', 'plugins/_official/examples/audio-jingle/open-design.json'],
+  ])('leaves the bundled %s media template generate-only despite file-write/live-artifact atoms', (mode, relPath) => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, relPath), 'utf8'),
+    ) as PluginManifest;
+    // Sanity: the shipped media template carries the code-artifact atom
+    // shape, so this guards the exact false-positive class the reviewer flagged.
+    expect(manifest.od?.mode).toBe(mode);
+    const atoms = manifest.od?.pipeline?.stages.find((s) => s.id === 'generate')?.atoms ?? [];
+    expect(atoms).toEqual(expect.arrayContaining(['file-write', 'live-artifact']));
+
+    const plugin: InstalledPluginRecord = {
+      id: manifest.name,
+      title: manifest.title ?? manifest.name,
+      version: manifest.version,
+      sourceKind: 'bundled',
+      source: `/bundled/${manifest.name}`,
+      sourceMarketplaceId: undefined,
+      pinnedRef: undefined,
+      sourceDigest: undefined,
+      trust: 'trusted',
+      capabilitiesGranted: ['prompt:inject', 'fs:write'],
+      fsPath: `/bundled/${manifest.name}`,
+      installedAt: 0,
+      updatedAt: 0,
+      manifest,
+    } as InstalledPluginRecord;
+
+    const { result } = applyPlugin({ plugin, inputs: {}, registry: REGISTRY });
+    expect(stageIds(result.pipeline)).toEqual(['generate']);
+  });
+
   it('repairs the real bundled web-prototype template (generate-only on disk)', () => {
     const manifest = JSON.parse(
       readFileSync(

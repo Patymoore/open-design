@@ -139,6 +139,7 @@ export function applyPlugin(input: ApplyInput): ApplyComputed {
   const appliedPipeline = ensureCoreQualityStages({
     pipeline: pipelineResolution.pipeline,
     taskKind,
+    mode: manifest.od?.mode,
   });
 
   const declaredSurfaces = manifest.od?.genui?.surfaces ?? [];
