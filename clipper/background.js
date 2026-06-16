@@ -137,19 +137,65 @@ async function grabImages() {
 // CORS, so it does the fetch-and-inline pass here. One fetch per resource feeds
 // both the HTML string and the Figma IR's image fills.
 
-const MAX_RESOURCE_BYTES = 6 * 1024 * 1024;
+// Page captures inline cross-origin resources as base64 data URIs into both the
+// HTML and the Figma IR before one JSON POST to the daemon (128MB ingest limit).
+// To make a capture ALWAYS fit — even an image-heavy news front page — we:
+//   1. compress large raster images (downscale + WebP) before inlining,
+//   2. inline smallest-first within a fixed budget, leaving the largest as live
+//      URLs (the HTML skeleton + styles are preserved either way),
+//   3. drop the secondary Figma IR if the combined body would still be too big,
+// so the HTML page itself can never fail to save.
+const MAX_RESOURCE_BYTES = 16 * 1024 * 1024; // per-resource fetch ceiling
+const MAX_TOTAL_INLINE_BYTES = 40 * 1024 * 1024; // total inlined data-URI budget
+const SAFE_BODY_BYTES = 100 * 1024 * 1024; // drop the Figma IR past this body size
 
-// The daemon accepts an ingest body up to 128MB. Every fetched resource is
-// inlined as a base64 data URI into BOTH the HTML string and the Figma IR, so
-// each one can contribute up to ~2× its data-URI length to the final body.
-// Budget the cumulative data-URI size so that even with that doubling, plus the
-// page's own markup and IR geometry, we stay comfortably under the limit. Once
-// the budget is spent the remaining resources are left as live URLs — the
-// capture still saves (at reduced image fidelity) instead of 413-failing the
-// whole page, which is what an image-heavy site (news front pages) used to hit.
-const MAX_TOTAL_INLINE_BYTES = 48 * 1024 * 1024;
+// Raster images above the threshold are re-encoded smaller; vectors (SVG),
+// animations (GIF), small icons, and non-images are left untouched.
+const COMPRESSIBLE_MIMES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/bmp']);
+const IMAGE_COMPRESS_OVER_BYTES = 150 * 1024;
+const MAX_IMAGE_DIM = 2000;
+const COMPRESS_MIME = 'image/webp';
+const COMPRESS_QUALITY = 0.8;
 
 // Service workers have no FileReader/createObjectURL — base64 the bytes by hand.
+function bytesToDataUri(bytes, mime) {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return `data:${mime || 'application/octet-stream'};base64,${btoa(bin)}`;
+}
+
+// Re-encode a large raster image to a smaller, downscaled WebP so an image-heavy
+// page's inlined payload stays small enough to always ingest. Service workers
+// expose createImageBitmap + OffscreenCanvas, and because we fetched the bytes
+// ourselves (not read them off a cross-origin <img>) the canvas isn't tainted,
+// so convertToBlob works. Returns a data URI, or null to fall back to the
+// original (decode failed, or re-encoding wasn't actually smaller).
+async function compressImageToDataUri(buf, originalBase64Len) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(new Blob([buf]), { imageOrientation: 'from-image' });
+  } catch {
+    return null;
+  }
+  try {
+    const scale = Math.min(1, MAX_IMAGE_DIM / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+    const blob = await canvas.convertToBlob({ type: COMPRESS_MIME, quality: COMPRESS_QUALITY });
+    const dataUri = bytesToDataUri(new Uint8Array(await blob.arrayBuffer()), COMPRESS_MIME);
+    return dataUri.length < originalBase64Len ? dataUri : null;
+  } catch {
+    return null;
+  } finally {
+    bitmap.close();
+  }
+}
+
 async function fetchAsDataUri(url) {
   const resp = await fetch(url, { redirect: 'follow' });
   if (!resp.ok) throw new Error(String(resp.status));
@@ -157,41 +203,42 @@ async function fetchAsDataUri(url) {
   if (declared && declared > MAX_RESOURCE_BYTES) throw new Error('too large');
   const buf = await resp.arrayBuffer();
   if (buf.byteLength > MAX_RESOURCE_BYTES) throw new Error('too large');
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
   const mime = (resp.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
-  return `data:${mime};base64,${btoa(bin)}`;
+  if (COMPRESSIBLE_MIMES.has(mime) && buf.byteLength > IMAGE_COMPRESS_OVER_BYTES) {
+    const approxBase64Len = Math.ceil(buf.byteLength / 3) * 4;
+    const compressed = await compressImageToDataUri(buf, approxBase64Len);
+    if (compressed) return compressed;
+  }
+  return bytesToDataUri(new Uint8Array(buf), mime);
 }
 
 async function buildResourceMap(urls, includeImages) {
   const map = new Map();
   let skipped = 0;
   if (!includeImages || !Array.isArray(urls) || !urls.length) return { map, skipped };
-  // Fetches run in parallel, but JS is single-threaded so the read-check-write
-  // of `inlinedBytes` between awaits is atomic — no lost updates. Inlining order
-  // is whichever fetch resolves first; once over budget the rest stay live.
-  let inlinedBytes = 0;
-  await Promise.all(
+  // Fetch (and compress) every candidate, then inline SMALLEST-FIRST until the
+  // budget is spent — so we keep the most images and the ones we drop (left as
+  // live URLs) are the largest. This bounds the inlined total by construction,
+  // so the page's images can never push the body over the ingest limit.
+  const candidates = await Promise.all(
     urls.map(async (url) => {
-      let dataUri;
       try {
-        dataUri = await fetchAsDataUri(url);
+        const dataUri = await fetchAsDataUri(url);
+        return { url, dataUri, size: dataUri.length };
       } catch {
-        // hotlink-protected / oversized / offline — leave the original URL
-        return;
+        return null; // hotlink-protected / oversized / offline — leave the URL
       }
-      if (inlinedBytes + dataUri.length > MAX_TOTAL_INLINE_BYTES) {
-        skipped += 1; // budget spent — leave this resource as a live URL
-        return;
-      }
-      inlinedBytes += dataUri.length;
-      map.set(url, dataUri);
     }),
   );
+  let used = 0;
+  for (const c of candidates.filter(Boolean).sort((a, b) => a.size - b.size)) {
+    if (used + c.size > MAX_TOTAL_INLINE_BYTES) {
+      skipped += 1; // budget spent — this (larger) resource stays a live URL
+      continue;
+    }
+    used += c.size;
+    map.set(c.url, c.dataUri);
+  }
   return { map, skipped };
 }
 
@@ -262,7 +309,15 @@ async function capturePage(opts) {
 
 async function capturePageToLibrary(opts) {
   const cap = await capturePage(opts);
-  const figmaCapture = cap.figmaIr ? JSON.stringify(cap.figmaIr) : undefined;
+  let figmaCapture = cap.figmaIr ? JSON.stringify(cap.figmaIr) : undefined;
+  // The HTML page is the primary artifact. The Figma IR carries the same inlined
+  // images a second time, so if pairing the two would push the body past the
+  // safe ingest size, drop the IR — the page itself then always saves.
+  let figmaDropped = false;
+  if (figmaCapture && cap.html.length + figmaCapture.length > SAFE_BODY_BYTES) {
+    figmaCapture = undefined;
+    figmaDropped = true;
+  }
   const r = await ingest({
     text: cap.html,
     kind: 'html',
@@ -271,13 +326,14 @@ async function capturePageToLibrary(opts) {
     sourceTitle: cap.title,
     tags: ['page-capture'],
     figmaCapture,
-    figmaNodeCount: cap.figmaNodeCount,
+    figmaNodeCount: figmaCapture ? cap.figmaNodeCount : 0,
   });
   return {
     deduped: Boolean(r.deduped),
     hasFigma: Boolean(figmaCapture),
     truncated: cap.truncated,
     partialImages: cap.partialImages || 0,
+    figmaDropped,
   };
 }
 
@@ -437,6 +493,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             hasFigma: r.hasFigma,
             truncated: r.truncated,
             partialImages: r.partialImages,
+            figmaDropped: r.figmaDropped,
           });
           break;
         }
