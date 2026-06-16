@@ -341,14 +341,13 @@ describe("tools-release local channel prepare validation", () => {
     try {
       const fakeGh = await writeFakeGhScript(ghRoot);
       const stable = await runPrepare("stable", {
-        GITHUB_REF_NAME: "main",
+        GITHUB_REF_NAME: "release/v0.10.2",
         GITHUB_REPOSITORY: "nexu-io/open-design",
         GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567",
         OPEN_DESIGN_GH_NODE_SCRIPT: fakeGh,
         OPEN_DESIGN_RELEASE_DRY_RUN: "true",
         OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN: server.origin,
         OPEN_DESIGN_STABLE_PRERELEASE_VERSION: "0.10.2-prerelease.2",
-        OPEN_DESIGN_STABLE_VERSION: "0.10.2",
       });
 
       expect(stable.stdout).toContain("[release-stable] channel: stable");
@@ -375,14 +374,13 @@ describe("tools-release local channel prepare validation", () => {
     try {
       const fakeGh = await writeFakeGhScript(ghRoot);
       const stable = await runPrepare("stable", {
-        GITHUB_REF_NAME: "main",
+        GITHUB_REF_NAME: "release/v0.10.2",
         GITHUB_REPOSITORY: "nexu-io/open-design",
         GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567",
         OPEN_DESIGN_GH_NODE_SCRIPT: fakeGh,
         OPEN_DESIGN_RELEASE_DRY_RUN: "prepublish",
         OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN: server.origin,
         OPEN_DESIGN_STABLE_PRERELEASE_VERSION: "0.10.2-prerelease.2",
-        OPEN_DESIGN_STABLE_VERSION: "0.10.2",
       });
 
       expect(stable.stdout).toContain("[release-stable] dry run mode: prepublish");
@@ -405,15 +403,37 @@ describe("tools-release local channel prepare validation", () => {
     try {
       const fakeGh = await writeFakeGhScript(ghRoot);
       await expect(runPrepare("stable", {
-        GITHUB_REF_NAME: "main",
+        GITHUB_REF_NAME: "release/v0.10.2",
         GITHUB_REPOSITORY: "nexu-io/open-design",
         GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567",
         OPEN_DESIGN_GH_NODE_SCRIPT: fakeGh,
         OPEN_DESIGN_RELEASE_DRY_RUN: "metadata",
         OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN: server.origin,
         OPEN_DESIGN_STABLE_PRERELEASE_VERSION: "0.10.2-preview.2",
-        OPEN_DESIGN_STABLE_VERSION: "0.10.2",
       })).rejects.toThrow(/prereleaseVersion must be x\.y\.z-prerelease\.N/);
+    } finally {
+      await server.close();
+      await rm(ghRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("requires stable promotion to run from the release version branch", async () => {
+    const objects: Record<string, unknown> = {};
+    const server = await startMetadataServer(objects);
+    const ghRoot = await mkdtemp(join(tmpdir(), "od-tools-release-gh-"));
+    objects["prerelease/versions/0.10.2-prerelease.2/metadata.json"] = stablePrereleaseMetadata(server.origin);
+
+    try {
+      const fakeGh = await writeFakeGhScript(ghRoot);
+      await expect(runPrepare("stable", {
+        GITHUB_REF_NAME: "main",
+        GITHUB_REPOSITORY: "nexu-io/open-design",
+        GITHUB_SHA: "0123456789abcdef0123456789abcdef01234567",
+        OPEN_DESIGN_GH_NODE_SCRIPT: fakeGh,
+        OPEN_DESIGN_RELEASE_DRY_RUN: "metadata",
+        OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN: server.origin,
+        OPEN_DESIGN_STABLE_PRERELEASE_VERSION: "0.10.2-prerelease.2",
+      })).rejects.toThrow(/requires GITHUB_REF_NAME to be release\/vX\.Y\.Z; got main/);
     } finally {
       await server.close();
       await rm(ghRoot, { force: true, recursive: true });

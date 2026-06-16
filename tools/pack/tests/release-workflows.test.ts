@@ -299,6 +299,7 @@ describe("release workflows", () => {
     expect(stable).toContain("--notarize");
     expect(stable).toContain("run: pnpm exec tools-release prepare stable");
     expect(stable).toContain("OPEN_DESIGN_RELEASE_CHANNEL: stable");
+    expect(stable).not.toContain("OPEN_DESIGN_STABLE_VERSION:");
     expect(stable).toContain("type: choice");
     expect(stable).toContain("- metadata");
     expect(stable).toContain("- prepublish");

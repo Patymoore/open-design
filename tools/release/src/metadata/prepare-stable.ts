@@ -92,7 +92,7 @@ function parseStableDryRunMode(value: string | undefined): StableDryRunMode {
   fail("OPEN_DESIGN_RELEASE_DRY_RUN must be metadata, prepublish, true, or false");
 }
 
-function parseStableVersionInput(value: string | undefined, sourceName: string): ParsedStableVersion | null {
+function parseBaseVersionInput(value: string | undefined, sourceName: string): ParsedStableVersion | null {
   const trimmed = value?.trim() ?? "";
   if (trimmed.length === 0) return null;
 
@@ -104,17 +104,22 @@ function parseStableVersionInput(value: string | undefined, sourceName: string):
   return { parsed, source: sourceName, value: trimmed };
 }
 
-function resolveStableBaseVersion(branch: string, inputValue: string | undefined): ParsedStableVersion {
+function parseReleaseBranchVersion(branch: string): ParsedStableVersion | null {
   const branchMatch = stableReleaseBranchPattern.exec(branch);
-  const branchVersion =
-    branchMatch?.[1] == null
-      ? null
-      : ({
-          parsed: parseReleaseBaseVersion(branchMatch[1]) ?? fail(`invalid release branch version: ${branchMatch[1]}`),
-          source: "GITHUB_REF_NAME",
-          value: branchMatch[1],
-        } satisfies ParsedStableVersion);
-  const inputVersion = parseStableVersionInput(inputValue, "OPEN_DESIGN_STABLE_VERSION");
+  if (branchMatch?.[1] == null) {
+    return null;
+  }
+
+  return {
+    parsed: parseReleaseBaseVersion(branchMatch[1]) ?? fail(`invalid release branch version: ${branchMatch[1]}`),
+    source: "GITHUB_REF_NAME",
+    value: branchMatch[1],
+  } satisfies ParsedStableVersion;
+}
+
+function resolvePrereleaseBaseVersion(branch: string, inputValue: string | undefined): ParsedStableVersion {
+  const branchVersion = parseReleaseBranchVersion(branch);
+  const inputVersion = parseBaseVersionInput(inputValue, "OPEN_DESIGN_STABLE_VERSION");
 
   if (branchVersion != null) {
     if (inputVersion != null && inputVersion.value !== branchVersion.value) {
@@ -127,7 +132,15 @@ function resolveStableBaseVersion(branch: string, inputValue: string | undefined
 
   if (inputVersion != null) return inputVersion;
 
-  fail("release-stable requires either a release/vX.Y.Z branch or OPEN_DESIGN_STABLE_VERSION");
+  fail("release-prerelease requires either a release/vX.Y.Z branch or OPEN_DESIGN_STABLE_VERSION");
+}
+
+function resolveStableBaseVersion(branch: string): ParsedStableVersion {
+  const branchVersion = parseReleaseBranchVersion(branch);
+  if (branchVersion == null) {
+    fail(`release-stable requires GITHUB_REF_NAME to be release/vX.Y.Z; got ${branch.length > 0 ? branch : "(empty)"}`);
+  }
+  return branchVersion;
 }
 
 function releaseNamespaces(channel: ReleaseChannel): ReleaseNamespaces {
@@ -541,7 +554,10 @@ const namespaces = releaseNamespaces(channel);
 const packagedVersion = await readPackagedVersion();
 const commit = process.env.GITHUB_SHA ?? "";
 const branch = process.env.GITHUB_REF_NAME ?? "";
-const stableBaseVersion = resolveStableBaseVersion(branch, process.env.OPEN_DESIGN_STABLE_VERSION);
+const stableBaseVersion =
+  channel === "stable"
+    ? resolveStableBaseVersion(branch)
+    : resolvePrereleaseBaseVersion(branch, process.env.OPEN_DESIGN_STABLE_VERSION);
 const packagedParsed = stableBaseVersion.parsed;
 if (stableBaseVersion.value !== packagedVersion) {
   fail(

@@ -7,10 +7,6 @@ on:
         description: "Exact validated prerelease version to promote, for example 0.5.1-prerelease.3."
         required: true
         type: string
-      release_version:
-        description: "Stable base version to publish, for example 0.5.1. Required when ref is not release/vX.Y.Z."
-        required: false
-        type: string
       dry_run:
         description: "Dry-run boundary to validate. metadata stops after promotion metadata; prepublish runs build/smoke/report/plan without publishing."
         required: false
@@ -20,7 +16,7 @@ on:
           - prepublish
         default: metadata
       ref:
-        description: "Optional git ref (branch/tag/SHA) to build. Empty builds the ref this workflow was dispatched on."
+        description: "Stable release branch to build, for example release/v0.5.1. Empty builds the dispatch ref, which must also be release/vX.Y.Z."
         required: false
         type: string
         default: ""
@@ -30,18 +26,13 @@ on:
         description: "Exact validated prerelease version to promote."
         required: true
         type: string
-      release_version:
-        description: "Stable base version to publish. Required when ref is not release/vX.Y.Z."
-        required: false
-        type: string
-        default: ""
       dry_run:
         description: "Dry-run boundary to validate: metadata or prepublish."
         required: false
         type: string
         default: "metadata"
       ref:
-        description: "Optional git ref (branch/tag/SHA) to build. Empty builds the caller's ref."
+        description: "Stable release branch to build. Empty builds the caller's ref, which must also be release/vX.Y.Z."
         required: false
         type: string
         default: ""
@@ -132,7 +123,6 @@ jobs:
       OPEN_DESIGN_RELEASE_CHANNEL: stable
       OPEN_DESIGN_RELEASES_PUBLIC_ORIGIN: ${{ vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
       OPEN_DESIGN_STABLE_PRERELEASE_VERSION: ${{ inputs.prerelease_version }}
-      OPEN_DESIGN_STABLE_VERSION: ${{ inputs.release_version }}
     outputs:
       base_version: ${{ steps.stable.outputs.base_version }}
       branch: ${{ steps.stable.outputs.branch }}
