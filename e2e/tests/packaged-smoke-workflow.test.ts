@@ -19,6 +19,7 @@ const releasePreviewWorkflowPath = join(workspaceRoot, ".github", "workflows", "
 const releaseStableWorkflowPath = join(workspaceRoot, ".github", "workflows", "release-stable.yml");
 const releaseStableScriptPath = join(workspaceRoot, "scripts", "release-stable.ts");
 const releaseBetaScriptPath = join(workspaceRoot, "scripts", "release-beta.ts");
+const notifyDailyFeishuWorkflowPath = join(workspaceRoot, ".github", "workflows", "notify-daily-feishu.yml");
 const releasePublishMetadataScriptPath = join(
   workspaceRoot,
   ".github",
@@ -282,6 +283,18 @@ describe("packaged smoke workflow", () => {
       await fixture.close();
       await rm(runnerTemp, { force: true, recursive: true });
     }
+  });
+
+  it("[P2] daily beta build tracks main instead of the highest release branch", async () => {
+    // Beta is the daily R&D channel and must track the development tip (main).
+    // Selecting the highest-semver release/vX.Y.Z branch stalls the build: once
+    // that branch ships stable, its base version equals the latest stable and
+    // release-beta's strictly-greater-than-stable guard rejects every run until
+    // someone hand-bumps the retired branch. main always leads stable, so it
+    // never hits that trap.
+    const workflow = await readFile(notifyDailyFeishuWorkflowPath, "utf8");
+    expect(workflow).toContain('echo "ref=main" >> "$GITHUB_OUTPUT"');
+    expect(workflow).not.toContain("refs/heads/release/v*");
   });
 
   it("[P2] supports release dry-run preflight without build or publish side effects", async () => {
