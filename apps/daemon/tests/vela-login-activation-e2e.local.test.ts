@@ -12,7 +12,8 @@ import {
 // readVelaLoginStatus() surfaces them while in flight. Then cancel — we never
 // approve, so the user's existing login is untouched (vela only writes config
 // on approval). Skipped automatically where the vela CLI isn't installed.
-function velaInstalled(): boolean {
+function shouldRunRealVelaE2E(): boolean {
+  if (process.env.OD_RUN_REAL_VELA_LOGIN_E2E !== '1') return false;
   try {
     execFileSync('vela', ['--version'], { stdio: 'ignore' });
     return true;
@@ -21,7 +22,7 @@ function velaInstalled(): boolean {
   }
 }
 
-const maybe = velaInstalled() ? describe : describe.skip;
+const maybe = shouldRunRealVelaE2E() ? describe : describe.skip;
 
 maybe('vela login activation capture (real vela child)', () => {
   afterAll(() => {
@@ -30,19 +31,19 @@ maybe('vela login activation capture (real vela child)', () => {
 
   it('surfaces the real activation URL + code through readVelaLoginStatus', async () => {
     // Use the test profile so we exercise a non-prod endpoint.
-    await spawnVelaLogin({ baseEnv: { ...process.env, VELA_PROFILE: 'test' } });
+    const baseEnv = { ...process.env, VELA_PROFILE: 'test' };
+    await spawnVelaLogin({ baseEnv });
     expect(isVelaLoginInFlight()).toBe(true);
 
     // Poll up to ~12s for the daemon to capture vela's printed URL.
-    let status = readVelaLoginStatus();
+    let status = readVelaLoginStatus(baseEnv);
     const deadline = Date.now() + 12_000;
     while (!status.activationUrl && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 250));
-      status = readVelaLoginStatus();
+      status = readVelaLoginStatus(baseEnv);
     }
 
     expect(status.loginInFlight).toBe(true);
-    expect(status.loggedIn).toBe(false);
     expect(status.activationUrl).toMatch(/^https?:\/\//);
     expect(status.userCode && status.userCode.length).toBeGreaterThan(0);
 

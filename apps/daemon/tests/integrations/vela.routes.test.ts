@@ -178,6 +178,7 @@ afterEach(() => {
   delete process.env.FAKE_VELA_LOGIN_DELAY_MS;
   delete process.env.FAKE_VELA_LOGIN_FAIL;
   delete process.env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL;
+  delete process.env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL_DELAY_MS;
   delete process.env.FAKE_VELA_LOGIN_USER_EMAIL;
   delete process.env.FAKE_VELA_LOGIN_USER_PLAN;
   delete process.env.FAKE_VELA_ENV_DUMP_PATH;
@@ -370,6 +371,21 @@ describe('POST /api/integrations/vela/login', () => {
     // attempt (which sets VELA_API_URL) succeeds.
     process.env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL =
       'start device authorization: API request failed with status 502: broken edge';
+
+    const { status } = await postJson(`${baseUrl}/api/integrations/vela/login`);
+    expect(status).toBe(202);
+
+    await waitForFile(dumpPath);
+    const env = JSON.parse(readFileSync(dumpPath, 'utf8'));
+    expect(env.VELA_API_URL).toBe(`${baseUrl}/api/integrations/vela/api-proxy`);
+  });
+
+  it('falls back to the daemon AMR API proxy when the direct failure arrives after startup grace', async () => {
+    const dumpPath = path.join(tmpHome, 'vela-env-fallback-delayed.json');
+    process.env.FAKE_VELA_ENV_DUMP_PATH = dumpPath;
+    process.env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL =
+      'start device authorization: API request failed with status 502: delayed broken edge';
+    process.env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL_DELAY_MS = '500';
 
     const { status } = await postJson(`${baseUrl}/api/integrations/vela/login`);
     expect(status).toBe(202);

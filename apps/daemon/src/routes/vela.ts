@@ -238,6 +238,7 @@ export function registerVelaRoutes(app: Express, deps: RegisterVelaRoutesDeps): 
         spawned = await spawnVelaLogin({
           configuredEnv,
           attribution: loginAttribution,
+          waitForActivation: true,
         });
       } catch (directErr) {
         const directMessage =
@@ -247,6 +248,7 @@ export function registerVelaRoutes(app: Express, deps: RegisterVelaRoutesDeps): 
           configuredEnv,
           attribution: loginAttribution,
           defaultApiUrl: velaApiProxyBaseUrl(req, getPublicBaseUrl),
+          waitForActivation: true,
         });
       }
       res.status(202).json(spawned);

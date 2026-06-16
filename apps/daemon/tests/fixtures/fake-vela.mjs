@@ -297,12 +297,19 @@ function loginAndExit() {
     env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL &&
     !(env.VELA_API_URL ?? '').trim()
   ) {
-    stderr.write(`${env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL}\n`);
-    exit(1);
+    const delayMs = Number(env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL_DELAY_MS) || 0;
+    setTimeout(() => {
+      stderr.write(`${env.FAKE_VELA_LOGIN_FAIL_WITHOUT_API_URL}\n`);
+      exit(1);
+    }, delayMs);
+    return;
   }
   if (env.FAKE_VELA_ENV_DUMP_PATH) {
     writeFileSync(env.FAKE_VELA_ENV_DUMP_PATH, JSON.stringify(env, null, 2), 'utf8');
   }
+  stdout.write('Open this URL to continue:\n');
+  stdout.write('https://fake-vela.example/cli/activate?deviceId=fake-device\n\n');
+  stdout.write('Code: FAKE-CODE\n');
   const profile = (env.VELA_PROFILE || 'prod').trim() || 'prod';
   const allowed = new Set(['prod', 'test', 'local']);
   if (!allowed.has(profile)) {
