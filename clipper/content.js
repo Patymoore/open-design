@@ -226,7 +226,7 @@
       .bar.busy-slow .busy-sub { color: rgba(255,206,120,0.95); animation: odBusyPulse 1.6s ease-in-out infinite; }
       @keyframes odBusyPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.62; } }
       .spinner {
-        width: 16px; height: 16px; border-radius: 50%;
+        flex: none; width: 16px; height: 16px; border-radius: 50%;
         border: 2px solid rgba(255,255,255,0.22); border-top-color: #fff;
         animation: odSpin 640ms linear infinite;
       }
@@ -439,11 +439,14 @@
   }
 
   // The busy strip widens the bar; if the user had dragged it near the right
-  // edge, re-clamp so it can't grow off-screen (and tuck back on stop).
+  // edge, re-clamp so it can't grow off-screen (and tuck back on stop). The
+  // widening is transient, so we preserve the user's chosen resting spot —
+  // applyPosition mutates savedPos, so snapshot and restore it around the call.
   function reclampIfMoved() {
-    if (savedPos && host.style.display !== 'none') {
-      applyPosition(clampToViewport(savedPos.left, savedPos.top));
-    }
+    if (!savedPos || host.style.display === 'none') return;
+    const keep = savedPos;
+    applyPosition(clampToViewport(savedPos.left, savedPos.top));
+    savedPos = keep;
   }
 
   function paintBusyStep(plan, idx, vars) {
@@ -460,6 +463,10 @@
     paintBusyStep(plan, 0, vars);
     bar.classList.add('busy');
     reclampIfMoved();
+    // Popup-launched captures can run while the on-page bar is hidden, where the
+    // in-bar strip is invisible — mirror the first step as a loading toast so
+    // progress is never lost. The result toast replaces it on completion.
+    if (!toolbarVisible) toast(t(plan.steps[0].key, vars), { loading: true });
     for (let i = 1; i < plan.steps.length; i++) {
       busyTimers.push(setTimeout(() => paintBusyStep(plan, i, vars), plan.steps[i].at));
     }
