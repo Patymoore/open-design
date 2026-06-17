@@ -28,6 +28,8 @@ import {
 import {
   LAUNCHER_SCHEMA_VERSION,
   buildLauncherAfterQuitArgs,
+  compareLauncherVersions,
+  hasCountedLauncherPrerelease,
   resolveLauncherVersionPaths,
   validateLauncherRuntimeDescriptor,
   type LauncherRuntimeDescriptor,
@@ -790,77 +792,15 @@ async function ensureOwnedUpdateRoot(
   }
 }
 
-type ParsedComparableVersion = {
-  nums: [number, number, number];
-  pre: string[];
-};
-
-function numberPart(value: string | undefined): number {
-  return value != null && /^[0-9]+$/.test(value) ? Number(value) : 0;
-}
-
-function parseComparableVersion(value: string): ParsedComparableVersion {
-  const cleaned = value.trim().replace(/^v/i, "").split("+", 1)[0] ?? "";
-  const nightlyMatch = /^(\d+)\.(\d+)\.(\d+)\.nightly\.(\d+)$/i.exec(cleaned);
-  if (nightlyMatch?.[1] != null && nightlyMatch[2] != null && nightlyMatch[3] != null && nightlyMatch[4] != null) {
-    return {
-      nums: [Number(nightlyMatch[1]), Number(nightlyMatch[2]), Number(nightlyMatch[3])],
-      pre: ["nightly", nightlyMatch[4]],
-    };
-  }
-
-  const prereleaseSeparator = cleaned.indexOf("-");
-  const core = prereleaseSeparator === -1 ? cleaned : cleaned.slice(0, prereleaseSeparator);
-  const prerelease = prereleaseSeparator === -1 ? "" : cleaned.slice(prereleaseSeparator + 1);
-  const nums = core.split(".");
-  return {
-    nums: [numberPart(nums[0]), numberPart(nums[1]), numberPart(nums[2])],
-    pre: prerelease.length === 0 ? [] : prerelease.split("."),
-  };
-}
-
-function hasCountedPrerelease(version: string): boolean {
-  const parsed = parseComparableVersion(version);
-  const last = parsed.pre.at(-1);
-  return parsed.pre.length >= 2 && last != null && /^[0-9]+$/.test(last);
-}
-
 function defaultChannelForVersion(version: string): DesktopUpdateChannel {
   if (/(?:^|[-.])beta(?:[-.]|$)/i.test(version)) return DESKTOP_UPDATE_CHANNELS.BETA;
   if (/(?:^|[-.])preview(?:[-.]|$)/i.test(version)) return DESKTOP_UPDATE_CHANNELS.PREVIEW;
   if (/(?:^|[-.])nightly(?:[-.]|$)/i.test(version)) return DESKTOP_UPDATE_CHANNELS.NIGHTLY;
-  return hasCountedPrerelease(version) ? DESKTOP_UPDATE_CHANNELS.BETA : DESKTOP_UPDATE_CHANNELS.STABLE;
-}
-
-function compareIdentifier(a: string, b: string): number {
-  const aNum = /^[0-9]+$/.test(a) ? Number(a) : null;
-  const bNum = /^[0-9]+$/.test(b) ? Number(b) : null;
-  if (aNum != null && bNum != null) return Math.sign(aNum - bNum);
-  if (aNum != null) return -1;
-  if (bNum != null) return 1;
-  return a.localeCompare(b);
+  return hasCountedLauncherPrerelease(version) ? DESKTOP_UPDATE_CHANNELS.BETA : DESKTOP_UPDATE_CHANNELS.STABLE;
 }
 
 export function compareVersions(a: string, b: string): number {
-  const left = parseComparableVersion(a);
-  const right = parseComparableVersion(b);
-  for (let index = 0; index < 3; index += 1) {
-    const delta = (left.nums[index] ?? 0) - (right.nums[index] ?? 0);
-    if (delta !== 0) return Math.sign(delta);
-  }
-  if (left.pre.length === 0 && right.pre.length === 0) return 0;
-  if (left.pre.length === 0) return 1;
-  if (right.pre.length === 0) return -1;
-  const max = Math.max(left.pre.length, right.pre.length);
-  for (let index = 0; index < max; index += 1) {
-    const l = left.pre[index];
-    const r = right.pre[index];
-    if (l == null) return -1;
-    if (r == null) return 1;
-    const delta = compareIdentifier(l, r);
-    if (delta !== 0) return delta;
-  }
-  return 0;
+  return compareLauncherVersions(a, b);
 }
 
 function metadataChannel(metadata: Record<string, unknown>): DesktopUpdateChannel | null {

@@ -21,6 +21,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { createJsonIpcServer } from '@open-design/sidecar';
+
 import {
   buildPackagedDaemonSpawnEnv,
   resolveDaemonStatusTimeoutMs,
@@ -267,15 +269,18 @@ describe('resolvePackagedElectronNodeCommand', () => {
  */
 function fakeChild(): EventEmitter & {
   exitCode: number | null;
+  pid: number;
   signalCode: NodeJS.Signals | null;
   fireExit: (code: number | null, signal: NodeJS.Signals | null) => void;
 } {
   const emitter = new EventEmitter() as EventEmitter & {
     exitCode: number | null;
+    pid: number;
     signalCode: NodeJS.Signals | null;
     fireExit: (code: number | null, signal: NodeJS.Signals | null) => void;
   };
   emitter.exitCode = null;
+  emitter.pid = 1234;
   emitter.signalCode = null;
   emitter.fireExit = (code, signal) => {
     emitter.exitCode = code;
@@ -499,5 +504,39 @@ describe('waitForStatus child-exit fast-fail', () => {
     expect((captured as Error).message).toMatch(/daemon exited before reporting status/);
     expect((captured as Error).message).toContain('code=2');
     expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it('does not accept ready status from a stale IPC endpoint owned by a different pid', async () => {
+    const child = fakeChild();
+    child.pid = 5678;
+    const ipcPath = join(tmpdir(), `od-test-stale-ipc-${Date.now()}.sock`);
+    const server = await createJsonIpcServer({
+      socketPath: ipcPath,
+      handler: async () => ({
+        pid: 1234,
+        state: 'running',
+        updatedAt: new Date().toISOString(),
+        url: 'http://127.0.0.1:1234',
+      }),
+    });
+
+    try {
+      let captured: unknown;
+      try {
+        await waitForStatus<{ pid?: number | null; url: string | null }>(
+          ipcPath,
+          (status) => status.url != null,
+          250,
+          { child, logPath: '/tmp/od-test-web.log' },
+        );
+      } catch (err) {
+        captured = err;
+      }
+
+      expect(captured).toBeInstanceOf(Error);
+      expect((captured as Error).message).toContain('sidecar status pid 1234 did not match spawned pid 5678');
+    } finally {
+      await server.close();
+    }
   });
 });

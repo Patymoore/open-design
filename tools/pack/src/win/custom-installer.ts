@@ -254,6 +254,10 @@ async function writeInstallerScript(config: ToolPackConfig, paths: WinPaths, pac
   const appPathsKey = escapeNsisString(identity.appPathsKey);
   const namespace = escapeNsisString(config.namespace);
   const localDataRoot = `$APPDATA\\${escapeNsisString(PRODUCT_NAME)}\\namespaces\\${escapeNsisString(sanitizeNamespace(config.namespace))}`;
+  const localCacheRoot = `${localDataRoot}\\cache`;
+  const localUpdateDownloadsRoot = `${localDataRoot}\\updates\\downloads`;
+  const localUpdateReleasesRoot = `${localDataRoot}\\updates\\releases`;
+  const localUpdateStagingRoot = `${localDataRoot}\\updates\\staging`;
   const nsisLogPath = escapeNsisString(paths.nsisLogPath);
   const runningInstancesScriptPath = join(dirname(paths.installerScriptPath), "running-instances.ps1");
 
@@ -325,6 +329,7 @@ ${createNsisLanguageInserts()}
 ${createNsisLangString("CreateDesktopShortcut", "Create desktop shortcut", { LANG_SIMPCHINESE: "创建桌面快捷方式" })}
 ${createNsisLangString("LaunchApp", `Launch ${productName}`, { LANG_SIMPCHINESE: `启动 ${productName}` })}
 ${createNsisLangString("RemoveDesktopShortcut", "Remove desktop shortcut", { LANG_SIMPCHINESE: "删除桌面快捷方式" })}
+${createNsisLangString("RemoveCacheData", "Delete downloaded update and cache files", { LANG_SIMPCHINESE: "删除已下载的更新和缓存文件" })}
 ${createNsisLangString("RemoveLocalData", "Delete local data for this installation", { LANG_SIMPCHINESE: "删除此安装的本地数据" })}
 ${createNsisLangString("UninstallOptionsTitle", "Uninstall options", { LANG_SIMPCHINESE: "卸载选项" })}
 ${createNsisLangString("UninstallOptionsSubtitle", "Choose which local items to remove.", { LANG_SIMPCHINESE: "选择要删除的本地项目。" })}
@@ -338,8 +343,10 @@ ${createNsisLangString("ExistingInstallMessage", `${productName} is already inst
 ${createNsisLangString("ExistingInstallSilentOverwrite", "Existing installation found; silent install will overwrite it.", { LANG_SIMPCHINESE: "发现已有安装；静默安装将覆盖它。" })}
 
 Var RemoveDesktopShortcutCheckbox
+Var RemoveCacheDataCheckbox
 Var RemoveLocalDataCheckbox
 Var RemoveDesktopShortcutState
+Var RemoveCacheDataState
 Var RemoveLocalDataState
 Var RunningInstancesOutput
 Var ExistingInstallLocation
@@ -418,6 +425,7 @@ FunctionEnd
 
 Function un.onInit
   StrCpy $RemoveDesktopShortcutState "\${BST_CHECKED}"
+  StrCpy $RemoveCacheDataState "\${BST_CHECKED}"
   StrCpy $RemoveLocalDataState 0
 FunctionEnd
 
@@ -660,7 +668,11 @@ Function un.UninstallOptionsPage
   Pop $RemoveDesktopShortcutCheckbox
   \${NSD_Check} $RemoveDesktopShortcutCheckbox
 
-  \${NSD_CreateCheckbox} 0 18u 100% 12u "$(RemoveLocalData)"
+  \${NSD_CreateCheckbox} 0 18u 100% 12u "$(RemoveCacheData)"
+  Pop $RemoveCacheDataCheckbox
+  \${NSD_Check} $RemoveCacheDataCheckbox
+
+  \${NSD_CreateCheckbox} 0 36u 100% 12u "$(RemoveLocalData)"
   Pop $RemoveLocalDataCheckbox
 
   nsDialogs::Show
@@ -669,9 +681,11 @@ FunctionEnd
 
 Function un.UninstallOptionsPageLeave
   StrCpy $RemoveDesktopShortcutState "\${BST_CHECKED}"
+  StrCpy $RemoveCacheDataState "\${BST_CHECKED}"
   StrCpy $RemoveLocalDataState 0
   IfSilent done
   \${NSD_GetState} $RemoveDesktopShortcutCheckbox $RemoveDesktopShortcutState
+  \${NSD_GetState} $RemoveCacheDataCheckbox $RemoveCacheDataState
   \${NSD_GetState} $RemoveLocalDataCheckbox $RemoveLocalDataState
 done:
 FunctionEnd
@@ -696,6 +710,41 @@ Function un.RemoveLocalDataRoot
   Call un.LogInstallerEvent
   Pop $0
   !insertmacro UN_LOG_PATH_STATE "local_data_after_remove" "${localDataRoot}"
+FunctionEnd
+
+Function un.RemoveCacheDataRoots
+  !insertmacro UN_LOG_PATH_STATE "cache_root_before_remove" "${localCacheRoot}"
+  !insertmacro UN_LOG_PATH_STATE "update_downloads_before_remove" "${localUpdateDownloadsRoot}"
+  !insertmacro UN_LOG_PATH_STATE "update_releases_before_remove" "${localUpdateReleasesRoot}"
+  !insertmacro UN_LOG_PATH_STATE "update_staging_before_remove" "${localUpdateStagingRoot}"
+  Push $0
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "${localCacheRoot}" rmdir /s /q "\\\\?\\${localCacheRoot}"'
+  Pop $0
+  Push "cache root remove exit=$0"
+  Call un.LogInstallerEvent
+  Pop $0
+  Push $0
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "${localUpdateDownloadsRoot}" rmdir /s /q "\\\\?\\${localUpdateDownloadsRoot}"'
+  Pop $0
+  Push "update downloads remove exit=$0"
+  Call un.LogInstallerEvent
+  Pop $0
+  Push $0
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "${localUpdateReleasesRoot}" rmdir /s /q "\\\\?\\${localUpdateReleasesRoot}"'
+  Pop $0
+  Push "update releases remove exit=$0"
+  Call un.LogInstallerEvent
+  Pop $0
+  Push $0
+  nsExec::ExecToLog 'cmd.exe /d /s /c if exist "${localUpdateStagingRoot}" rmdir /s /q "\\\\?\\${localUpdateStagingRoot}"'
+  Pop $0
+  Push "update staging remove exit=$0"
+  Call un.LogInstallerEvent
+  Pop $0
+  !insertmacro UN_LOG_PATH_STATE "cache_root_after_remove" "${localCacheRoot}"
+  !insertmacro UN_LOG_PATH_STATE "update_downloads_after_remove" "${localUpdateDownloadsRoot}"
+  !insertmacro UN_LOG_PATH_STATE "update_releases_after_remove" "${localUpdateReleasesRoot}"
+  !insertmacro UN_LOG_PATH_STATE "update_staging_after_remove" "${localUpdateStagingRoot}"
 FunctionEnd
 
 Section "Install"
@@ -787,6 +836,9 @@ after_desktop_shortcut:
   DeleteRegKey HKCU "${appPathsKey}"
   Push "event=registry_after_delete key=${registryKey} appPathsKey=${appPathsKey}"
   Call un.LogInstallerEvent
+  \${If} $RemoveCacheDataState == \${BST_CHECKED}
+    Call un.RemoveCacheDataRoots
+  \${EndIf}
   \${If} $RemoveLocalDataState == \${BST_CHECKED}
     Call un.RemoveLocalDataRoot
   \${EndIf}

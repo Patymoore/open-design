@@ -6,6 +6,8 @@ import {
   LAUNCHER_SCHEMA_VERSION,
   LauncherProtocolError,
   buildLauncherAfterQuitArgs,
+  compareLauncherVersions,
+  hasCountedLauncherPrerelease,
   parseLauncherAfterQuitArgs,
   resolveLauncherPaths,
   resolveLauncherVersionPaths,
@@ -127,5 +129,24 @@ describe("launcher runtime descriptors", () => {
         lastSuccessful: null,
       },
     })).toEqual({ reason: "no-runtime-target", selected: false });
+  });
+});
+
+describe("launcher version comparison", () => {
+  it("orders stable, prerelease, beta nightly, and dotted nightly versions", () => {
+    expect(compareLauncherVersions("1.0.1", "1.0.0")).toBe(1);
+    expect(compareLauncherVersions("1.0.0", "1.0.0")).toBe(0);
+    expect(compareLauncherVersions("1.0.0-beta.2", "1.0.0-beta.1")).toBe(1);
+    expect(compareLauncherVersions("1.0.0-beta-nightly.2", "1.0.0-beta-nightly.1")).toBe(1);
+    expect(compareLauncherVersions("1.0.0-nightly.10", "1.0.0-nightly.2")).toBe(1);
+    expect(compareLauncherVersions("1.0.0.nightly.2", "1.0.0.nightly.1")).toBe(1);
+    expect(compareLauncherVersions("1.0.0", "1.0.0-beta.9")).toBe(1);
+    expect(compareLauncherVersions("1.0.0-beta.1", "1.0.0")).toBe(-1);
+  });
+
+  it("detects counted prereleases for channel fallback compatibility", () => {
+    expect(hasCountedLauncherPrerelease("1.0.0-rc.1")).toBe(true);
+    expect(hasCountedLauncherPrerelease("1.0.0")).toBe(false);
+    expect(hasCountedLauncherPrerelease("1.0.0-rc")).toBe(false);
   });
 });
