@@ -312,6 +312,26 @@ const TAILORED_AUTH_AGENTS = new Set([
   'reasonix',
 ]);
 
+function hasNonEmptyEnv(env: RuntimeEnv, keys: string[]): boolean {
+  return keys.some((key) => {
+    const value = env[key];
+    return typeof value === 'string' && value.trim().length > 0;
+  });
+}
+
+function hasProbeSatisfyingApiKey(
+  def: Pick<RuntimeAgentDef, 'id'>,
+  env: RuntimeEnv,
+): boolean {
+  if (def.id === 'codex') {
+    return hasNonEmptyEnv(env, ['CODEX_API_KEY', 'OPENAI_API_KEY']);
+  }
+  if (def.id === 'claude') {
+    return hasNonEmptyEnv(env, ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+  }
+  return false;
+}
+
 // Classify an auth-probe's combined output into a missing-auth result, or
 // null when the output does not look like an auth failure. Agents with a
 // tailored classifier use only that (null === authenticated); every other
@@ -342,6 +362,7 @@ export async function probeAgentAuthStatus(
 ): Promise<AgentAuthProbeResult | null> {
   const probe = def.authProbe;
   if (!probe) return null;
+  if (hasProbeSatisfyingApiKey(def, env)) return { status: 'ok' };
   try {
     const { stdout, stderr } = await execAgentFile(resolvedBin, probe.args, {
       env,
