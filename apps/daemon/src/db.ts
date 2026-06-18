@@ -614,10 +614,11 @@ export function listLatestConversationRunStatuses(db: SqliteDb) {
       `SELECT m.conversation_id AS conversationId,
               m.run_id AS runId,
               m.run_status AS status,
-              COALESCE(m.ended_at, m.started_at, m.created_at) AS updatedAt
+              COALESCE(m.ended_at, m.started_at, m.created_at) AS updatedAt,
+              m.position AS position
          FROM messages m
         WHERE m.run_status IS NOT NULL
-        ORDER BY updatedAt DESC`,
+        ORDER BY updatedAt DESC, m.position DESC`,
     )
     .all() as DbRow[];
   const latestByConversation = new Map<string, DbRow>();
