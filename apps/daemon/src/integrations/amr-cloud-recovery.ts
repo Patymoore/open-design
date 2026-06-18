@@ -27,7 +27,7 @@ type RecoveryMode =
   | 'manual_topup_required'
   | 'unknown';
 
-interface StoredRecoveryContext {
+export interface StoredRecoveryContext {
   operationId: string;
   retryToken: string | null;
   status: RecoverySourceStatus;
@@ -44,6 +44,7 @@ interface StoredRecoveryContext {
   recoveryUrl: string | null;
   blockReason: string | null;
   restartAvailable: boolean;
+  restartMessage: string | null;
   createdAt: number;
   updatedAt: number;
   expiresAt: number | null;
@@ -99,6 +100,20 @@ export interface AmrCloudRecoveryService {
   }): AmrCloudRecoveryOverlay | null;
   getOverlayForRun(runId: string): AmrCloudRecoveryOverlay | null;
   getContextForRun(runId: string): StoredRecoveryContext | null;
+  /** All persisted contexts, used by daemon-restart reconciliation. */
+  listContextsForReconcile(): StoredRecoveryContext[];
+  /** Drop every persisted context for a run (terminal / malformed cleanup). */
+  discardContext(runId: string): void;
+}
+
+const TERMINAL_SOURCE_STATUSES: ReadonlySet<RecoverySourceStatus> = new Set([
+  'completed',
+  'failed',
+  'canceled',
+]);
+
+export function isTerminalRecoveryStatus(status: RecoverySourceStatus): boolean {
+  return TERMINAL_SOURCE_STATUSES.has(status);
 }
 
 export interface CreateAmrCloudRecoveryServiceDeps {
@@ -190,6 +205,7 @@ function normalizeStoredContext(value: unknown): StoredRecoveryContext | null {
     recoveryUrl: readNullableString(raw.recoveryUrl),
     blockReason: readNullableString(raw.blockReason),
     restartAvailable: raw.restartAvailable === true,
+    restartMessage: readNullableString(raw.restartMessage),
     createdAt: readTimestamp(raw.createdAt),
     updatedAt: readTimestamp(raw.updatedAt),
     expiresAt: typeof raw.expiresAt === 'number' && Number.isFinite(raw.expiresAt)
@@ -325,6 +341,7 @@ function contextFromResponse(input: {
       input.previous?.blockReason ??
       null,
     restartAvailable: input.previous?.restartAvailable === true,
+    restartMessage: input.previous?.restartMessage ?? null,
     createdAt: input.previous?.createdAt ?? input.now,
     updatedAt: input.now,
     expiresAt:
@@ -359,7 +376,10 @@ function actionFor(context: StoredRecoveryContext): AmrCloudRecoveryOverlay['use
 
 function messageFor(context: StoredRecoveryContext): string {
   if (context.restartAvailable) {
-    return 'This AMR Cloud operation can no longer continue the original local run. Restart the request to continue.';
+    return (
+      context.restartMessage ??
+      'This AMR Cloud operation can no longer continue the original local run. Restart the request to continue.'
+    );
   }
   if (context.status === 'waiting_payment') {
     return 'AMR Cloud needs a manual top-up before this request can continue.';
@@ -472,8 +492,20 @@ function apiContextOrThrow(env?: NodeJS.ProcessEnv, configuredEnv?: Record<strin
   return api;
 }
 
+const ENV_AUTH_USER_SENTINEL = 'env-auth-user';
+
+// Real AMR user identity, or null when the only credential is an environment
+// runtime key (`VELA_RUNTIME_KEY`) with no stored `~/.amr` user record. The
+// sentinel must never be compared against a stored user id to decide
+// wrong-user: two different AMR accounts authenticated purely via env key both
+// resolve to the sentinel, so treating it as an identity would both mask a real
+// account switch and falsely flag matching ones.
+function realApiUserId(api: VelaApiContext): string | null {
+  return api.user?.id || api.user?.email || null;
+}
+
 function apiUserId(api: VelaApiContext): string {
-  return api.user?.id || api.user?.email || 'env-auth-user';
+  return realApiUserId(api) ?? ENV_AUTH_USER_SENTINEL;
 }
 
 export function createAmrCloudRecoveryService(
@@ -490,7 +522,17 @@ export function createAmrCloudRecoveryService(
     configuredEnv?: Record<string, string>,
   ): Promise<StoredRecoveryContext> {
     const api = apiContextOrThrow(env, configuredEnv);
-    if (context.userId && apiUserId(api) !== context.userId) {
+    const currentUserId = realApiUserId(api);
+    // Only flag wrong-user when both sides carry a real AMR identity. When the
+    // active credential is an env runtime key (`currentUserId === null`) or the
+    // stored context was created under env-auth (sentinel), we cannot prove an
+    // account switch, so we must not block the recovery as wrong-user.
+    if (
+      currentUserId &&
+      context.userId &&
+      context.userId !== ENV_AUTH_USER_SENTINEL &&
+      currentUserId !== context.userId
+    ) {
       const next = {
         ...context,
         status: 'blocked' as RecoverySourceStatus,
@@ -638,14 +680,23 @@ export function createAmrCloudRecoveryService(
     async cancelRun(input) {
       const context = contextForRun(dataDir, input.runId);
       if (!context) return null;
+      let cancelAcknowledged = false;
       try {
         const api = apiContextOrThrow(input.env, input.configuredEnv);
         await postJson(fetchImpl, api, endpoint(context.operationId, '/cancel'), {
           version: context.version,
           retryToken: context.retryToken,
         });
+        cancelAcknowledged = true;
       } catch (err) {
         logger.warn('[amr-recovery] cancel update failed', err);
+      }
+      // Spec §6: if the AMR Cloud cancel call fails we may stop local waiting
+      // but must NOT claim the AMR Cloud operation was canceled. Leave the
+      // source status untouched and return the current overlay so the UI does
+      // not show a false "canceled" state for a still-live cloud operation.
+      if (!cancelAcknowledged) {
+        return overlayFromContext(context);
       }
       const next = {
         ...context,
@@ -677,8 +728,11 @@ export function createAmrCloudRecoveryService(
       const next = {
         ...context,
         status: 'blocked' as RecoverySourceStatus,
-        blockReason: input.message ?? context.blockReason,
         restartAvailable: true,
+        // Keep the restart guidance copy out of `blockReason`: that field is
+        // reserved for the structured block kind (e.g. `wrong_user`) that
+        // `actionFor` switches on. Restart copy lives in `restartMessage`.
+        restartMessage: input.message ?? context.restartMessage ?? null,
         userVisible: true,
         updatedAt: now(),
       };
@@ -693,6 +747,16 @@ export function createAmrCloudRecoveryService(
 
     getContextForRun(runId) {
       return contextForRun(dataDir, runId);
+    },
+
+    listContextsForReconcile() {
+      return readContexts(dataDir);
+    },
+
+    discardContext(runId) {
+      for (const context of readContexts(dataDir)) {
+        if (context.runId === runId) deleteContext(dataDir, context.operationId);
+      }
     },
   };
 }

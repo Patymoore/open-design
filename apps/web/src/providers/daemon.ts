@@ -890,6 +890,14 @@ export async function listProjectRuns(): Promise<ChatRunStatusResponse[]> {
   }
 }
 
+// An AMR Cloud Recovery overlay is "active" while it owns the run's next-step
+// UI (waiting for top-up, retrying, or offering restart). The terminal overlay
+// states (`completed`/`canceled`) do not, so they must not suppress a real
+// failure banner.
+function isActiveAmrRecoveryState(state: AmrCloudRecoveryOverlay['state']): boolean {
+  return state !== 'recovering_completed' && state !== 'recovering_canceled';
+}
+
 async function consumeDaemonRun({
   agentId,
   runId,
@@ -920,6 +928,12 @@ async function consumeDaemonRun({
   // a session-resuming runtime). Carried onto the surfaced error so the chat
   // can offer a Continue affordance. See ChatRunStatusResponse.resumable.
   let endResumable = false;
+  // Set when an AMR Cloud Recovery overlay in an active (non-terminal) state has
+  // been surfaced for this run. A manual-topup pause finalizes the run as
+  // `failed` while the overlay carries the real next-step UI, so the generic
+  // failed-run error banner must be suppressed — otherwise the user sees a
+  // payment/failure message contradicting the recovery affordance.
+  let amrRecoveryActive = false;
   let lastEventId: string | null = initialLastEventId ?? null;
   let canceled = false;
   const cancelRun = () => {
@@ -1033,6 +1047,7 @@ async function consumeDaemonRun({
           if (event.event === 'amr_recovery') {
             const recovery = (event.data as { recovery?: AmrCloudRecoveryOverlay }).recovery;
             if (recovery) {
+              if (isActiveAmrRecoveryState(recovery.state)) amrRecoveryActive = true;
               handlers.onAmrRecovery?.(recovery);
               notifyRunsChanged();
             }
@@ -1061,6 +1076,7 @@ async function consumeDaemonRun({
             //    the failure path below, carrying `end`'s resumable bit).
             const status = await fetchChatRunStatus(runId).catch(() => null);
             if (status?.amrRecovery) {
+              if (isActiveAmrRecoveryState(status.amrRecovery.state)) amrRecoveryActive = true;
               handlers.onAmrRecovery?.(status.amrRecovery);
               continue;
             }
@@ -1139,6 +1155,13 @@ async function consumeDaemonRun({
       (!serverDeclaredSuccess &&
         (exitSignal || (exitCode !== null && exitCode !== 0)));
     if (looksLikeFailure) {
+      // An active AMR Cloud Recovery overlay owns the next-step UI for this run
+      // (manual top-up / restart). Resolve the turn cleanly instead of surfacing
+      // the generic failed-run banner, which would contradict the overlay.
+      if (amrRecoveryActive) {
+        handlers.onDone(acc);
+        return;
+      }
       if (pendingStructuredError) {
         handlers.onError(markErrorResumable(pendingStructuredError, endResumable));
         return;

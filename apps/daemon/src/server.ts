@@ -249,7 +249,10 @@ import { subscribe as subscribeFileEvents } from './project-watchers.js';
 import { renderDesignSystemPreview } from './design-system-preview.js';
 import { renderDesignSystemShowcase } from './design-system-showcase.js';
 import { createChatRunService } from './runs.js';
-import { createAmrCloudRecoveryService } from './integrations/amr-cloud-recovery.js';
+import {
+  createAmrCloudRecoveryService,
+  isTerminalRecoveryStatus,
+} from './integrations/amr-cloud-recovery.js';
 import { deriveRunErrorCode, runResultFromStatus } from './run-result.js';
 import { classifyRunFailure, isResumableFailure } from './run-failure-classification.js';
 import { decideSafeRunRetry } from './run-retry-policy.js';
@@ -5371,6 +5374,136 @@ export async function startServer({
     run.amrRecovery = null;
     if (run.assistantMessageId) updateMessageAmrRecovery(db, run.assistantMessageId, null);
   };
+  // AMR recovery operations triggered outside a live run (manual resume/cancel
+  // endpoints, daemon-restart reconciliation) must talk to AMR Cloud with the
+  // SAME app-config environment the original run used. Without this the service
+  // falls back to the daemon process env and the default AMR API URL, which can
+  // diverge from the run's configured `agentCliEnv` (e.g. a non-default AMR API
+  // host or profile), breaking auth/version continuity.
+  const resolveAmrRecoveryEnv = async () => {
+    try {
+      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
+      return {
+        env: process.env,
+        configuredEnv: agentCliEnvForAgent(appConfig.agentCliEnv, 'amr'),
+      };
+    } catch {
+      return { env: process.env, configuredEnv: {} };
+    }
+  };
+  // Rebuild and start a fresh AMR run from a stored recovery context whose
+  // original in-memory run is gone (manual resume after the live run expired, or
+  // daemon-restart reconciliation). Returns the started run, or marks the
+  // context restart-available when the original turn inputs can no longer be
+  // replayed. Shared by the resume endpoint and startup reconciliation so both
+  // entry paths preserve the full original turn (attachments, comment
+  // annotations, session mode, run context).
+  const startRecoveredAmrRunFromContext = (runId, fallbackOverlay) => {
+    const context = amrCloudRecovery.getContextForRun(runId);
+    const replay = replayRequestForAssistantMessage(db, context);
+    if (!replay.ok) {
+      const restartOverlay =
+        amrCloudRecovery.markRestartAvailable({ runId, message: replay.reason }) ??
+        fallbackOverlay ??
+        null;
+      if (context?.assistantMessageId && restartOverlay) {
+        updateMessageAmrRecovery(db, context.assistantMessageId, restartOverlay);
+      }
+      return { ok: false, restartOverlay };
+    }
+    const recoveredRun = design.runs.create({
+      agentId: 'amr',
+      projectId: replay.projectId,
+      conversationId: replay.conversationId,
+      assistantMessageId: replay.assistantMessageId,
+      clientRequestId: `amr-recovery-${randomUUID()}`,
+      mediaExecution: defaultMediaExecutionPolicy(),
+      ...(replay.sessionMode ? { sessionMode: replay.sessionMode } : {}),
+      ...(replay.context ? { context: replay.context } : {}),
+      ...(replay.appliedPluginSnapshotId ? { appliedPluginSnapshotId: replay.appliedPluginSnapshotId } : {}),
+    });
+    const reboundOverlay =
+      amrCloudRecovery.rebindRun({ fromRunId: runId, toRun: recoveredRun }) ??
+      fallbackOverlay ??
+      null;
+    recoveredRun.amrRecovery = reboundOverlay;
+    db.prepare(
+      `UPDATE messages
+          SET run_id = ?, run_status = 'queued',
+              last_run_event_id = NULL,
+              amr_recovery_json = ?,
+              ended_at = NULL
+        WHERE id = ?`,
+    ).run(recoveredRun.id, JSON.stringify(reboundOverlay), replay.assistantMessageId);
+    design.runs.start(recoveredRun, () => startChatRun({
+      agentId: 'amr',
+      message: replay.message,
+      projectId: replay.projectId,
+      conversationId: replay.conversationId,
+      assistantMessageId: replay.assistantMessageId,
+      clientRequestId: recoveredRun.clientRequestId,
+      attachments: replay.attachments,
+      commentAttachments: replay.commentAttachments,
+      ...(replay.sessionMode ? { sessionMode: replay.sessionMode } : {}),
+      ...(replay.context ? { context: replay.context } : {}),
+      ...(replay.appliedPluginSnapshotId ? { appliedPluginSnapshotId: replay.appliedPluginSnapshotId } : {}),
+    }, recoveredRun));
+    return { ok: true, recoveredRun, reboundOverlay };
+  };
+  // Daemon-restart reconciliation (spec §5). A restart wipes the in-memory runs
+  // but leaves persisted recovery contexts on disk; bring them back to a
+  // coherent state. Best-effort and fired once after the server is listening.
+  const reconcileAmrCloudRecoveryOnStartup = async () => {
+    let contexts;
+    try {
+      contexts = amrCloudRecovery.listContextsForReconcile();
+    } catch (err) {
+      console.warn('[amr-recovery] startup reconcile: failed to list contexts', err);
+      return;
+    }
+    if (!contexts.length) return;
+    const recoveryEnv = await resolveAmrRecoveryEnv();
+    for (const context of contexts) {
+      try {
+        // Discard malformed/terminal contexts and pre-registered runs that never
+        // surfaced recovery UI — their local replay state is dead.
+        if (isTerminalRecoveryStatus(context.status) || !context.userVisible) {
+          amrCloudRecovery.discardContext(context.runId);
+          continue;
+        }
+        // Pull current AMR Cloud status. refreshRun verifies the AMR user and
+        // flags wrong-user contexts as blocked; it leaves the stored overlay
+        // untouched on transient failure.
+        const refreshed = await amrCloudRecovery.refreshRun({
+          runId: context.runId,
+          ...recoveryEnv,
+        });
+        const fresh = amrCloudRecovery.getContextForRun(context.runId);
+        if (!fresh || !refreshed) continue;
+        if (isTerminalRecoveryStatus(fresh.status)) {
+          amrCloudRecovery.discardContext(context.runId);
+          continue;
+        }
+        // Only automatic top-up contexts may auto-resume, and only once AMR
+        // Cloud reports retry is available. Everything else (manual top-up,
+        // wrong-user, restart) waits for explicit user action, so the persisted
+        // overlay is left in place for the UI to pick up.
+        if (fresh.mode === 'automatic_topup' && fresh.status === 'retry_available') {
+          const resumed = await amrCloudRecovery.resumeRun({
+            runId: context.runId,
+            ...recoveryEnv,
+          });
+          if (resumed?.state === 'recovering_resuming') {
+            startRecoveredAmrRunFromContext(context.runId, resumed);
+          } else if (resumed && context.assistantMessageId) {
+            updateMessageAmrRecovery(db, context.assistantMessageId, resumed);
+          }
+        }
+      } catch (err) {
+        console.warn('[amr-recovery] startup reconcile failed for run', context.runId, err);
+      }
+    }
+  };
 
   // Interactive Terminal sessions (node-pty). In-memory, process-local, and
   // killed on daemon shutdown — see shutdownDaemonRuns below.
@@ -7972,6 +8105,12 @@ export async function startServer({
               configuredEnv: configuredAgentEnv,
             });
             if (resuming) persistAmrRecoveryOverlay(run, resuming);
+            // Allow the restarted run to re-arm automatic recovery if it hits
+            // insufficient balance again. Without this reset the flag stays
+            // latched and a second account-state failure is silently dropped
+            // instead of recovered. The service caps real resume attempts
+            // (MAX_RESUME_ATTEMPTS) so this cannot loop forever.
+            run.amrAutoRecoveryScheduled = false;
             restartSameRunAfterRetry();
             return;
           }
@@ -7983,16 +8122,17 @@ export async function startServer({
             return;
           }
           if (current) {
-            persistAmrRecoveryOverlay(run, {
-              ...current,
-              state: 'recovering_restart_available',
-              userAction: 'restart_request',
-              userActionRequired: true,
-              restartAvailable: true,
+            // Persist the restart decision THROUGH the recovery service so it
+            // survives a daemon restart. Mutating only the in-memory overlay
+            // here left the stored context with `restartAvailable: false`, so
+            // restart guidance vanished on reload; markRestartAvailable writes
+            // it to disk and returns the canonical overlay.
+            const restartOverlay = amrCloudRecovery.markRestartAvailable({
+              runId: run.id,
               message:
                 'AMR Cloud automatic top-up did not become retryable in time. Restart the request to continue.',
-              updatedAt: Date.now(),
             });
+            if (restartOverlay) persistAmrRecoveryOverlay(run, restartOverlay);
           }
           design.runs.finish(run, 'failed', 1, null);
         } catch (err) {
@@ -8962,6 +9102,13 @@ export async function startServer({
     let spawnedAgentEnv = null;
     let agentStdoutTail = '';
     let agentStderrTail = '';
+    // Tracks an AMR recovery transition started from the ACP error callback so
+    // the child-close handler can await it before finalizing. AMR's ACP runtime
+    // delivers insufficient-balance through this callback and then the child is
+    // killed; without awaiting, the close handler sees `hasFatalError()` and
+    // finishes the run as a generic failure before the recovery overlay (and
+    // any automatic-topup scheduling) has been recorded.
+    let amrRecoveryInFlight = null;
     const sendAmrRecoveryOrAccountFailure = async (failure) => {
       if (failure?.code === 'AMR_INSUFFICIENT_BALANCE') {
         try {
@@ -9764,7 +9911,8 @@ export async function startServer({
               ].join('\n'),
             );
             if (failure) {
-              void sendAmrRecoveryOrAccountFailure(failure);
+              amrRecoveryInFlight = sendAmrRecoveryOrAccountFailure(failure);
+              void amrRecoveryInFlight.catch(() => {});
               return;
             }
           }
@@ -9863,6 +10011,15 @@ export async function startServer({
       }
       revokeToolToken('child_exit');
       unregisterChatAgentEventSink();
+      // If an AMR recovery transition was kicked off from the ACP error
+      // callback, let it finish recording the overlay (and any automatic-topup
+      // scheduling) BEFORE we evaluate the fatal/finalize paths below. The ACP
+      // runtime kills the child as soon as the fatal error arrives, so this
+      // close handler otherwise races ahead of the still-pending pause/refresh.
+      if (def.id === 'amr' && amrRecoveryInFlight) {
+        try { await amrRecoveryInFlight; } catch {}
+        amrRecoveryInFlight = null;
+      }
       if (acpSession?.hasFatalError()) {
         markRpcCloseReason('fatal_rpc_error');
         return finishWithRetryDecision('failed', code ?? 1, signal ?? null);
@@ -11352,7 +11509,10 @@ export async function startServer({
   app.post('/api/runs/:id/cancel', async (req, res) => {
     const run = design.runs.get(req.params.id);
     if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
-    const overlay = await amrCloudRecovery.cancelRun({ runId: run.id });
+    const overlay = await amrCloudRecovery.cancelRun({
+      runId: run.id,
+      ...(await resolveAmrRecoveryEnv()),
+    });
     if (overlay) persistAmrRecoveryOverlay(run, overlay);
     const status = await design.runs.cancel(run);
     /** @type {import('@open-design/contracts').ChatRunCancelResponse} */
@@ -11362,7 +11522,10 @@ export async function startServer({
 
   app.post('/api/runs/:id/amr-recovery/cancel', async (req, res) => {
     const run = design.runs.get(req.params.id);
-    const overlay = await amrCloudRecovery.cancelRun({ runId: req.params.id });
+    const overlay = await amrCloudRecovery.cancelRun({
+      runId: req.params.id,
+      ...(await resolveAmrRecoveryEnv()),
+    });
     if (!overlay) return sendApiError(res, 404, 'NOT_FOUND', 'AMR Cloud Recovery not found');
     if (run) persistAmrRecoveryOverlay(run, overlay);
     else if (amrCloudRecovery.getContextForRun(req.params.id)?.assistantMessageId) {
@@ -11377,7 +11540,10 @@ export async function startServer({
 
   app.post('/api/runs/:id/amr-recovery/resume', async (req, res) => {
     const run = design.runs.get(req.params.id);
-    const overlay = await amrCloudRecovery.resumeRun({ runId: req.params.id });
+    const overlay = await amrCloudRecovery.resumeRun({
+      runId: req.params.id,
+      ...(await resolveAmrRecoveryEnv()),
+    });
     if (!overlay) return sendApiError(res, 404, 'NOT_FOUND', 'AMR Cloud Recovery not found');
     if (run) persistAmrRecoveryOverlay(run, overlay);
     const context = amrCloudRecovery.getContextForRun(req.params.id);
@@ -11393,6 +11559,12 @@ export async function startServer({
       return;
     }
     if (run && overlay.state === 'recovering_resuming') {
+      // Restart the SAME live run, but rehydrate the original turn from the
+      // persisted conversation rather than only `run.userPrompt`: a recovered
+      // AMR turn must keep its attachments, comment annotations, session mode,
+      // and run context, otherwise the resumed run silently drops inputs the
+      // original request carried.
+      const liveReplay = replayRequestForAssistantMessage(db, context);
       run.status = 'queued';
       run.updatedAt = Date.now();
       run.cancelRequested = false;
@@ -11402,12 +11574,23 @@ export async function startServer({
       run.errorCode = null;
       void startChatRun({
         agentId: 'amr',
-        message: run.userPrompt ?? '',
+        message: liveReplay.ok ? liveReplay.message : (run.userPrompt ?? ''),
         projectId: run.projectId,
         conversationId: run.conversationId,
         assistantMessageId: run.assistantMessageId,
         model: run.model,
         reasoning: run.reasoning,
+        ...(liveReplay.ok
+          ? {
+              attachments: liveReplay.attachments,
+              commentAttachments: liveReplay.commentAttachments,
+              ...(liveReplay.sessionMode ? { sessionMode: liveReplay.sessionMode } : {}),
+              ...(liveReplay.context ? { context: liveReplay.context } : {}),
+              ...(liveReplay.appliedPluginSnapshotId
+                ? { appliedPluginSnapshotId: liveReplay.appliedPluginSnapshotId }
+                : {}),
+            }
+          : {}),
       }, run).catch((err) => {
         design.runs.emit(
           run,
@@ -11423,65 +11606,20 @@ export async function startServer({
       return;
     }
 
-    const replay = replayRequestForAssistantMessage(db, context);
-    if (!replay.ok) {
-      const restartOverlay = amrCloudRecovery.markRestartAvailable({
-        runId: req.params.id,
-        message: replay.reason,
-      }) ?? overlay;
-      if (context?.assistantMessageId) {
-        updateMessageAmrRecovery(db, context.assistantMessageId, restartOverlay);
-      }
+    const recovered = startRecoveredAmrRunFromContext(req.params.id, overlay);
+    if (!recovered.ok) {
       res.status(409).json({
         ok: false,
         code: 'AMR_RECOVERY_RESTART_AVAILABLE',
-        amrRecovery: restartOverlay,
+        amrRecovery: recovered.restartOverlay,
       });
       return;
     }
-
-    const recoveredRun = design.runs.create({
-      agentId: 'amr',
-      projectId: replay.projectId,
-      conversationId: replay.conversationId,
-      assistantMessageId: replay.assistantMessageId,
-      clientRequestId: `amr-recovery-${randomUUID()}`,
-      mediaExecution: defaultMediaExecutionPolicy(),
-      ...(replay.sessionMode ? { sessionMode: replay.sessionMode } : {}),
-      ...(replay.context ? { context: replay.context } : {}),
-      ...(replay.appliedPluginSnapshotId ? { appliedPluginSnapshotId: replay.appliedPluginSnapshotId } : {}),
-    });
-    const reboundOverlay = amrCloudRecovery.rebindRun({
-      fromRunId: req.params.id,
-      toRun: recoveredRun,
-    }) ?? overlay;
-    recoveredRun.amrRecovery = reboundOverlay;
-    db.prepare(
-      `UPDATE messages
-          SET run_id = ?, run_status = 'queued',
-              last_run_event_id = NULL,
-              amr_recovery_json = ?,
-              ended_at = NULL
-        WHERE id = ?`,
-    ).run(recoveredRun.id, JSON.stringify(reboundOverlay), replay.assistantMessageId);
-    design.runs.start(recoveredRun, () => startChatRun({
-      agentId: 'amr',
-      message: replay.message,
-      projectId: replay.projectId,
-      conversationId: replay.conversationId,
-      assistantMessageId: replay.assistantMessageId,
-      clientRequestId: recoveredRun.clientRequestId,
-      attachments: replay.attachments,
-      commentAttachments: replay.commentAttachments,
-      ...(replay.sessionMode ? { sessionMode: replay.sessionMode } : {}),
-      ...(replay.context ? { context: replay.context } : {}),
-      ...(replay.appliedPluginSnapshotId ? { appliedPluginSnapshotId: replay.appliedPluginSnapshotId } : {}),
-    }, recoveredRun));
     res.json({
       ok: true,
-      amrRecovery: reboundOverlay,
-      run: design.runs.statusBody(recoveredRun),
-      runId: recoveredRun.id,
+      amrRecovery: recovered.reboundOverlay,
+      run: design.runs.statusBody(recovered.recoveredRun),
+      runId: recovered.recoveredRun.id,
     });
   });
 
@@ -12028,6 +12166,12 @@ export async function startServer({
           console.log(`[od] daemon listening on ${url}`);
         }
         daemonUrl = url;
+        // Best-effort AMR Cloud Recovery reconciliation after a daemon restart
+        // (spec §5). Fire-and-forget so a slow/unreachable AMR API never blocks
+        // the daemon from reporting ready.
+        void reconcileAmrCloudRecoveryOnStartup().catch((err) =>
+          console.warn('[amr-recovery] startup reconcile crashed', err),
+        );
         resolve(returnServer ? {
           url,
           server,
