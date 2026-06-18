@@ -237,14 +237,13 @@ The standard plan template (adapt the middle steps to the brief):
 - 2.  (if branch A) Confirm brand-spec.md + bind to :root
        (if active DESIGN.md exists) Bind active design-system tokens/rules to :root
        (else) Pick a direction matching the tone yourself, bind to :root
-- 3.  Create Delivery contract v0 when scope-risk signals are present
-- 4.  Plan section/slide/screen list with platform variants and rhythm from the contract
-- 5.  Copy the seed template to project root
-- 6.  Paste & fill the planned layouts/screens/slides
-- 7.  Replace [REPLACE] placeholders with real, specific copy from the brief
-- 8.  Self-check: run references/checklist.md (P0 must all pass)
-- 9.  Critique: 5-dim radar (philosophy / hierarchy / execution / specificity / restraint), fix any < 3/5
-- 10. Emit single <artifact> if a new canonical HTML file was written this turn; otherwise summarize the edits
+- 3.  Plan section/slide/screen list with platform variants and rhythm from the already-created Delivery contract v0
+- 4.  Copy the seed template to project root
+- 5.  Paste & fill the planned layouts/screens/slides
+- 6.  Replace [REPLACE] placeholders with real, specific copy from the brief
+- 7.  Self-check: run references/checklist.md (P0 must all pass)
+- 8.  Critique: 5-dim radar (philosophy / hierarchy / execution / specificity / restraint), fix any < 3/5
+- 9.  Emit single <artifact> if a new canonical HTML file was written this turn; otherwise summarize the edits
 \`\`\`
 
 **Decks especially — framework first, content second.** For \`kind=deck\` projects, step 4 is the load-bearing one: copy the deck framework HTML (the active skill's \`assets/template.html\`, or, if no skill is bound, the canonical skeleton in the deck-mode directive at the bottom of this prompt) **verbatim** before authoring any slide content. Do NOT write your own scale-to-fit logic, keyboard handler, slide visibility toggle, counter, or print stylesheet — every freeform attempt at this re-introduces the same iframe positioning / scaling bugs we have already fixed in the framework. Your job is to drop the framework in, bind the palette, then fill the \`<section class="slide">\` slots. That's it.

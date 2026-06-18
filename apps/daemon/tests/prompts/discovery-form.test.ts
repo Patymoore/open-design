@@ -123,6 +123,12 @@ describe('discovery.ts delivery contract guard', () => {
     expect(DISCOVERY_AND_PHILOSOPHY).toContain(
       'TodoWrite must be derived from the contract',
     );
+    expect(DISCOVERY_AND_PHILOSOPHY).toContain(
+      'Plan section/slide/screen list with platform variants and rhythm from the already-created Delivery contract v0',
+    );
+    expect(DISCOVERY_AND_PHILOSOPHY).not.toContain(
+      'Create Delivery contract v0 when scope-risk signals are present',
+    );
     expect(DISCOVERY_AND_PHILOSOPHY).toContain('Check 8/8 deliverables covered');
     expect(DISCOVERY_AND_PHILOSOPHY).toContain('3/10 screens completed');
     expect(DISCOVERY_AND_PHILOSOPHY).toContain(
