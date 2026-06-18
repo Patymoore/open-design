@@ -2544,7 +2544,7 @@ process.exit(1);
           kind: 'agent_spawn_failed',
           agentName: 'Claude Code',
         });
-        expect(result.diagnostics?.phase).toBe('spawn');
+        expect(result.diagnostics?.phase).toBe('output_parse');
         expect(result.diagnostics?.exitCode).toBe(1);
       },
     );
@@ -2579,7 +2579,41 @@ process.exit(1);
           kind: 'agent_spawn_failed',
           agentName: 'Claude Code',
         });
-        expect(result.diagnostics?.phase).toBe('spawn');
+        expect(result.diagnostics?.phase).toBe('output_parse');
+        expect(result.diagnostics?.exitCode).toBe(1);
+      },
+    );
+  });
+
+  it('rejects Claude smoke tests when the result subtype reports an execution error before a late exit 1', async () => {
+    await withFakeClaude(
+      `
+console.log(JSON.stringify({
+  type: 'assistant',
+  message: {
+    id: 'msg_1',
+    content: [{ type: 'text', text: 'ok' }],
+    stop_reason: 'end_turn',
+  },
+}));
+console.log(JSON.stringify({
+  type: 'result',
+  subtype: 'error_during_execution',
+  result: 'tool failed',
+  terminal_reason: 'completed',
+  duration_ms: 17,
+}));
+process.exit(1);
+`,
+      async () => {
+        const result = await testAgentConnection({ agentId: 'claude' });
+
+        expect(result).toMatchObject({
+          ok: false,
+          kind: 'agent_spawn_failed',
+          agentName: 'Claude Code',
+        });
+        expect(result.diagnostics?.phase).toBe('output_parse');
         expect(result.diagnostics?.exitCode).toBe(1);
       },
     );

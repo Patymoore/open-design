@@ -1536,11 +1536,13 @@ function parseClaudeResultFrame(stdout: string): {
   resultText: string;
   stopReason: string | null;
   isError: boolean;
+  subtype: string | null;
 } | null {
   let parsed: {
     resultText: string;
     stopReason: string | null;
     isError: boolean;
+    subtype: string | null;
   } | null = null;
   for (const line of stdout.split(/\r?\n/u)) {
     const trimmed = line.trim();
@@ -1555,6 +1557,7 @@ function parseClaudeResultFrame(stdout: string): {
           (typeof obj.terminal_reason === 'string' && obj.terminal_reason) ||
           null,
         isError: Boolean(obj.is_error),
+        subtype: typeof obj.subtype === 'string' ? obj.subtype : null,
       };
     } catch {
       // Non-JSON stdout falls back to the normal diagnostic path.
@@ -2229,8 +2232,12 @@ async function testAgentConnectionInternal(
       const claudeResult = input.agentId === 'claude'
         ? parseClaudeResultFrame(sink.getRawStdout())
         : null;
+      const claudeReportedSuccess =
+        !!claudeResult &&
+        !claudeResult.isError &&
+        claudeResult.subtype === 'success';
       const parsedClaudeResultText =
-        claudeResult && !claudeResult.isError ? claudeResult.resultText.trim() : '';
+        claudeReportedSuccess ? claudeResult.resultText.trim() : '';
       const visibleText = buffered || parsedClaudeResultText;
       // ACP agents that don't shut down on stdin.end() are terminated after a
       // clean prompt completion. Depending on the ACP bridge, this can surface
@@ -2256,8 +2263,7 @@ async function testAgentConnectionInternal(
         );
       const claudeCompletedTurn =
         input.agentId === 'claude' &&
-        !!claudeResult &&
-        !claudeResult.isError &&
+        claudeReportedSuccess &&
         (
           sink.sawTerminalCompletion() ||
           (
