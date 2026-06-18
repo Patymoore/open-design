@@ -205,7 +205,10 @@ export async function startBrandExtraction(
     brandSourceUrl: url,
   };
   const name = `${host} Design System`;
-  const pendingPrompt = brandExtractionPrompt({ url, brandId: id, host });
+  const runProgrammatic = Boolean(opts.userDesignSystemsRoot);
+  const pendingPrompt = runProgrammatic
+    ? brandExtractionFallbackPrompt({ url, brandId: id, host })
+    : brandExtractionPrompt({ url, brandId: id, host });
   insertProject(db, {
     id: projectId,
     name,
@@ -239,7 +242,6 @@ export async function startBrandExtraction(
   // network harvest here would only add latency. Otherwise (legacy / tests),
   // run the bounded parallel seed harvest so the first paint already shows a
   // real logo / palette / fonts / cover imagery before the agent measures.
-  const runProgrammatic = Boolean(opts.userDesignSystemsRoot);
   const seedBrand: Record<string, unknown> = { name: host, sourceUrl: url, colors: [], typography: {} };
   if (!runProgrammatic) {
     try {
@@ -649,7 +651,15 @@ export async function runProgrammaticExtraction(
 
   const brand = brandFromMaterial(material, meta.sourceUrl);
   const guideMd = brandGuideMd(brand);
-  return finalizeBrandCore({ ...opts, brand, guideMd });
+  const finalized = await finalizeBrandCore({ ...opts, brand, guideMd });
+  updateProject(opts.db, opts.projectId, {
+    pendingPrompt: brandExtractionPrompt({
+      url: meta.sourceUrl,
+      brandId: id,
+      host: hostnameOf(meta.sourceUrl),
+    }),
+  });
+  return finalized;
 }
 
 export interface RenderBrandPreviewOptions {
@@ -759,6 +769,27 @@ function brandExtractionPrompt(input: { url: string; brandId: string; host: stri
     '3. REBUILD & RE-REGISTER — when `brand.json` is enriched, run `od brand finalize ' + input.brandId + '` (add `--json` for machine output). That re-validates it, re-derives the light/dark/compact design tokens and the six design-system artifacts (landing, deck, poster, email, newsletter, form), and UPDATES the already-registered design system in place (same id — never a duplicate), so every template that already uses it picks up the sharper result. Fix `brand.json` and re-run if it reports a validation error.',
     '',
     'Finish by pointing the user at the enriched brand.html (logo, palette, typography, voice) and the design-system assets they can now preview, and confirm the design system was updated.',
+  ].join('\n');
+}
+
+/** Prompt used while the programmatic harvest is not known-good yet. It must
+ * not claim the design system is already ready: blocked/thin sites stay on
+ * this path and need the agent to do the initial extraction from the scaffold. */
+function brandExtractionFallbackPrompt(input: { url: string; brandId: string; host: string }): string {
+  return [
+    `This is a DESIGN SYSTEM EXTRACTION task for ${input.host}.`,
+    `Source URL: ${input.url}`,
+    `Brand id: ${input.brandId}`,
+    '',
+    'The daemon opened a live extraction scaffold (`brand.html`) in the project, but a ready design system is NOT guaranteed yet. Treat the page as an empty/in-progress workspace until you have measured the target site and written `brand.json`; do not assume a registered `brand.json` or design system already exists.',
+    '',
+    'Use the `brand-extract` skill and the `agent-browser` tool to drive and observe the target site. Measure before you synthesize: capture the real colors, fonts, logo candidates, representative imagery, voice, and layout posture. If the page is an anti-bot verification interstitial, emit a `<question-form>` asking the user to complete verification in the browser, then continue after they respond.',
+    '',
+    'Write `brand.json` as soon as you have the name, a couple of measured colors, and a logo candidate, then run `od brand preview ' + input.brandId + '` so the scaffold fills in progressively. Keep updating `brand.json`, `BRAND.md`, saved `logos/`, fonts, and `imagery/` samples as you measure each field group.',
+    '',
+    'When the kit is complete and validates, run `od brand finalize ' + input.brandId + '` (add `--json` for machine output). Fix validation errors and re-run finalize until the brand is registered and the design-system assets are ready.',
+    '',
+    'Finish by pointing the user at the completed brand.html and the reusable design-system assets.',
   ].join('\n');
 }
 

@@ -896,6 +896,12 @@ describe('agent-driven brand extraction engine', () => {
       expect(detail?.meta.designSystemId).toBeUndefined();
       const html = readFileSync(path.join(projectsRoot, result.projectId, 'brand.html'), 'utf8');
       expect(html).toContain('"status":"extracting"');
+
+      const project = getProject(db, result.projectId);
+      expect(project?.pendingPrompt ?? '').toContain('DESIGN SYSTEM EXTRACTION');
+      expect(project?.pendingPrompt ?? '').toContain('ready design system is NOT guaranteed yet');
+      expect(project?.pendingPrompt ?? '').not.toContain('DESIGN SYSTEM ENRICHMENT');
+      expect(project?.pendingPrompt ?? '').not.toContain('ALREADY been extracted programmatically');
     }
 
     const systems = await listDesignSystems(userDesignSystemsRoot, {
