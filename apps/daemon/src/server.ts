@@ -124,6 +124,7 @@ export {
   signDesktopImportToken,
   verifyDesktopImportToken,
 } from './desktop-auth.js';
+import { readCurrentAppVersionInfo } from './app-version.js';
 import {
   findSkillById,
   listSkills,
@@ -4909,6 +4910,26 @@ export async function startServer({
     BUNDLED_PETS_DIR,
     OD_BIN,
   };
+
+  app.get('/api/health', async (_req, res) => {
+    const versionInfo = await readCurrentAppVersionInfo();
+    res.json({ ok: true, version: versionInfo.version });
+  });
+
+  app.get('/api/ready', async (_req, res) => {
+    const versionInfo = await readCurrentAppVersionInfo();
+    const ready = !daemonShuttingDown;
+    res.status(ready ? 200 : 503).json({
+      ok: ready,
+      ready,
+      version: versionInfo.version,
+    });
+  });
+
+  app.get('/api/version', async (_req, res) => {
+    const version = await readCurrentAppVersionInfo();
+    res.json({ version });
+  });
 
   registerDaemonRoutes(app, {
     db,
