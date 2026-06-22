@@ -164,9 +164,17 @@ export async function renderDeckSlides(
       return finish(await stitchDeckSlides(window, count, stage, jpeg, input.outputDir));
     }
 
-    // Otherwise render every slide (or just the one requested by image export).
-    const indices =
-      input.index != null && input.index >= 0 && input.index < count ? [input.index] : range(count);
+    // Otherwise render every slide, or just the one requested by image export.
+    // A specified-but-out-of-range index is a caller error — fail fast instead
+    // of silently falling back to slide 0 (which the daemon would return with
+    // 200 for image export).
+    if (input.index != null && (input.index < 0 || input.index >= count)) {
+      return finish({
+        ok: false,
+        error: `slide index ${input.index} is out of range (deck has ${count} slide(s))`,
+      });
+    }
+    const indices = input.index != null ? [input.index] : range(count);
     const images: Array<{ buffer: Buffer; jpeg: boolean }> = [];
     let width = stage.w;
     let height = stage.h;

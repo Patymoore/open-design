@@ -191,7 +191,7 @@ const PROJECT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'follow']);
 // export against the same /api/projects/:id/export/* endpoints. Dual-track
 // closure for the PPTX/PDF export capability.
 const EXPORT_STRING_FLAGS = new Set(['daemon-url', 'project', 'file', 'output', 'title']);
-const EXPORT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json']);
+const EXPORT_BOOLEAN_FLAGS = new Set(['help', 'h', 'json', 'deck', 'page']);
 // `od templates …` mirrors NewProjectPanel / ExamplesTab. Same surface,
 // same /api/templates store. The CLI form is the embeddability contract:
 // external agents (hermes-agent, openclaw, ...) can snapshot, list, or
@@ -5772,6 +5772,9 @@ Options:
   --file <relpath>    Deck HTML file within the project.
   --output <path>     Output path. Defaults to <file>.<ext> in the current dir.
   --title <t>         Override the deck title.
+  --deck              Treat the artifact as a slide deck (capture per slide).
+  --page              Treat it as a single page (one full-page capture). Use this
+                      for an ordinary HTML page that happens to contain .slide markup.
   --daemon-url <url>  Open Design daemon HTTP base.
   --json              Emit a machine-readable result.`);
     process.exit(args.length === 0 ? 2 : 0);
@@ -5799,6 +5802,15 @@ Options:
     console.error('--file <relpath> required (the deck HTML to export)');
     process.exit(2);
   }
+  if (flags.deck && flags.page) {
+    console.error('--deck and --page are mutually exclusive');
+    process.exit(2);
+  }
+  // Explicit page/deck signal so the CLI hits the route with the same semantics
+  // as the UI (which sends the artifact's effectiveDeck). PPTX is deck-only and
+  // the daemon forces deck there; for PDF, forward the caller's choice. When
+  // neither flag is given the daemon falls back to its .slide-count heuristic.
+  const deckSignal = flags.deck ? true : flags.page ? false : undefined;
   const base = (await projectDaemonUrl(flags)).replace(/\/$/, '');
   const route = format === 'pdf' ? 'export/pdf-image' : 'export/pptx';
   let resp;
@@ -5806,7 +5818,11 @@ Options:
     resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/${route}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fileName, ...(flags.title ? { title: flags.title } : {}) }),
+      body: JSON.stringify({
+        fileName,
+        ...(flags.title ? { title: flags.title } : {}),
+        ...(deckSignal == null ? {} : { deck: deckSignal }),
+      }),
     });
   } catch (err) {
     surfaceFetchError(err, base);
