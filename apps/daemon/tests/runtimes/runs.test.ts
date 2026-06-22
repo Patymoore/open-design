@@ -666,4 +666,25 @@ describe('run event log persistence', () => {
     // because we configured runsLogDir=null.
     expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
+
+  it('does not re-open the event log stream for events emitted after the run finished (FD-leak guard)', () => {
+    // finish() closes the per-run events.jsonl write stream and nulls it. The
+    // stream is opened lazily on emit, so an event emitted AFTER finish (a late
+    // async child-close diagnostic, a trailing tool callback, telemetry) would
+    // re-open a NEW write stream that finish() — guarded against re-running on a
+    // terminal run — never closes. Each such late emit then leaks one file
+    // descriptor; over a long-lived daemon this exhausts the fd table and
+    // posix_spawn starts returning EBADF (#3408 P1, distinct from the stdio
+    // leak fixed in #4163).
+    const runs = createRunsWithLog(tmpDir);
+    const run = runs.create({ projectId: 'p1' });
+
+    runs.emit(run, 'agent', { type: 'text_delta', delta: 'hi' }); // opens the stream
+    runs.finish(run, 'succeeded', 0, null); // closes + nulls the stream
+    expect(run.eventsLogStream).toBeNull();
+
+    // A late event must NOT lazily re-open a stream that will never be closed.
+    runs.emit(run, 'diagnostic', { type: 'runtime_close' });
+    expect(run.eventsLogStream).toBeNull();
+  });
 });

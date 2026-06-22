@@ -110,6 +110,13 @@ export function createChatRunService({
   const ensureLogStream = (run) => {
     if (!run.eventsLogPath) return null;
     if (run.eventsLogStream) return run.eventsLogStream;
+    // The run has already finished and finish() closed + nulled the stream.
+    // finish() is guarded against re-running on a terminal run, so re-opening a
+    // stream here for a late event (async child-close diagnostic, trailing tool
+    // callback, telemetry) would leak a file descriptor that nothing ever
+    // closes. Late events still reach memory + SSE clients below; we just stop
+    // persisting them to the closed log. (#3408 P1 FD-leak fix; cf. #4163.)
+    if (TERMINAL_RUN_STATUSES.has(run.status)) return null;
     try {
       fs.mkdirSync(path.dirname(run.eventsLogPath), { recursive: true });
       run.eventsLogStream = fs.createWriteStream(run.eventsLogPath, { flags: 'a' });
