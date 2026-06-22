@@ -5169,7 +5169,11 @@ export function ProjectView({
       const persistedSeedMessages = activeConversationId
         ? serverMessagesByConversationRef.current.get(activeConversationId) ?? []
         : [];
-      const seedOverlay = buildSeedOverlayForNewConversation(seedMessages, persistedSeedMessages);
+      const seedOverlay = buildSeedOverlayForNewConversation(
+        messages,
+        seedMessages,
+        persistedSeedMessages,
+      );
       const seedFromConversationId =
         typeof activeConversationId === 'string'
         && activeConversationId
@@ -7110,6 +7114,7 @@ function seedMessageOverrideEquals(
 }
 
 function buildSeedOverlayForNewConversation(
+  sourceMessages: ChatMessage[],
   visibleMessages: ChatMessage[],
   persistedMessages: ChatMessage[],
 ): {
@@ -7125,11 +7130,16 @@ function buildSeedOverlayForNewConversation(
   const persistedById = new Map(
     persistedMessages.map((message) => [message.id, compactSeedMessageOverride(message)]),
   );
+  const isTrimmedVisiblePrefix =
+    visibleMessages.length < sourceMessages.length
+    && visibleMessages.every((message, index) => sourceMessages[index]?.id === message.id);
   const isTrimmedPersistedPrefix =
     visibleMessages.length < persistedMessages.length
     && visibleMessages.every((message, index) => persistedMessages[index]?.id === message.id);
   const seedTrimAfterMessageId =
-    isTrimmedPersistedPrefix ? (visibleMessages.at(-1)?.id ?? null) : null;
+    isTrimmedVisiblePrefix || isTrimmedPersistedPrefix
+      ? (visibleMessages.at(-1)?.id ?? null)
+      : null;
   const seedMessageOverrides = visibleMessages.flatMap((message) => {
     const compact = compactSeedMessageOverride(message);
     const persisted = persistedById.get(message.id);

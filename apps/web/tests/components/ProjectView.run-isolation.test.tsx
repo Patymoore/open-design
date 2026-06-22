@@ -777,6 +777,54 @@ describe('ProjectView conversation run isolation', () => {
     );
   });
 
+  it('keeps failed-tail trimming when the visible conversation outruns the cached server snapshot', async () => {
+    const successfulUser: ChatMessage = {
+      id: 'user-success',
+      role: 'user',
+      content: 'Keep the editorial grid and muted palette.',
+      createdAt: 1,
+    };
+    conversationAMessages = [successfulUser, succeededAssistant];
+    fetchChatRunStatus.mockResolvedValue(null);
+    streamViaDaemon.mockImplementation(async (options: {
+      onRunCreated?: (runId: string) => void;
+      handlers: { onError: (error: Error) => void };
+    }) => {
+      options.onRunCreated?.('run-resumable-failure');
+      const error = new Error('daemon stream disconnected before run completed') as Error & {
+        resumable?: boolean;
+      };
+      error.resumable = true;
+      options.handlers.onError(error);
+    });
+
+    renderProjectView();
+
+    await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
+    await waitFor(() => expect(screen.getByTestId('streaming-state').textContent).toBe('idle'));
+
+    fireEvent.click(screen.getByTestId('send-message'));
+
+    await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      const summary = screen.getByTestId('assistant-summary').textContent ?? '';
+      expect(summary).toContain(`${succeededAssistant.id}|succeeded|Looks good`);
+      expect(summary).toContain('|failed|');
+    });
+
+    fireEvent.click(screen.getByTestId('new-conversation'));
+
+    await waitFor(() => expect(createConversation).toHaveBeenCalledTimes(1));
+    expect(createConversation).toHaveBeenCalledWith(
+      'project-1',
+      undefined,
+      {
+        seedFromConversationId: 'conv-a',
+        seedTrimAfterMessageId: succeededAssistant.id,
+      },
+    );
+  });
+
   it('keeps the new conversation payload compact when the visible messages update', async () => {
     const userMessage: ChatMessage = {
       id: 'user-a',
