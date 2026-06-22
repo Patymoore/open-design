@@ -23,6 +23,8 @@ export async function startToolsServeUpdaterFixture(options: {
   workspaceRoot: string;
 }): Promise<ToolsServeUpdaterFixture> {
   const pnpmArgs = [
+    '--silent',
+    'exec',
     'tools-serve',
     'start',
     'updater',
@@ -88,18 +90,20 @@ async function readStartupInfo(
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
         stdoutBuffer = stdoutBuffer.slice(newline + 1);
-        if (line.length > 0) stdoutLines.push(line);
-        if (line.startsWith('{')) {
-          try {
-            const parsed = parseInfo(line);
-            cleanup();
-            resolveStartup(parsed);
-            return;
-          } catch (error) {
-            cleanup();
-            rejectStartup(error);
-            return;
-          }
+        if (line.length === 0) {
+          newline = stdoutBuffer.indexOf('\n');
+          continue;
+        }
+        stdoutLines.push(line);
+        try {
+          const parsed = parseInfo(line);
+          cleanup();
+          resolveStartup(parsed);
+          return;
+        } catch (error) {
+          cleanup();
+          rejectStartup(error);
+          return;
         }
         newline = stdoutBuffer.indexOf('\n');
       }
