@@ -77,9 +77,9 @@ For each chosen layout, copy the `<section>` block from `layouts.md` into `<main
 
 Run through `references/checklist.md` top to bottom. Every P0 item must pass before you move on. P1 items should pass; P2 are bonus.
 
-### Step 5 — Emit the artifact
+### Step 5 — Write the project file
 
-Wrap the completed HTML in `<artifact>` tags using the artifact slug as the `identifier`. One sentence before describing what's there. Stop after `</artifact>`.
+Write the completed HTML to the canonical project file, normally `index.html`. Then send one short ordinary assistant summary naming the file and describing what's there. Do not output the full HTML source in chat.
 
 ## Hard rules (the seed protects most of these — don't fight it)
 
@@ -91,13 +91,12 @@ Wrap the completed HTML in `<artifact>` tags using the artifact slug as the `ide
 
 ## Output contract
 
+Filesystem runs use project files as the source of truth:
+
 ```
-<artifact identifier="kebab-case-slug" type="text/html" title="Human Title">
-<!doctype html>
-<html>...</html>
-</artifact>
+index.html
 ```
 
-Open Design derives the canonical HTML artifact from this identifier. Do not also write another root HTML file for the same generation turn.
+Open Design derives the preview from the written project file. Do not also emit a source-code `<artifact>` block for the same generation turn.
 
-One sentence before the artifact. Nothing after.
+One short summary after writing the file. Nothing after.
