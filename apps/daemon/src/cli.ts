@@ -5757,6 +5757,31 @@ async function attachTerminal(base, projectId, terminalId) {
   }
 }
 
+// Pull the server-provided download name out of a Content-Disposition header so
+// `od export` writes the same filename the web UI saves (which now prefers the
+// server name). Handles RFC 5987 `filename*=UTF-8''…` and plain `filename="…"`.
+// The result is reduced to a bare basename so a malicious/odd header can't steer
+// the write outside the cwd.
+function contentDispositionFilename(header) {
+  if (typeof header !== 'string' || header.length === 0) return null;
+  let name = null;
+  const star = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      name = decodeURIComponent(star[1].trim().replace(/^["']|["']$/g, ''));
+    } catch {
+      name = null;
+    }
+  }
+  if (!name) {
+    const plain = /filename="?([^";]+)"?/i.exec(header);
+    if (plain) name = plain[1].trim();
+  }
+  if (!name) return null;
+  const bare = basename(name.replace(/[\\/]+/g, '/')).trim();
+  return bare.length > 0 && bare !== '.' && bare !== '..' ? bare : null;
+}
+
 async function runExport(args) {
   if (args.length === 0 || args[0] === 'help' || args.includes('--help') || args.includes('-h')) {
     console.log(`Usage:
@@ -5830,17 +5855,22 @@ Options:
   }
   if (!resp.ok) return structuredHttpFailure(resp, 'export-failed');
   const buf = Buffer.from(await resp.arrayBuffer());
-  // When --output is not given, name the file after --title (slugified) if the
-  // caller supplied one, else the source HTML's basename — so
-  // `od export pptx --file deck.html --title "My Deck"` writes `My-Deck.pptx`,
-  // matching the title baked into the document and the server Content-Disposition.
+  // When --output is not given, prefer the server's Content-Disposition filename
+  // (same precedence as the web download helper) so both surfaces write the same
+  // name. Fall back to --title (slugified) if the caller supplied one, else the
+  // source HTML's basename — so `od export pptx --file deck.html --title "My Deck"`
+  // still writes `My-Deck.pptx` when the server omits a name.
   const titleSlug =
     typeof flags.title === 'string'
       ? flags.title.trim().replace(/[^\w.\-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)
       : '';
   const baseSource = titleSlug || basename(fileName).replace(/\.html?$/i, '');
   const fallbackName = `${baseSource || 'deck'}.${format}`;
-  const outPath = typeof flags.output === 'string' && flags.output.length > 0 ? flags.output : fallbackName;
+  const serverName = contentDispositionFilename(resp.headers.get('content-disposition'));
+  const outPath =
+    typeof flags.output === 'string' && flags.output.length > 0
+      ? flags.output
+      : serverName || fallbackName;
   writeFileSync(outPath, buf);
   if (flags.json) {
     process.stdout.write(JSON.stringify({ ok: true, path: outPath, bytes: buf.length, format }) + '\n');
