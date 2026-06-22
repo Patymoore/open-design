@@ -847,6 +847,25 @@ async function runDomToPptx(slideSelector: string): Promise<{ b64?: string; erro
       .call(document.querySelectorAll(slideSelector))
       .filter((el) => !(el as HTMLElement).closest(".mini-slide, .overview, .notes-overlay, .thumb"));
     if (slides.length === 0) return { error: "no slides to export" };
+    // dom-to-pptx assumes `node.className` is a string, but SVG elements expose
+    // an SVGAnimatedString, so its DOM walk throws "node.className.split is not a
+    // function" on any deck containing inline SVG (icons, charts). Normalize
+    // those to a plain string (from baseVal) before export. This is a throwaway
+    // render window, so clobbering className is safe.
+    document.querySelectorAll("*").forEach((el) => {
+      const cn = (el as { className?: unknown }).className;
+      if (cn != null && typeof cn !== "string") {
+        try {
+          Object.defineProperty(el, "className", {
+            value: (cn as { baseVal?: string }).baseVal ?? "",
+            configurable: true,
+            writable: true,
+          });
+        } catch {
+          // leave it; dom-to-pptx may still handle this node
+        }
+      }
+    });
     const blob = await w.domToPptx.exportToPptx(slides, {
       fileName: "deck.pptx",
       skipDownload: true,
