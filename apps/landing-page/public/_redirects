@@ -263,3 +263,31 @@
 /ar/plugins/*  /plugins/:splat  301
 /tr/plugins/*  /plugins/:splat  301
 /uk/plugins/*  /plugins/:splat  301
+
+# --- Retired marketing locales (2026-06 GSC review) --------------------------
+# Removed from app/i18n.ts:LANDING_LOCALES (near-zero Google return). Keep in
+# sync with that list. Chinese variants fold into /zh; every other retired
+# locale folds into the English (prefix-less) page. Locale-specific /wallet
+# rules above still win because first match wins.
+/zh-tw/* /zh/:splat 301
+/zh-tw   /zh/       301
+/zh-cn/* /zh/:splat 301
+/zh-cn   /zh/       301
+/vi/* /:splat 301
+/vi   /      301
+/pl/* /:splat 301
+/pl   /      301
+/id/* /:splat 301
+/id   /      301
+/nl/* /:splat 301
+/nl   /      301
+/ar/* /:splat 301
+/ar   /      301
+/uk/* /:splat 301
+/uk   /      301
+/fa/* /:splat 301
+/fa   /      301
+/hu/* /:splat 301
+/hu   /      301
+/th/* /:splat 301
+/th   /      301

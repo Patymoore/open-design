@@ -3,7 +3,7 @@ import { EXTRA_LOCALIZED_LANDING_UI_COPY } from './landing-ui-i18n';
 
 export const DEFAULT_LOCALE = 'en';
 
-export const LANDING_LOCALES = [
+const ALL_LANDING_LOCALES = [
   {
     code: 'en',
     htmlLang: 'en',
@@ -150,8 +150,31 @@ export const LANDING_LOCALES = [
   },
 ] as const;
 
-export type LandingLocaleCode = (typeof LANDING_LOCALES)[number]['code'];
-export type LandingLocale = (typeof LANDING_LOCALES)[number];
+// Full historical locale set — retained ONLY so existing per-locale translation
+// data stays type-valid. Do NOT use this for routing / sitemap / hreflang; use
+// LANDING_LOCALES below.
+export type LandingLocaleCode = (typeof ALL_LANDING_LOCALES)[number]['code'];
+export type LandingLocale = (typeof ALL_LANDING_LOCALES)[number];
+
+// Locales retired 2026-06 after a GSC review (near-zero Google return). Pages
+// are no longer generated for them and incoming URLs are 301'd to the English
+// page in public/_redirects. Any NEW page automatically ships only the active
+// set below, so the retired languages cannot silently reappear.
+const RETIRED_LOCALE_CODES = new Set<LandingLocaleCode>([
+  'zh-tw',
+  'vi',
+  'pl',
+  'id',
+  'nl',
+  'ar',
+  'uk',
+]);
+
+// Single source of truth for the locales we actually ship: routing, the
+// language switcher, hreflang, and the sitemap all consume this filtered list.
+export const LANDING_LOCALES: readonly LandingLocale[] = ALL_LANDING_LOCALES.filter(
+  (locale) => !RETIRED_LOCALE_CODES.has(locale.code),
+);
 
 export interface HeaderCopy {
   brandMetaTitle: string;
