@@ -9,6 +9,7 @@ import { checkDesignSystemPackageQuality } from "./check-design-system-package-q
 import { checkDesignSystemComponentFixtureReport } from "./check-components-fixtures.ts";
 import { checkDesignSystemFlagParity } from "./check-design-system-flag-parity.ts";
 import { checkComponentsManifestExtraction } from "./check-components-manifest-extraction.ts";
+import { validatePlaywrightSuiteTopology } from "../e2e/lib/playwright/suites.ts";
 import {
   checkDesignSystemA1RequiredTokens,
   checkDesignSystemA2DefaultsParity,
@@ -24,7 +25,6 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const allowedE2eScripts = new Set([
   "e2e/scripts/playwright.ts",
   "e2e/scripts/release-smoke.ts",
-  "e2e/scripts/ui-p0-shards.ts",
   "e2e/scripts/visual-report.ts",
 ]);
 
@@ -109,6 +109,9 @@ const residualAllowedExactPaths = new Set([
   "tools/dev/esbuild.config.mjs",
   "tools/pack/bin/tools-pack.mjs",
   "tools/pack/esbuild.config.mjs",
+  // Checked-in bin shim so pnpm can link `tools-release` before dist output exists.
+  "tools/release/bin/tools-release.mjs",
+  "tools/release/esbuild.config.mjs",
   "tools/serve/bin/tools-serve.mjs",
   "tools/serve/esbuild.config.mjs",
   "tools/pack/resources/mac/notarize.cjs",
@@ -923,6 +926,7 @@ const toolsRootAllowlist = new Map<string, "directory" | "file">([
   ["AGENTS.md", "file"],
   ["dev", "directory"],
   ["pack", "directory"],
+  ["release", "directory"],
   ["serve", "directory"],
 ]);
 
@@ -937,7 +941,7 @@ async function checkToolsLayout(): Promise<boolean> {
     const repositoryPath = `tools/${entry.name}${entry.isDirectory() ? "/" : ""}`;
 
     if (expected == null) {
-      violations.push(`${repositoryPath} -> tools/ top-level entries are allowlisted; expected only AGENTS.md, dev/, pack/, and serve/`);
+      violations.push(`${repositoryPath} -> tools/ top-level entries are allowlisted; expected only AGENTS.md, dev/, pack/, release/, and serve/`);
       continue;
     }
 
@@ -1231,6 +1235,38 @@ async function checkStylePolicy(): Promise<boolean> {
   return true;
 }
 
+async function checkCiTopology(): Promise<boolean> {
+  const ciWorkflow = await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  const errors = [
+    ...validatePlaywrightSuiteTopology(),
+    ...[
+      "run: node --experimental-strip-types scripts/scopes.ts github-output",
+      "ci_mode: ${{ steps.detect.outputs.ci_mode }}",
+      "ui_p0_validation_required: ${{ steps.detect.outputs.ui_p0_validation_required }}",
+      "run_ui_p0: ${{ steps.detect.outputs.run_ui_p0 }}",
+      "run_nix_validation: ${{ steps.detect.outputs.run_nix_validation }}",
+      "ui_p0_matrix: ${{ steps.detect.outputs.ui_p0_matrix }}",
+      "visual_matrix: ${{ steps.detect.outputs.visual_matrix }}",
+      "include: ${{ fromJSON(needs.scopes.outputs.ui_p0_matrix) }}",
+      "include: ${{ fromJSON(needs.scopes.outputs.visual_matrix) }}",
+      "needs.scopes.outputs.run_ui_p0 == 'true'",
+      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group smoke",
+      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group ${{ matrix.shard }}",
+    ]
+      .filter((needle) => !ciWorkflow.includes(needle))
+      .map((needle) => `.github/workflows/ci.yml is missing ${needle}`),
+  ];
+
+  if (errors.length > 0) {
+    console.error("CI topology check failed:");
+    for (const error of errors) console.error(`- ${error}`);
+    return false;
+  }
+
+  console.log("CI topology check passed: scopes, Playwright suites, and workflow matrices stay aligned.");
+  return true;
+}
+
 const checks: GuardCheck[] = [
   { name: "residual JavaScript", run: checkResidualJavaScript },
   { name: "package dependency specs", run: checkPackageDependencySpecs },
@@ -1242,6 +1278,7 @@ const checks: GuardCheck[] = [
   { name: "web import isolation", run: checkWebImportIsolation },
   { name: "tools layout", run: checkToolsLayout },
   { name: "style policy", run: checkStylePolicy },
+  { name: "CI topology", run: checkCiTopology },
   { name: "craft references", run: checkCraftReferences },
   { name: "design system manifests", run: checkDesignSystemManifests },
   { name: "design system package quality", run: checkDesignSystemPackageQuality },

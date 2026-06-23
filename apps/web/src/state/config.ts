@@ -93,7 +93,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   // remains the one-click opt-out. Without these defaults the gate at
   // `daemon/src/analytics.ts` (`if (telemetry?.metrics !== true) return`)
   // dropped every event fired during onboarding because no consent
-  // existed yet — observed live on the nightly.10 QA run, which left
+  // existed yet — observed live on the prerelease.10 QA run, which left
   // zero `page_view pn=onboarding` rows on PostHog despite the user
   // completing the flow.
   telemetry: { metrics: true, content: true },
@@ -670,7 +670,12 @@ const DAEMON_OWNED_KEYS = new Set<keyof AppConfig>([
   'privacyDecisionAt',
 ]);
 
-const AGENT_CLI_SECRET_ENV_KEYS = new Set(['ANTHROPIC_API_KEY', 'CODEX_API_KEY', 'OPENAI_API_KEY']);
+const AGENT_CLI_SECRET_ENV_KEYS = new Set([
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CODEX_API_KEY',
+  'OPENAI_API_KEY',
+]);
 
 function sanitizeAgentCliEnv(agentCliEnv: AppConfig['agentCliEnv']): AppConfig['agentCliEnv'] {
   if (!agentCliEnv) return agentCliEnv;

@@ -13,6 +13,7 @@ import type { RunContextSelection } from './context.js';
 import type { MediaExecutionPolicy } from './media.js';
 import type { AppliedPluginSnapshot } from '../plugins/apply.js';
 import type { McpAuthMode, McpServerConfig, McpTransport } from './mcp';
+import type { TrackingRuntimeType } from '../analytics/public-params.js';
 
 export type ChatRole = 'user' | 'assistant';
 export type ChatSessionMode = 'design' | 'chat';
@@ -155,6 +156,11 @@ export interface ChatAnalyticsHints {
   turnIndex?: number;
   isFirstRun?: boolean;
   hasExistingArtifact?: boolean;
+  // Active execution runtime for THIS run, computed client-side at launch
+  // (the only layer that can tell BYOK from amr_cloud). The daemon stamps it
+  // onto run_created / run_finished, overriding its own BYOK-blind
+  // derivation. Omitted means "let the daemon keep its derived value".
+  runtimeType?: TrackingRuntimeType;
 }
 
 export interface RunScopedMcpServerConfig extends Omit<McpServerConfig, 'enabled'> {
@@ -313,6 +319,14 @@ export interface ChatRunStatusResponse {
   conversationId: string | null;
   assistantMessageId: string | null;
   agentId: string | null;
+  /** Design system whose prompt context was actually injected for this run. */
+  designSystemId?: string | null;
+  /** Selected design system before usability/body checks; useful for diagnostics. */
+  designSystemRequestedId?: string | null;
+  /** Source that supplied the effective design-system selection. */
+  designSystemSelectionSource?: 'request' | 'plugin' | 'project' | 'app-default' | 'none' | null;
+  /** sha256 digest of the injected DESIGN.md/tokens/component context. */
+  designSystemDigest?: string | null;
   appliedPluginSnapshotId?: string | null;
   pluginId?: string | null;
   status: ChatRunStatus;
@@ -342,6 +356,12 @@ export interface ChatRunStatusResponse {
   mediaExecution?: MediaExecutionPolicy;
   /** Run-scoped tool bundle summary with secrets and command details redacted. */
   toolBundle?: RunScopedToolBundleSummary;
+  /** Prompt cache diagnostics for resume-capable runtime sessions. */
+  promptCache?: {
+    stablePromptHash: string;
+    hit: boolean;
+    missReason: 'new-session' | 'missing-stored-hash' | 'stable-prompt-changed' | null;
+  };
   /** Browser Use availability for runs that requested in-app browser automation. */
   browserUse?: BrowserUseRunState;
   /** Effective storage/provenance for the workspace used by this run. */

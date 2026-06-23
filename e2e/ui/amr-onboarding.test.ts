@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test';
 
 import { dismissPrivacyDialog, STORAGE_KEY, waitForLoadingToClear } from '@/playwright/amr';
 import { fulfillAgentsRoute } from '@/playwright/mock-factory';
+import { T } from '@/timeouts';
 
 type OnboardingConfig = {
   mode: 'daemon';
@@ -27,7 +28,7 @@ declare global {
   }
 }
 
-test.describe.configure({ timeout: 30_000 });
+test.describe.configure({ timeout: T.xlong });
 
 test('[P0] @critical onboarding lets AMR Cloud sign in and complete setup after the login poll succeeds', async ({ page }) => {
   const config = await wireOnboardingMocks(page, {
@@ -39,18 +40,23 @@ test('[P0] @critical onboarding lets AMR Cloud sign in and complete setup after 
 
   await gotoOnboarding(page);
 
-  const continueButton = page.getByRole('button', { name: /sign in to continue/i });
-  await expect(continueButton).toBeVisible();
-  await continueButton.click();
+  // Signed-out cloud landing: the primary button reads "Sign in to Open Design
+  // Cloud" and IS the AMR sign-in trigger (it replaced the old "Sign in to
+  // continue" AMR-card CTA).
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toBeVisible();
+  await expect(primary).toHaveText(/Sign in to Open Design Cloud|登录 Open Design 云端/i);
+  const statusCallsBeforeLogin = await page.evaluate(() => window.__amrOnboardingStatusCalls ?? 0);
+  await clickCloudPrimary(page);
 
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingLoginCalls ?? 0)).toBe(1);
   await expect
     .poll(() => page.evaluate(() => window.__amrOnboardingStatusCalls ?? 0))
-    .toBeGreaterThanOrEqual(2);
-  // Login success lands on the About-you step; advance past it to the
-  // newsletter step, which is now the final step that hosts Finish setup.
-  await expect(page.getByRole('button', { name: /^Continue$/i })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+    .toBeGreaterThan(statusCallsBeforeLogin);
+  // Login success lands on the About-you step; advance past newsletter to the
+  // final brand step that hosts Finish setup.
+  await expect(page.getByRole('heading', { name: /About you/i })).toBeVisible({ timeout: T.long });
+  await advanceFromAboutYouToBrand(page);
   await expect(page.getByRole('button', { name: /Finish setup/i })).toBeVisible({ timeout: 10_000 });
   await expectOnboardingFinished(page);
   await pollStoredConfig(page).toMatchObject({
@@ -69,19 +75,20 @@ test('[P0] onboarding signed-out AMR authorization cannot be skipped or bypassed
   await seedOnboardingConfig(page, config);
   await gotoOnboarding(page);
 
+  // The cloud landing offers no escape hatch: no Skip, no Continue, and no
+  // stepper to jump straight into About-you. Sign-in is the only forward path.
   await expect(page.getByRole('button', { name: /Skip for now/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Continue$/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /About you|了解你/i })).toHaveCount(0);
 
-  const signIn = page.getByRole('button', { name: /sign in to continue/i });
-  await expect(signIn).toBeVisible();
-
-  const aboutYouStep = page.getByRole('button', { name: /About you|了解你/i });
-  await expect(aboutYouStep).toBeDisabled();
-  await aboutYouStep.click({ force: true });
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toBeVisible();
+  await expect(primary).toHaveText(/Sign in to Open Design Cloud|登录 Open Design 云端/i);
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 
-  await signIn.click();
+  // Trigger sign-in: it stays pending (login never completes), so we remain on
+  // the connect step — the About-you fields never appear.
+  await clickCloudPrimary(page);
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingLoginCalls ?? 0)).toBe(1);
   await expect(page.getByRole('button', { name: /Cancel sign-in/i })).toBeVisible();
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
@@ -111,11 +118,16 @@ test('[P0] @critical onboarding Local CLI card lets the user pick an agent model
 
   await gotoOnboarding(page);
 
+  // Expand the Local coding agent panel from the landing. Scanning auto-selects
+  // the default agent (codex), so its live model picker is available; pick a
+  // model and confirm the trigger reflects it.
   await page.getByRole('button', { name: /Local coding agent/i }).click();
-  await selectOnboardingOption(page, 'Model', 'GLM 5');
+  const localPanel = page.locator('.onboarding-view__setup-panel');
+  await expect(localPanel).toBeVisible();
+  await selectOnboardingOption(localPanel, 'Model', 'GLM 5');
 
-  await expect(expectOnboardingTrigger(page, 'Model')).toContainText('GLM 5');
-  await expect(page.getByRole('button', { name: /Continue/i })).toBeVisible();
+  await expect(expectOnboardingTrigger(localPanel, 'Model')).toContainText('GLM 5');
+  await expect(page.getByRole('button', { name: /^Continue$/i })).toBeVisible();
 });
 
 test('[P0] onboarding Local CLI path stays gated when no local CLI is available', async ({ page }) => {
@@ -134,7 +146,9 @@ test('[P0] onboarding Local CLI path stays gated when no local CLI is available'
 
   const continueButton = page.getByRole('button', { name: /^Continue$/i });
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  // Still on the (expanded) Connect step — the Local panel header is showing
+  // and the About-you fields never appeared.
+  await expect(page.getByRole('heading', { name: /Local coding agent/i })).toBeVisible();
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 });
 
@@ -142,7 +156,7 @@ test('[P0] onboarding Local CLI path stays gated while local agent scan is still
   const config = await wireOnboardingMocks(page, {
     amrAvailable: false,
     initialLoggedIn: false,
-    agentsDelayMs: 600,
+    agentsDelayMs: 20_000,
   });
 
   await seedOnboardingConfig(page, config);
@@ -153,7 +167,7 @@ test('[P0] onboarding Local CLI path stays gated while local agent scan is still
 
   const continueButton = page.getByRole('button', { name: /^Continue$/i });
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Local coding agent/i })).toBeVisible();
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 });
 
@@ -167,10 +181,12 @@ test('[P0] onboarding falls back to Local CLI when AMR is unavailable', async ({
 
   await gotoOnboarding(page);
 
+  // No AMR runtime card exists anymore — the landing cloud button is the only
+  // AMR affordance, and there is no "AMR Cloud" named control.
   await expect(page.getByRole('button', { name: /AMR Cloud/i })).toHaveCount(0);
   await page.getByRole('button', { name: /Local coding agent/i }).click();
   await expect(page.getByText('Local CLI')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Continue/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Continue$/i })).toBeVisible();
 });
 
 test('[P0] onboarding recovers from a transient AMR status failure and still continues after login completes', async ({ page }) => {
@@ -184,12 +200,11 @@ test('[P0] onboarding recovers from a transient AMR status failure and still con
 
   await gotoOnboarding(page);
 
-  await page.getByRole('button', { name: /sign in to continue/i }).click();
+  await clickCloudPrimary(page);
 
-  // Recovery lands on About you; step through to the newsletter step where
-  // Finish setup now lives.
+  // Recovery lands on About you; step through newsletter to the final brand step.
   await expect(page.getByRole('button', { name: /^Continue$/i })).toBeVisible({ timeout: 12_000 });
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  await advanceFromAboutYouToBrand(page);
   await expect(page.getByRole('button', { name: /Finish setup/i })).toBeVisible({ timeout: 12_000 });
 });
 
@@ -206,21 +221,22 @@ test('[P0] onboarding signed-in AMR status failure stays gated instead of bypass
   await expect
     .poll(() => page.evaluate(() => window.__amrOnboardingStatusCalls ?? 0))
     .toBeGreaterThanOrEqual(1);
+  // The signed-in status never resolves (all polls fail), so the cloud landing
+  // can't show "Continue (signed in)" and falls back to the sign-in CTA. There
+  // is no Skip, no Continue, and no stepper to bypass the gate.
   await expect(page.getByRole('button', { name: /Skip for now/i })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Continue$/i })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /sign in to continue/i })).toBeVisible();
-
-  const aboutYouStep = page.getByRole('button', { name: /About you|了解你/i });
-  await expect(aboutYouStep).toBeDisabled();
-  await aboutYouStep.click({ force: true });
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /About you|了解你/i })).toHaveCount(0);
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toBeVisible();
+  await expect(primary).toHaveText(/Sign in to Open Design Cloud|登录 Open Design 云端/i);
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForLoadingToClear(page);
   await dismissPrivacyDialog(page);
   await expect(page).toHaveURL(/\/onboarding$/);
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(connectLandingHeading(page)).toBeVisible();
 });
 
 test('[P0] onboarding lets the user cancel an incomplete AMR sign-in and retry', async ({ page }) => {
@@ -233,19 +249,22 @@ test('[P0] onboarding lets the user cancel an incomplete AMR sign-in and retry',
   await seedOnboardingConfig(page, config);
   await gotoOnboarding(page);
 
-  await page.getByRole('button', { name: /sign in to continue/i }).click();
+  await clickCloudPrimary(page);
 
-  await expect(page.getByRole('button', { name: /Signing in/i })).toBeVisible();
+  // Pending sign-in: the primary reflects "Signing in…" and a dedicated
+  // "Cancel sign-in" button appears.
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toHaveText(/Signing in|登录中/i);
   const cancelSignIn = page.getByRole('button', { name: /Cancel sign-in/i });
   await expect(cancelSignIn).toBeVisible();
   await cancelSignIn.click();
 
-  await expect(page.getByRole('button', { name: /sign in to continue/i })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Signing in/i })).toHaveCount(0);
+  await expect(primary).toHaveText(/Sign in to Open Design Cloud|登录 Open Design 云端/i);
+  await expect(page.getByRole('button', { name: /Cancel sign-in/i })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingCancelCalls ?? 0)).toBe(1);
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingLoginCalls ?? 0)).toBe(1);
 
-  await page.getByRole('button', { name: /sign in to continue/i }).click();
+  await clickCloudPrimary(page);
 
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingLoginCalls ?? 0)).toBe(2);
   await expect(page.getByRole('button', { name: /Cancel sign-in/i })).toBeVisible();
@@ -269,23 +288,29 @@ test('[P0] onboarding cancel during a slow AMR status check does not start login
     window.__amrOnboardingDelayNextSignedOutStatus = true;
     window.__amrOnboardingSlowStatusResolved = false;
   });
-  await page.getByRole('button', { name: /sign in to continue/i }).click();
+  await clickCloudPrimary(page);
 
   const cancelSignIn = page.getByRole('button', { name: /Cancel sign-in/i });
   await expect(cancelSignIn).toBeVisible();
   await cancelSignIn.click();
 
-  await expect(page.getByRole('button', { name: /sign in to continue/i })).toBeVisible();
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toHaveText(/Sign in to Open Design Cloud|登录 Open Design 云端/i);
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingCancelCalls ?? 0)).toBe(1);
   await expect
     .poll(() => page.evaluate(() => window.__amrOnboardingSlowStatusResolved ?? false))
     .toBe(true);
   await page.waitForTimeout(250);
-  await expect(page.getByRole('button', { name: /Signing in/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Cancel sign-in/i })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => window.__amrOnboardingLoginCalls ?? 0)).toBe(0);
 });
 
-test('[P0] onboarding AMR card lets the user pick a live runtime model before continuing', async ({ page }) => {
+// The AMR runtime card and its per-runtime model picker on the connect step
+// were removed in the redesign — AMR now signs in straight from the cloud
+// landing and exposes no model picker there. This test preserves the still-valid
+// slice of the old coverage: a signed-in user advancing from the cloud landing
+// pins the AMR runtime (agentId: 'amr') as the connect selection.
+test('[P0] onboarding signed-in cloud landing pins the AMR runtime when continuing', async ({ page }) => {
   const config = await wireOnboardingMocks(page, {
     amrAvailable: true,
     initialLoggedIn: true,
@@ -300,88 +325,62 @@ test('[P0] onboarding AMR card lets the user pick a live runtime model before co
 
   await gotoOnboarding(page);
 
-  const amrCard = page.locator('.onboarding-view__amr-cloud-card');
-  await expect(amrCard.getByRole('button', { name: /Open Design AMR/i })).toBeVisible();
-  const selectedModel = 'deepseek-v4-flash';
-  await selectOnboardingOption(amrCard, 'Model', 'DeepSeek V4 Flash');
-  await expect(expectOnboardingTrigger(amrCard, 'Model')).toContainText('DeepSeek V4 Flash');
-  await expect
-    .poll(() => page.evaluate((key) => JSON.parse(window.localStorage.getItem(key) || '{}'), STORAGE_KEY))
-    .toMatchObject({
-      agentModels: {
-        amr: {
-          model: selectedModel,
-        },
-      },
-    });
-  await page.getByRole('button', { name: /Continue/i }).click();
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toHaveText(/Continue \(signed in\)|继续（已登录）/i);
+  await clickCloudPrimary(page);
 
+  // Advancing to About-you confirms the connect gate cleared, and the runtime
+  // selection persisted as AMR.
+  await expect(page.getByText(/Optional details for better defaults/i)).toBeVisible();
   await expect
     .poll(() => page.evaluate((key) => JSON.parse(window.localStorage.getItem(key) || '{}'), STORAGE_KEY))
     .toMatchObject({
       agentId: 'amr',
-      agentModels: {
-        amr: {
-          model: selectedModel,
-        },
-      },
     });
 });
 
-test('[P0] @critical onboarding signed-in AMR path finishes setup with the selected runtime model', async ({ page }) => {
+// The AMR card + per-runtime model picker on the connect step were removed,
+// so the model-selection portion of the old test is retired. The still-valid
+// coverage — a signed-in AMR user advances from the landing through both steps
+// and completes setup with agentId 'amr' — is preserved.
+test('[P0] @critical onboarding signed-in AMR path finishes setup with the AMR runtime', async ({ page }) => {
   const config = await wireOnboardingMocks(page, {
     amrAvailable: true,
     initialLoggedIn: true,
-    amrModels: [
-      { id: 'claude-opus-4.8', label: 'Claude Opus 4.8' },
-      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
-    ],
   });
 
   await seedOnboardingConfig(page, config);
   await gotoOnboarding(page);
 
-  const amrCard = page.locator('.onboarding-view__amr-cloud-card');
-  await expect(amrCard.getByRole('button', { name: /Open Design AMR/i })).toBeVisible();
-  await expect(amrCard).toContainText('Officially recommended');
-  await expect(amrCard).toContainText('No deploy needed');
-  await selectOnboardingOption(amrCard, 'Model', 'DeepSeek V4 Flash');
-  await expect(expectOnboardingTrigger(amrCard, 'Model')).toContainText('DeepSeek V4 Flash');
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toHaveText(/Continue \(signed in\)|继续（已登录）/i);
+  await clickCloudPrimary(page);
 
-  await page.getByRole('button', { name: /^Continue$/i }).click();
   await expect(page.getByText(/Optional details for better defaults/i)).toBeVisible();
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  await advanceFromAboutYouToBrand(page);
   await page.getByRole('button', { name: /Finish setup/i }).click();
 
   await expect(page).not.toHaveURL(/\/onboarding$/);
   await pollStoredConfig(page).toMatchObject({
     agentId: 'amr',
     onboardingCompleted: true,
-    agentModels: {
-      amr: {
-        model: 'deepseek-v4-flash',
-      },
-    },
   });
 });
 
-test('[P0] onboarding AMR model selection carries into the first Home run request', async ({ page }) => {
+// The connect-step AMR model picker is gone, so the model-selection portion is
+// retired. The preserved coverage: the AMR runtime configured during a
+// signed-in onboarding carries into the first Home run request (agentId 'amr').
+test('[P0] onboarding AMR runtime selection carries into the first Home run request', async ({ page }) => {
   const config = await wireOnboardingMocks(page, {
     amrAvailable: true,
     initialLoggedIn: true,
-    amrModels: [
-      { id: 'claude-opus-4.8', label: 'Claude Opus 4.8' },
-      { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
-    ],
   });
 
   await seedOnboardingConfig(page, config);
   await gotoOnboarding(page);
 
-  const amrCard = page.locator('.onboarding-view__amr-cloud-card');
-  await selectOnboardingOption(amrCard, 'Model', 'DeepSeek V4 Flash');
-  await page.getByRole('button', { name: /^Continue$/i }).click();
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  await clickCloudPrimary(page);
+  await advanceFromAboutYouToBrand(page);
   await page.getByRole('button', { name: /Finish setup/i }).click();
   await expectOnboardingFinished(page);
 
@@ -425,7 +424,6 @@ test('[P0] onboarding AMR model selection carries into the first Home run reques
 
   await expect.poll(() => runBody, { timeout: 10_000 }).toMatchObject({
     agentId: 'amr',
-    model: 'deepseek-v4-flash',
   });
 });
 
@@ -441,14 +439,14 @@ test('[P0] onboarding gate cannot be bypassed by direct Home navigation or new-t
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await waitForLoadingToClear(page);
   await dismissPrivacyDialog(page);
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(connectLandingHeading(page)).toBeVisible();
   await expect(page).toHaveURL(/\/onboarding$/);
 
   const newTabButton = page.getByTestId('workspace-tabs-new-tab');
   await expect(newTabButton).toBeDisabled();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+T' : 'Control+T');
   await expect(page).toHaveURL(/\/onboarding$/);
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(connectLandingHeading(page)).toBeVisible();
 });
 
 test('[P0] onboarding Connect step exposes no Skip affordance', async ({ page }) => {
@@ -474,19 +472,23 @@ test('[P0] onboarding visited steps become locked again when the Connect runtime
   await seedOnboardingConfig(page, config);
   await gotoOnboarding(page);
 
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  // Signed in: the cloud landing advances to About-you, proving the connect
+  // gate was satisfied by the AMR sign-in.
+  await clickCloudPrimary(page);
   await expect(page.getByText(/Optional details for better defaults/i)).toBeVisible();
+
+  // Step back to the connect landing, then switch the runtime to an unverified
+  // BYOK provider. The connect gate must re-lock: Continue goes aria-disabled
+  // and About-you is no longer reachable.
   await page.getByRole('button', { name: /^Back$/i }).click();
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(connectLandingHeading(page)).toBeVisible();
 
   await page.getByRole('button', { name: /Bring your own key/i }).click();
-  const aboutYouStep = page.getByRole('button', { name: /About you|了解你/i });
-  await expect(aboutYouStep).toBeDisabled();
-  await aboutYouStep.click({ force: true });
+  await expect(page.getByText('BYOK')).toBeVisible();
 
   const continueButton = page.getByRole('button', { name: /^Continue$/i });
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Bring your own key|自己的模型 Key/i })).toBeVisible();
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 });
 
@@ -499,25 +501,26 @@ test('[P0] onboarding about-you step accepts profile selections and completes se
   await seedOnboardingConfig(page, config);
   await gotoOnboarding(page);
 
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  // Signed-in cloud landing advances straight to About-you.
+  await clickCloudPrimary(page);
   await expect(page.getByText(/Optional details for better defaults/i)).toBeVisible();
 
-  await selectOnboardingOption(page, 'Your role', 'Engineer');
-  await selectOnboardingOption(page, 'Organization size', 'Growth company');
-  await selectOnboardingOption(page, 'Use case', 'Product design');
-  await selectOnboardingOption(page, 'Use case', 'Prototype / app UI');
-  await page.keyboard.press('Escape');
-  await selectOnboardingOption(page, 'Where did you hear about us?', 'Search');
+  // Profile fields are now chip rows, not dropdowns: each pick is a single
+  // chip click, and the chosen chip reports aria-pressed.
+  await selectOnboardingChip(page, 'Your role', 'Engineer');
+  await selectOnboardingChip(page, 'Organization size', 'Growth company');
+  await selectOnboardingChip(page, 'Use case', 'Product design');
+  await selectOnboardingChip(page, 'Use case', 'Prototype / app UI');
+  await selectOnboardingChip(page, 'Where did you hear about us?', 'Search');
 
-  await expect(expectOnboardingTrigger(page, 'Your role')).toContainText('Engineer');
-  await expect(expectOnboardingTrigger(page, 'Organization size')).toContainText('Growth company');
-  await expect(expectOnboardingTrigger(page, 'Use case')).toContainText('Product design');
-  await expect(expectOnboardingTrigger(page, 'Use case')).toContainText('Prototype / app UI');
-  await expect(expectOnboardingTrigger(page, 'Where did you hear about us?')).toContainText('Search');
+  await expect(expectOnboardingChip(page, 'Your role', 'Engineer')).toHaveAttribute('aria-pressed', 'true');
+  await expect(expectOnboardingChip(page, 'Organization size', 'Growth company')).toHaveAttribute('aria-pressed', 'true');
+  await expect(expectOnboardingChip(page, 'Use case', 'Product design')).toHaveAttribute('aria-pressed', 'true');
+  await expect(expectOnboardingChip(page, 'Use case', 'Prototype / app UI')).toHaveAttribute('aria-pressed', 'true');
+  await expect(expectOnboardingChip(page, 'Where did you hear about us?', 'Search')).toHaveAttribute('aria-pressed', 'true');
 
-  // About you is no longer the final step; advance to the newsletter step
-  // before finishing.
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  // About you is no longer the final step; advance through newsletter before finishing.
+  await advanceFromAboutYouToBrand(page);
   await page.getByRole('button', { name: /Finish setup/i }).click();
 
   await expectOnboardingFinished(page);
@@ -542,6 +545,8 @@ test('[P0] onboarding newsletter email is optional and blank email can finish se
   await advanceToNewsletterStep(page);
 
   await expect(page.getByPlaceholder('you@studio.com')).toHaveValue('');
+  await page.getByRole('button', { name: /^Continue$/i }).click();
+  await expect(page.getByRole('heading', { name: /Extract your design system/i })).toBeVisible();
   await page.getByRole('button', { name: /Finish setup/i }).click();
 
   await expectOnboardingFinished(page);
@@ -567,6 +572,8 @@ test('[P0] onboarding newsletter malformed email does not block finishing setup'
   await advanceToNewsletterStep(page);
 
   await page.getByPlaceholder('you@studio.com').fill('not-an-email');
+  await page.getByRole('button', { name: /^Continue$/i }).click();
+  await expect(page.getByRole('heading', { name: /Extract your design system/i })).toBeVisible();
   await page.getByRole('button', { name: /Finish setup/i }).click();
 
   await expectOnboardingFinished(page);
@@ -617,16 +624,16 @@ test('[P0] @critical onboarding BYOK path can fetch models, test the provider, a
   await fillInlineField(page, 'API key', 'test-api-key');
   await fillInlineField(page, 'Base URL', 'https://api.anthropic.com');
   await page.getByRole('button', { name: /Fetch models/i }).click();
-  await expect(page.getByRole('status')).toContainText('Fetched 2 models.');
+  await expect(page.getByText(/Fetched 2 models\./)).toBeVisible();
   await selectOnboardingOption(byokPanel, 'Model', 'claude-opus-4-8');
 
   await page.getByRole('button', { name: /^Test$/i }).click();
-  await expect(page.getByText('Connected. Replied in 27 ms')).toBeVisible();
+  await expectProviderConnectionSuccess(page);
 
   await page.getByRole('button', { name: /^Continue$/i }).click();
   await expect(page.getByText(/Optional details for better defaults/i)).toBeVisible();
-  // Advance from About you to the newsletter step, then finish.
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  // Advance from About you through newsletter to the brand step, then finish.
+  await advanceFromAboutYouToBrand(page);
   await page.getByRole('button', { name: /Finish setup/i }).click();
 
   await expectOnboardingFinished(page);
@@ -684,12 +691,12 @@ test('[P0] onboarding BYOK path cannot continue before a successful connection t
 
   const continueButton = page.getByRole('button', { name: /^Continue$/i });
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Bring your own key|自己的模型 Key/i })).toBeVisible();
 
   await fillInlineField(page, 'API key', 'bad-api-key');
   await fillInlineField(page, 'Base URL', 'https://api.anthropic.com');
   await page.getByRole('button', { name: /Fetch models/i }).click();
-  await expect(page.getByRole('status')).toContainText('Fetched 1 model');
+  await expect(page.getByText(/Fetched 1 model/)).toBeVisible();
   await selectOnboardingOption(byokPanel, 'Model', 'Claude Sonnet 4.5');
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
 
@@ -700,7 +707,7 @@ test('[P0] onboarding BYOK path cannot continue before a successful connection t
   connectionOk = true;
   await fillInlineField(page, 'API key', 'good-api-key');
   await page.getByRole('button', { name: /^Test$/i }).click();
-  await expect(page.getByText('Connected. Replied in 18 ms')).toBeVisible();
+  await expectProviderConnectionSuccess(page);
   await expect(continueButton).not.toHaveAttribute('aria-disabled', 'true');
 });
 
@@ -742,16 +749,16 @@ test('[P0] onboarding BYOK successful test is invalidated when connection settin
   await fillInlineField(page, 'API key', 'valid-api-key');
   await fillInlineField(page, 'Base URL', 'https://api.anthropic.com');
   await page.getByRole('button', { name: /Fetch models/i }).click();
-  await expect(page.getByRole('status')).toContainText('Fetched 1 model');
+  await expect(page.getByText(/Fetched 1 model/)).toBeVisible();
   await selectOnboardingOption(byokPanel, 'Model', 'Claude Sonnet 4.5');
   await page.getByRole('button', { name: /^Test$/i }).click();
-  await expect(page.getByText('Connected. Replied in 16 ms')).toBeVisible();
+  await expectProviderConnectionSuccess(page);
   await expect(continueButton).not.toHaveAttribute('aria-disabled', 'true');
 
   await fillInlineField(page, 'API key', 'changed-api-key');
 
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Bring your own key|自己的模型 Key/i })).toBeVisible();
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 });
 
@@ -796,10 +803,13 @@ test('[P0] onboarding BYOK successful test is invalidated when Base URL or model
   await fillInlineField(page, 'API key', 'valid-api-key');
   await fillInlineField(page, 'Base URL', 'https://api.anthropic.com');
   await page.getByRole('button', { name: /Fetch models/i }).click();
-  await expect(page.getByRole('status')).toContainText('Fetched 2 models');
+  // Scope to the models-status text rather than role=status: both the models
+  // status and (after the test below) the connection status share role=status,
+  // so a bare getByRole('status') would be ambiguous on later assertions.
+  await expect(page.getByText(/Fetched 2 models/)).toBeVisible();
   await selectOnboardingOption(byokPanel, 'Model', 'Claude Sonnet 4.5');
   await page.getByRole('button', { name: /^Test$/i }).click();
-  await expect(page.getByText('Connected. Replied in 17 ms')).toBeVisible();
+  await expectProviderConnectionSuccess(page);
   await expect(continueButton).not.toHaveAttribute('aria-disabled', 'true');
 
   await fillInlineField(page, 'Base URL', 'https://api.changed.example');
@@ -807,12 +817,12 @@ test('[P0] onboarding BYOK successful test is invalidated when Base URL or model
 
   await fillInlineField(page, 'Base URL', 'https://api.anthropic.com');
   await page.getByRole('button', { name: /^Test$/i }).click();
-  await expect(page.getByText('Connected. Replied in 17 ms')).toBeVisible();
+  await expectProviderConnectionSuccess(page);
   await expect(continueButton).not.toHaveAttribute('aria-disabled', 'true');
 
   await selectOnboardingOption(byokPanel, 'Model', 'Claude Opus 4.8');
   await expect(continueButton).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Bring your own key|自己的模型 Key/i })).toBeVisible();
   await expect(page.getByText(/Optional details for better defaults/i)).toHaveCount(0);
 });
 
@@ -1009,11 +1019,32 @@ async function gotoOnboarding(page: Page) {
   await page.goto('/onboarding', { waitUntil: 'domcontentloaded' });
   await waitForLoadingToClear(page);
   await dismissPrivacyDialog(page);
-  // The "Welcome" hero title was removed; the Connect step's "Choose a
-  // runtime" heading is the stable marker that onboarding has rendered.
+  // The runtime-picker "Choose a runtime" heading was removed. The Connect
+  // step now opens on a centered Open Design Cloud sign-in landing whose
+  // heading is the stable marker that onboarding has rendered.
   await expect(
-    page.getByRole('heading', { name: /Choose a runtime|选择运行方式/i }),
+    page.getByRole('heading', { name: /Sign in to Open Design|登录 Open Design/i }),
   ).toBeVisible();
+}
+
+// The landing's primary cloud button is the AMR/cloud sign-in trigger. Its
+// accessible name varies by state (sign-in / continue / signing-in / loading),
+// so target it by class and wait for it to settle out of the mount-time
+// "Loading…" state before interacting.
+function cloudPrimaryButton(page: Page): Locator {
+  return page.locator('.onboarding-cloud__primary');
+}
+
+async function clickCloudPrimary(page: Page) {
+  const primary = cloudPrimaryButton(page);
+  await expect(primary).toBeEnabled();
+  await primary.click();
+}
+
+// The connect landing heading — the stable "we're still on the cloud sign-in
+// landing" marker that replaced the old "Choose a runtime" heading.
+function connectLandingHeading(page: Page): Locator {
+  return page.getByRole('heading', { name: /Sign in to Open Design|登录 Open Design/i });
 }
 
 async function seedOnboardingConfig(page: Page, config: OnboardingConfig) {
@@ -1033,11 +1064,29 @@ async function expectOnboardingFinished(page: Page) {
   await expect(page.getByText('What do you want to design?')).toBeVisible();
 }
 
+async function advanceFromAboutYouToBrand(page: Page) {
+  await expect(page.getByRole('heading', { name: /About you/i })).toBeVisible({ timeout: T.long });
+  const continueButton = page.getByRole('button', { name: /^Continue$/i });
+  await continueButton.scrollIntoViewIfNeeded();
+  await continueButton.click();
+  await expect(page.getByRole('heading', { name: /Stay in the loop/i })).toBeVisible();
+  await continueButton.scrollIntoViewIfNeeded();
+  await continueButton.click();
+  await expect(page.getByRole('heading', { name: /Extract your design system/i })).toBeVisible();
+}
+
+// Drive from the signed-in cloud landing through About-you to the Newsletter
+// step. The landing primary advances a signed-in user to About-you; the first
+// bottom Continue then advances to the Newsletter.
 async function advanceToNewsletterStep(page: Page) {
-  await page.getByRole('button', { name: /^Continue$/i }).click();
+  await clickCloudPrimary(page);
   await expect(page.getByText(/Optional details for better defaults/i)).toBeVisible();
   await page.getByRole('button', { name: /^Continue$/i }).click();
-  await expect(page.getByRole('button', { name: /Finish setup/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Stay in the loop/i })).toBeVisible();
+}
+
+async function expectProviderConnectionSuccess(page: Page) {
+  await expect(page.getByText(/Connected\. Replied in \d+ ms/)).toBeVisible();
 }
 
 function pollStoredConfig(page: Page) {
@@ -1069,4 +1118,30 @@ async function selectOnboardingOption(root: OnboardingLocatorRoot, label: string
 
 async function fillInlineField(page: Page, label: string, value: string) {
   await onboardingField(page, label).locator('input').fill(value);
+}
+
+// About-you profile fields render as flat chip rows (`OnboardingChipField`),
+// not dropdowns: each `.onboarding-chip-field` carries its label text plus a
+// row of `button.onboarding-chip` options. Scope to the field by its label,
+// then click the chip whose text matches the option.
+function onboardingChipField(page: Page, label: string): Locator {
+  return page
+    .locator('.onboarding-chip-field')
+    .filter({ hasText: new RegExp(label, 'i') })
+    .first();
+}
+
+async function selectOnboardingChip(page: Page, label: string, option: string) {
+  await onboardingChipField(page, label)
+    .locator('button.onboarding-chip')
+    .filter({ hasText: new RegExp(option, 'i') })
+    .first()
+    .click();
+}
+
+function expectOnboardingChip(page: Page, label: string, option: string): Locator {
+  return onboardingChipField(page, label)
+    .locator('button.onboarding-chip')
+    .filter({ hasText: new RegExp(option, 'i') })
+    .first();
 }

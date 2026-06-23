@@ -968,6 +968,93 @@ describe('ProjectView daemon cleanup', () => {
     )).toBe(true);
   });
 
+  it('does not seed audit repair prompt for manual design-system runs without auto-repair budget', async () => {
+    listConversations.mockResolvedValue([{ id: 'conv-1', title: 'Conversation' }]);
+    listMessages.mockResolvedValue([]);
+    fetchPreviewComments.mockResolvedValue([]);
+    loadTabs.mockResolvedValue({ tabs: [], activeTabId: null });
+    fetchProjectFiles.mockResolvedValue([]);
+    fetchLiveArtifacts.mockResolvedValue([]);
+    fetchSkill.mockResolvedValue(null);
+    fetchDesignSystem.mockResolvedValue(null);
+    getTemplate.mockResolvedValue(null);
+    listActiveChatRuns.mockResolvedValue([]);
+    fetchProjectDesignSystemPackageAudit.mockResolvedValue({
+      ok: false,
+      projectPath: '/tmp/ds',
+      filesInspected: 12,
+      errors: [{
+        severity: 'error',
+        code: 'ui_kit_index_missing_runtime_bootstrap',
+        message: 'ui_kits/app/index.html must mount the kit.',
+        path: 'ui_kits/app/index.html',
+      }],
+      warnings: [],
+    });
+    streamViaDaemon.mockImplementation(async (options: {
+      handlers: { onDone: () => void };
+      onRunCreated?: (runId: string) => void;
+    }) => {
+      options.onRunCreated?.('run-ds-manual');
+      options.handlers.onDone();
+    });
+
+    chatPaneSpy.mockClear();
+
+    render(
+      <ProjectView
+        project={{
+          id: 'project-ds-manual',
+          name: 'Manual Design System',
+          skillId: null,
+          designSystemId: 'user:manual-ds',
+          metadata: {
+            importedFrom: 'design-system',
+            entryFile: 'DESIGN.md',
+            sourceFileName: 'user:manual-ds',
+          },
+        } as never}
+        routeFileName={null}
+        config={{ mode: 'daemon', agentId: 'agent-1', notifications: undefined, agentModels: {} } as never}
+        agents={[{ id: 'agent-1', name: 'OpenCode', models: [] } as never]}
+        skills={[]}
+        designTemplates={[]}
+        designSystems={[]}
+        daemonLive
+        onModeChange={() => {}}
+        onAgentChange={() => {}}
+        onAgentModelChange={() => {}}
+        onRefreshAgents={() => {}}
+        onOpenSettings={() => {}}
+        onBack={() => {}}
+        onClearPendingPrompt={() => {}}
+        onTouchProject={() => {}}
+        onProjectChange={() => {}}
+        onProjectsRefresh={() => {}}
+      />,
+    );
+
+    const chatProps = await waitForReadyChatPaneProps();
+    await chatProps.onSend!('Update the design system', [], []);
+
+    await waitFor(() => expect(fetchProjectDesignSystemPackageAudit).toHaveBeenCalledWith('project-ds-manual'));
+    await waitFor(() => {
+      expect(saveMessage.mock.calls.some((call) =>
+        call[2]?.role === 'assistant'
+        && call[2]?.events?.some((event: { kind?: string; label?: string; detail?: string }) =>
+          event.kind === 'status'
+          && event.label === 'audit'
+          && event.detail?.includes('Package audit found 1 error'),
+        ),
+      )).toBe(true);
+    });
+    expect(window.sessionStorage.getItem('od:design-system-audit-auto-repair:project-ds-manual')).toBeNull();
+    expect(chatPaneSpy.mock.calls.some(
+      (call) => typeof call[0]?.initialDraft === 'string'
+        && call[0].initialDraft.includes('Fix the design-system package audit findings below.'),
+    )).toBe(false);
+  });
+
   it('clears design-system auto-repair budget when the first audit passes', async () => {
     listConversations.mockResolvedValue([{ id: 'conv-1', title: 'Conversation' }]);
     listMessages.mockResolvedValue([]);
@@ -1490,6 +1577,87 @@ describe('ProjectView daemon cleanup', () => {
         producedFiles: [existingArtifact],
       }),
     );
+    expect(writeProjectTextFile).not.toHaveBeenCalled();
+  });
+
+  it('replays a legacy terminal succeeded row when agent events still contain the artifact', async () => {
+    const runCreatedAt = Date.now();
+    const existingArtifact = artifactProjectFile('real-daemon-smoke.html', runCreatedAt + 1);
+    const artifactEvent = {
+      kind: 'text',
+      text:
+        '<artifact identifier="real-daemon-smoke" type="text/html" title="Real Daemon Smoke"><h1>Real Daemon Smoke</h1></artifact>',
+    };
+
+    listConversations.mockResolvedValue([{ id: 'conv-1', title: 'Conversation' }]);
+    listMessages.mockResolvedValue([
+      {
+        id: 'msg-legacy-replay',
+        role: 'assistant',
+        content: '',
+        createdAt: runCreatedAt,
+        events: [artifactEvent],
+        runId: 'run-legacy-replay',
+        runStatus: 'succeeded',
+        producedFiles: [],
+      },
+    ]);
+    fetchPreviewComments.mockResolvedValue([]);
+    loadTabs.mockResolvedValue({ tabs: [], activeTabId: null });
+    fetchProjectFiles.mockResolvedValue([existingArtifact]);
+    fetchProjectDesignSystemPackageAudit.mockResolvedValue(null);
+    fetchLiveArtifacts.mockResolvedValue([]);
+    fetchSkill.mockResolvedValue(null);
+    fetchDesignSystem.mockResolvedValue(null);
+    getTemplate.mockResolvedValue(null);
+    fetchChatRunStatus.mockResolvedValue({
+      id: 'run-legacy-replay',
+      status: 'succeeded',
+      createdAt: runCreatedAt,
+      updatedAt: runCreatedAt + 1,
+      exitCode: 0,
+      signal: null,
+    });
+    listActiveChatRuns.mockResolvedValue([]);
+
+    render(
+      <ProjectView
+        project={{ id: 'project-1', name: 'Project', skillId: null, designSystemId: null } as never}
+        routeFileName={null}
+        config={{ mode: 'daemon', agentId: 'agent-1', notifications: undefined, agentModels: {} } as never}
+        agents={[{ id: 'agent-1', name: 'OpenCode', models: [] } as never]}
+        skills={[]}
+        designTemplates={[]}
+        designSystems={[]}
+        daemonLive
+        onModeChange={() => {}}
+        onAgentChange={() => {}}
+        onAgentModelChange={() => {}}
+        onRefreshAgents={() => {}}
+        onOpenSettings={() => {}}
+        onBack={() => {}}
+        onClearPendingPrompt={() => {}}
+        onTouchProject={() => {}}
+        onProjectChange={() => {}}
+        onProjectsRefresh={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(fetchChatRunStatus).toHaveBeenCalledWith('run-legacy-replay'));
+    await waitFor(() => {
+      expect(saveMessage).toHaveBeenCalledWith(
+        'project-1',
+        'conv-1',
+        expect.objectContaining({
+          id: 'msg-legacy-replay',
+          content: artifactEvent.text,
+          producedFiles: [existingArtifact],
+          runStatus: 'succeeded',
+        }),
+        expect.objectContaining({ telemetryFinalized: true }),
+      );
+    });
+    expect(reattachDaemonRun).not.toHaveBeenCalled();
     expect(writeProjectTextFile).not.toHaveBeenCalled();
   });
 
