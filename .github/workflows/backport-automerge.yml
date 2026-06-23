@@ -60,12 +60,14 @@ jobs:
           # github-actions[bot], so pristine=false and the auto-approve/merge below are skipped:
           # those commits were never reviewed, so the PR must go through human review instead.
           # Paginate across ALL commits (--paginate) — a >100-commit PR must not pass on the
-          # strength of its first page; one non-bot committer anywhere fails it. -F/-x match the
-          # literal "github-actions[bot]" (the [..] is not a regex class). Fail closed: empty list
-          # or any lookup miss -> not pristine.
+          # strength of its first page; one non-bot committer anywhere fails it. Count the lines
+          # that do NOT equal the literal bot login (-F/-x; the [..] is not a regex class) with
+          # grep -c, whose count semantics are portable (unlike `grep -qv`, whose early-exit status
+          # is unreliable across BSD/GNU). Fail closed: empty list / lookup miss -> not pristine.
           logins="$(gh api "repos/$REPO/pulls/$num/commits?per_page=100" --paginate \
                       --jq '.[].committer.login // "none"' 2>/dev/null || true)"
-          if [ -n "$logins" ] && ! printf '%s\n' "$logins" | grep -Fqvx 'github-actions[bot]'; then
+          nonbot="$(printf '%s\n' "$logins" | grep -Fvxc 'github-actions[bot]' || true)"
+          if [ -n "$logins" ] && [ "${nonbot:-1}" = "0" ]; then
             pristine=true
           else
             pristine=false
