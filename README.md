@@ -15,7 +15,7 @@
   <a href="https://open-design.ai/">Download</a> ·
   <a href="https://open-design.ai/amr/">Model Router</a> ·
   <a href="https://discord.gg/9ptkbbqRu">Discord</a> ·
-  <a href="https://x.com/nexudotio">Follow @nexudotio</a>
+  <a href="https://x.com/OpenDesignHQ">Follow @OpenDesignHQ</a>
 </p>
 
 <p align="center">
@@ -302,7 +302,7 @@ You can use Open Design without ever opening the GUI — call it as a skill, plu
 
 ```bash
 # One-line install into the agent you're using:
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 # <agent> = claude | codex | cursor | copilot | openclaw | antigravity | gemini
 #         | pi | vibe | hermes | cline | kimi | trae | opencode
 ```
@@ -363,7 +363,7 @@ Open Design ships a **stdio MCP server** and per-agent **install scripts**. Any 
 
 ```bash
 # One-line install (16+ CLIs supported):
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 
 # Then the agent can:
 od search-files "primary button"      # search files across projects
@@ -597,7 +597,7 @@ Phased delivery → [`docs/roadmap.md`](docs/roadmap.md).
 Real people behind every channel.
 
 - 💬 **Discord** — daily chat, plugin sharing, questions → [**discord.gg/9ptkbbqRu**](https://discord.gg/9ptkbbqRu)
-- 🐦 **X / Twitter** — release notes, milestones, behind the scenes → [**@nexudotio**](https://x.com/nexudotio)
+- 🐦 **X / Twitter** — release notes, milestones, behind the scenes → [**@OpenDesignHQ**](https://x.com/OpenDesignHQ)
 - 🗣️ **GitHub Discussions** — deep Q&A, RFCs, "show your work" → [**Discussions**](https://github.com/nexu-io/open-design/discussions)
 - 🐛 **GitHub Issues** — bug reports, feature requests → [**Issues**](https://github.com/nexu-io/open-design/issues)
 
@@ -687,7 +687,7 @@ Maintainer rules, promotion criteria, and the exit protocol → [`MAINTAINERS.md
 Thanks to everyone who has taken part — code, docs, feedback, a sharp issue, a new skill, a new design system.
 
 <a href="https://github.com/nexu-io/open-design/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=nexu-io/open-design&max=500&columns=20&anon=1&cache_bust=2026-06-22" alt="Open Design contributors" />
+  <img src="https://contrib.rocks/image?repo=nexu-io/open-design&max=500&columns=20&anon=1&cache_bust=2026-06-23" alt="Open Design contributors" />
 </a>
 
 ---
@@ -712,9 +712,9 @@ If this saved you thirty minutes, give it a ★. Stars don't pay rent — but th
 
 <a href="https://star-history.com/#nexu-io/open-design&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nexu-io/open-design&type=Date&theme=dark&cache_bust=2026-06-22" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nexu-io/open-design&type=Date&cache_bust=2026-06-22" />
-    <img alt="Open Design star history" src="https://api.star-history.com/svg?repos=nexu-io/open-design&type=Date&cache_bust=2026-06-22" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nexu-io/open-design&type=Date&theme=dark&cache_bust=2026-06-23" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nexu-io/open-design&type=Date&cache_bust=2026-06-23" />
+    <img alt="Open Design star history" src="https://api.star-history.com/svg?repos=nexu-io/open-design&type=Date&cache_bust=2026-06-23" />
   </picture>
 </a>
 

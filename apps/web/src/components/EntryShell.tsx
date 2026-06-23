@@ -180,7 +180,7 @@ function writeStoredRailOpen(open: boolean): void {
 }
 
 const DISCORD_URL = 'https://discord.gg/9ptkbbqRu';
-const X_URL = 'https://x.com/nexudotio';
+const X_URL = 'https://x.com/OpenDesignHQ';
 const ONBOARDING_DROPDOWN_OPEN_EVENT = 'open-design:onboarding-dropdown-open';
 
 // The topbar chips (GitHub star, model switcher, Use everywhere)
@@ -2492,29 +2492,6 @@ function OnboardingView({
                   }}
                 />
               </div>
-              <div className="onboarding-view__memory-callout">
-                <span className="onboarding-view__memory-callout-icon" aria-hidden>
-                  <Icon name="sparkles" size={16} />
-                </span>
-                <div className="onboarding-view__memory-callout-body">
-                  <strong>{t('settings.onboardingMemoryCalloutTitle')}</strong>
-                  <p>{t('settings.onboardingMemoryCalloutBody')}</p>
-                  <ul className="onboarding-view__memory-benefits">
-                    <li>
-                      <Icon name="check" size={13} aria-hidden />
-                      <span>{t('settings.onboardingMemoryBenefitIntent')}</span>
-                    </li>
-                    <li>
-                      <Icon name="check" size={13} aria-hidden />
-                      <span>{t('settings.onboardingMemoryBenefitFewerQuestions')}</span>
-                    </li>
-                    <li>
-                      <Icon name="check" size={13} aria-hidden />
-                      <span>{t('settings.onboardingMemoryBenefitPersonalized')}</span>
-                    </li>
-                  </ul>
-                </div>
-              </div>
             </div>
           ) : null}
 
@@ -2554,6 +2531,15 @@ function OnboardingView({
 
           {step === 3 ? (
             <div className="onboarding-view__panel onboarding-view__panel--newsletter">
+              <button
+                type="button"
+                className="onboarding-view__back-to-cloud"
+                onClick={handleBackWithTracking}
+                disabled={onboardingNavigationLocked}
+              >
+                <Icon name="chevron-left" size={14} />
+                <span>{t('settings.onboardingBack')}</span>
+              </button>
               <OnboardingPanelHeader
                 title={t('onboarding.brandTitle')}
                 body={t('onboarding.brandSubtitle')}
@@ -2583,7 +2569,7 @@ function OnboardingView({
                   }}
                 />
               </label>
-              <div className="onboarding-view__email-field">
+              <div className="onboarding-view__brand-action-row">
                 <button
                   type="button"
                   className={`onboarding-view__mini-button${brandExtractActive ? ' is-loading' : ''}`}
@@ -2595,6 +2581,15 @@ function OnboardingView({
                   {brandExtractActive
                     ? t('brand.extracting')
                     : t('newBrand.extract')}
+                </button>
+                <button
+                  type="button"
+                  className="onboarding-view__secondary"
+                  onClick={handlePrimaryAction}
+                  disabled={newsletterSubmitting}
+                  aria-busy={newsletterSubmitting ? true : undefined}
+                >
+                  <span>{t('settings.onboardingFinish')}</span>
                 </button>
                 {brandExtractActive ? (
                   <span
@@ -2639,6 +2634,7 @@ function OnboardingView({
             </div>
           ) : null}
 
+          {!isLastStep ? (
           <div className="onboarding-view__actions">
             {step === 0 && amrLoginError ? (
               <span className="onboarding-view__action-status is-error" role="alert">
@@ -2674,6 +2670,7 @@ function OnboardingView({
               <span>{primaryActionLabel}</span>
             </button>
           </div>
+          ) : null}
         </div>
       </div>
     </section>
