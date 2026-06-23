@@ -6,7 +6,7 @@ import { validateBrand } from './validate.js';
 export interface BrandFromDesignMdInput {
   markdown: string;
   sourceUrl: string;
-  description?: string;
+  description?: string | undefined;
   fallbackName?: string;
 }
 

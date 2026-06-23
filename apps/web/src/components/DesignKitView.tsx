@@ -259,6 +259,19 @@ export function DesignKitView({
     setCoverPreviewOpen(false);
   }, [kit.designSystemId, kit.brandId]);
 
+  useEffect(() => {
+    if (!lightbox && !assetPreview && !coverPreviewOpen) return undefined;
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setLightbox(null);
+      setAssetPreview(null);
+      setCoverPreviewOpen(false);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [assetPreview, coverPreviewOpen, lightbox]);
+
   // Engine token chips, when the system dir exists.
   useEffect(() => {
     const url = kit.system?.tokensUrl;

@@ -252,6 +252,9 @@
 .ds-resource-row--description {
   align-items: start;
 }
+.ds-resource-row--design-md {
+  align-items: start;
+}
 .ds-resource-row > strong {
   color: var(--text-strong);
   font-size: 13.5px;
@@ -312,6 +315,309 @@
   font: inherit;
   font-size: 13px;
   line-height: 1.5;
+}
+.ds-design-md-field {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.ds-design-md-field-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ds-design-md-field-head > span {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ds-design-md-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+.ds-design-md-actions button {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.ds-design-md-actions button.active {
+  background: var(--bg-panel);
+  color: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+.ds-design-md-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.ds-design-md-field textarea {
+  min-height: 150px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-strong);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-xs);
+  font: 13px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+.ds-design-md-preview {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+.ds-design-md-preview-head,
+.ds-design-md-kit-tabs,
+.ds-design-md-token-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.ds-design-md-preview-head {
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ds-design-md-preview-head span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.ds-design-md-kit {
+  overflow: hidden;
+  border: 1px solid var(--ds-md-border);
+  border-radius: 8px;
+  background: var(--ds-md-bg);
+  color: var(--ds-md-foreground);
+  font-family: var(--ds-md-body-font);
+}
+.ds-design-md-kit-tabs {
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ds-md-border);
+  background: color-mix(in srgb, var(--ds-md-surface) 88%, var(--ds-md-bg));
+}
+.ds-design-md-kit-tabs button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ds-md-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ds-design-md-kit-tabs button.active {
+  border-color: var(--ds-md-border);
+  background: var(--ds-md-bg);
+  color: var(--ds-md-primary);
+}
+.ds-design-md-kit-tabs span {
+  margin-left: auto;
+  color: var(--ds-md-muted);
+  font-size: 11px;
+}
+.ds-design-md-kit-stage {
+  min-height: 270px;
+  padding: 28px 34px 32px;
+}
+.ds-design-md-kit-badge {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 22px;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--ds-md-primary-bg);
+  color: var(--ds-md-primary-active);
+  font-size: 11px;
+  font-weight: 750;
+}
+.ds-design-md-kit-stage h3 {
+  margin: 14px 0 6px;
+  color: var(--ds-md-foreground);
+  font-family: var(--ds-md-display-font);
+  font-size: 34px;
+  font-weight: 760;
+  line-height: 1.08;
+}
+.ds-design-md-kit-stage p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--ds-md-muted);
+  font-size: 15px;
+  line-height: 1.45;
+}
+.ds-design-md-specimen {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(160px, 0.9fr);
+  gap: 18px;
+  margin-top: 24px;
+}
+.ds-design-md-specimen section {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--ds-md-border);
+  border-radius: var(--ds-md-radius);
+  background: var(--ds-md-surface);
+}
+.ds-design-md-specimen h4 {
+  margin: 0;
+  color: var(--ds-md-foreground);
+  font-size: 20px;
+  font-weight: 740;
+}
+.ds-design-md-specimen small {
+  display: block;
+  margin-top: 4px;
+  color: var(--ds-md-muted);
+  font-size: 12px;
+}
+.ds-design-md-button-row,
+.ds-design-md-size-row,
+.ds-design-md-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+.ds-design-md-button-row button,
+.ds-design-md-size-row button {
+  min-height: 34px;
+  padding: 0 16px;
+  border: 1px solid var(--ds-md-border);
+  border-radius: var(--ds-md-radius);
+  background: var(--ds-md-surface);
+  color: var(--ds-md-foreground);
+  font: inherit;
+  font-size: var(--ds-md-font-size);
+  font-weight: 740;
+}
+.ds-design-md-button-row button.primary,
+.ds-design-md-size-row button.primary {
+  border-color: var(--ds-md-primary);
+  background: var(--ds-md-primary);
+}
+.ds-design-md-button-row button.dashed {
+  border-style: dashed;
+}
+.ds-design-md-button-row button.text {
+  border-color: transparent;
+  background: transparent;
+}
+.ds-design-md-button-row button.link {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ds-md-primary-active);
+}
+.ds-design-md-size-row button.small {
+  min-height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+.ds-design-md-size-row button.large {
+  min-height: 42px;
+  padding: 0 20px;
+  font-size: 18px;
+}
+.ds-design-md-type-row {
+  align-items: baseline;
+  gap: 18px;
+  color: var(--ds-md-foreground);
+}
+.ds-design-md-type-row strong {
+  font-family: var(--ds-md-display-font);
+  font-size: 46px;
+  line-height: 1;
+}
+.ds-design-md-type-row span {
+  font-size: 28px;
+  font-weight: 700;
+}
+.ds-design-md-type-row small {
+  font-size: 18px;
+}
+.ds-design-md-token-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ds-design-md-token-chip {
+  min-width: 128px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px 6px 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.ds-design-md-token-chip i {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  font-style: normal;
+}
+.ds-design-md-token-chip span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.ds-design-md-token-chip strong,
+.ds-design-md-token-chip small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-design-md-token-chip strong {
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ds-design-md-token-chip small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ds-design-md-token-chip--value {
+  min-width: 92px;
+}
+.ds-design-md-token-chip--value i {
+  display: grid;
+  place-items: center;
+  background: var(--ds-md-primary-bg);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 750;
 }
 /* Compact secondary action that opens the brand-picker modal — sits inline with
    the URL input + Add rather than spanning a full row. */
@@ -688,6 +994,24 @@ a.ds-source-link-open:focus-visible {
   .ds-resource-inline,
   .ds-drop-zone-wrap {
     grid-template-columns: 1fr;
+  }
+
+  .ds-design-md-field-head,
+  .ds-design-md-specimen {
+    grid-template-columns: 1fr;
+  }
+
+  .ds-design-md-field-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ds-design-md-kit-stage {
+    padding: 22px 18px 24px;
+  }
+
+  .ds-design-md-kit-stage h3 {
+    font-size: 26px;
   }
 
   .ds-setup-actions--embedded {

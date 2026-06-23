@@ -89,6 +89,8 @@ import { ANNOTATION_EVENT, type AnnotationEventDetail } from "./PreviewDrawOverl
 import { DesignSystemSwitchPicker } from "./DesignSystemSwitchPicker";
 import { listenForConnectorsChanged } from './connectors-events';
 import { fetchConnectorCatalogSnapshot } from './connectors-state';
+import { PlaceholderCarousel } from './home-hero/PlaceholderCarousel';
+import type { PlaceholderScenario } from './home-hero/placeholderScenarios';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
@@ -168,6 +170,7 @@ interface Props {
   sendDisabled?: boolean;
   initialDraft?: string;
   composerPlaceholder?: string;
+  placeholderScenarios?: ReadonlyArray<PlaceholderScenario>;
   draftStorageKey?: string;
   // Lazy ensure — the composer calls this before its first upload, so the
   // project folder exists on disk before files land in it. Returns the
@@ -338,6 +341,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       sendDisabled = false,
       initialDraft,
       composerPlaceholder,
+      placeholderScenarios = [],
       draftStorageKey,
       onEnsureProject,
       commentAttachments = [],
@@ -386,6 +390,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         : null;
     const activeFileDisplayName = activeFileContext ? lastPathSegment(activeFileContext) : null;
     const [draft, setDraft] = useState(() => initialDraft ?? loadComposerDraft(draftStorageKey) ?? "");
+    const [placeholderScenario, setPlaceholderScenario] = useState<PlaceholderScenario | null>(null);
     const composerRootRef = useRef<HTMLDivElement | null>(null);
     // Synchronous mirror of `draft`. Event handlers that mutate the draft off
     // a captured render closure (notably the annotation listener, where two
@@ -2048,7 +2053,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         reset();
         return;
       }
-      if (!prompt && staged.length === 0 && nextCommentAttachments.length === 0) return;
+      if (!prompt && staged.length === 0 && nextCommentAttachments.length === 0) {
+        const placeholderPrompt = placeholderSubmittable && placeholderScenario
+          ? placeholderScenario.text.trim()
+          : '';
+        if (!placeholderPrompt) return;
+        sendComposedTurn(placeholderPrompt, [], [], contextMeta);
+        return;
+      }
       sendComposedTurn(prompt, staged, nextCommentAttachments, contextMeta);
     }
 
@@ -2161,8 +2173,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         .filter((s) => skillMatchesQuery(s, mentionQuery))
         .sort((a, b) => skillMentionRank(a, mentionQuery) - skillMentionRank(b, mentionQuery));
     }, [mention, mentionQuery, skills, stagedSkills]);
+    const liveCommentAttachments = currentCommentAttachments();
+    const placeholderCarouselActive =
+      !streaming
+      && !sendDisabled
+      && !activeFileContext
+      && placeholderScenarios.length > 0
+      && draft.trim().length === 0
+      && staged.length === 0
+      && liveCommentAttachments.length === 0
+      && !mention
+      && !slash;
+    const placeholderSubmittable =
+      placeholderCarouselActive && Boolean(placeholderScenario?.text.trim());
     const hasComposerPayload =
-      draft.trim().length > 0 || staged.length > 0 || currentCommentAttachments().length > 0;
+      draft.trim().length > 0
+      || staged.length > 0
+      || liveCommentAttachments.length > 0
+      || placeholderSubmittable;
     const showStopButton = streaming && !hasComposerPayload;
     const showSendButton = !streaming || hasComposerPayload;
 
@@ -2286,7 +2314,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               placeholder={
                 activeFileDisplayName
                   ? t('chat.activeFilePlaceholder', { file: activeFileDisplayName })
-                  : composerPlaceholder ?? t('chat.composerPlaceholder')
+                  : placeholderCarouselActive
+                    ? ''
+                    : composerPlaceholder ?? t('chat.composerPlaceholder')
               }
               title={activeFileDisplayName ?? composerPlaceholder ?? t('chat.composerPlaceholder')}
               knownEntities={composerMentionEntities}
@@ -2301,6 +2331,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 activeId: mention ? `mention-opt-${mentionIndex}` : null,
               }}
             />
+            {placeholderScenarios.length > 0 ? (
+              <PlaceholderCarousel
+                scenarios={placeholderScenarios}
+                active={placeholderCarouselActive}
+                onScenarioChange={setPlaceholderScenario}
+              />
+            ) : null}
           </div>
           <CaretFloatingLayer
             caret={caretRect}

@@ -1,0 +1,59 @@
+// Shown in a brand-extraction project once the extraction finalizes: a gentle,
+// dismissible nudge that the design system is ready to preview in the Design
+// systems tab. It never auto-dismisses — extraction runs for minutes, so a
+// confirmation that vanishes on a timer would be missed exactly when the user
+// looks back. Clicking the CTA opens the Design systems tab (with the new system
+// preselected, wired by the caller); the × dismisses without navigating.
+import { motion } from 'motion/react';
+
+import { Icon } from './Icon';
+import { useT } from '../i18n';
+import { toastSlideUp } from '../motion';
+import styles from './BrandReadyPrompt.module.css';
+
+export interface BrandReadyPromptProps {
+  /** Brand display name; null falls back to a generic title. */
+  brandName: string | null;
+  /** Open the Design systems tab with the new system preselected. */
+  onPreview: () => void;
+  /** Dismiss without navigating. */
+  onDismiss: () => void;
+}
+
+export function BrandReadyPrompt({ brandName, onPreview, onDismiss }: BrandReadyPromptProps) {
+  const t = useT();
+  const title = brandName
+    ? t('project.brandReadyTitle', { name: brandName })
+    : t('project.brandReadyTitleGeneric');
+
+  return (
+    <motion.div
+      className={styles.prompt}
+      role="status"
+      aria-live="polite"
+      variants={toastSlideUp}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+    >
+      <span className={styles.icon} aria-hidden>
+        <Icon name="check" size={16} />
+      </span>
+      <div className={styles.text}>
+        <div className={styles.title}>{title}</div>
+        <button type="button" className={styles.cta} onClick={onPreview}>
+          {t('project.brandReadyCta')}
+          <Icon name="chevron-right" size={14} />
+        </button>
+      </div>
+      <button
+        type="button"
+        className={styles.dismiss}
+        onClick={onDismiss}
+        aria-label={t('project.brandReadyDismiss')}
+      >
+        <Icon name="close" size={14} />
+      </button>
+    </motion.div>
+  );
+}

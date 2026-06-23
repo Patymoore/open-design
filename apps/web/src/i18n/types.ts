@@ -2126,6 +2126,10 @@ export interface Dict {
 
   // Project view / chat pane / composer
   'project.backToProjects': string;
+  'project.brandReadyTitle': string;
+  'project.brandReadyTitleGeneric': string;
+  'project.brandReadyCta': string;
+  'project.brandReadyDismiss': string;
   'project.metaFreeform': string;
   'project.customInstructions': string;
   'project.customInstructionsPlaceholder': string;

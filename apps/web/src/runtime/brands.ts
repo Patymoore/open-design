@@ -11,6 +11,37 @@
 import { useEffect, useState } from 'react';
 import type { BrandSummary } from '@open-design/contracts';
 
+// One-shot cross-route handoff: the design-system id a navigation wants the
+// Design systems tab to preselect when it mounts. ProjectView's "design system
+// ready" prompt sets this right before navigating home; `DesignSystemsTab` reads
+// and clears it once. We piggyback on sessionStorage (the same pattern the brand
+// create flow uses for `od:auto-send-first:*`) because `/design-systems/:id` is
+// already the *detail* route, so the preselection can't ride on the URL path.
+export const DESIGN_SYSTEM_FOCUS_KEY = 'od:focus-design-system';
+
+/** Record the design system the next Design-systems tab mount should preselect.
+ *  Best-effort: private-mode / SSR storage failures are swallowed (the tab just
+ *  falls back to its default selection). */
+export function setDesignSystemFocus(id: string): void {
+  try {
+    window.sessionStorage.setItem(DESIGN_SYSTEM_FOCUS_KEY, id);
+  } catch {
+    // sessionStorage unavailable — the tab opens on its default selection.
+  }
+}
+
+/** Read and clear the one-shot Design-systems focus handoff. Returns null when
+ *  nothing is pending or storage is unavailable. */
+export function takeDesignSystemFocus(): string | null {
+  try {
+    const id = window.sessionStorage.getItem(DESIGN_SYSTEM_FOCUS_KEY);
+    if (id) window.sessionStorage.removeItem(DESIGN_SYSTEM_FOCUS_KEY);
+    return id || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchBrands(): Promise<BrandSummary[]> {
   try {
     const resp = await fetch('/api/brands', { cache: 'no-store' });

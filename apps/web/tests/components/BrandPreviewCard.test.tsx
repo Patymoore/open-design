@@ -84,4 +84,21 @@ describe('BrandPreviewCard', () => {
       expect((screen.getByTestId('brand-preview-delete') as HTMLButtonElement).disabled).toBe(false);
     });
   });
+
+  it('closes the brand asset preview modal with Escape', async () => {
+    render(
+      <I18nProvider initial="en">
+        <BrandPreviewCard summary={rampBrand} variant="panel" />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /landing page/i }));
+    expect(screen.getByRole('dialog', { name: /landing page/i })).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /landing page/i })).toBeNull();
+    });
+  });
 });

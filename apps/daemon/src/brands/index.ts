@@ -824,9 +824,17 @@ export async function renderBrandPreviewIntoProject(
   return { id, projectId, file: BRAND_KIT_FILE, rendered };
 }
 
-/** The first prompt the enrichment agent auto-runs. Self-sufficient (does not
- *  rely on the brand-extract skill auto-loading) but names it so a runtime that
- *  surfaces skills can pull in the longer methodology + craft guides. */
+/** The first prompt the enrichment agent auto-runs. Self-sufficient: it inlines
+ *  the full brand-extract workflow so the agent never has to load anything.
+ *
+ *  The daemon surfaces its `skills/` by folding the skill body into the SYSTEM
+ *  prompt (see composeSystemPrompt) when a project has an active `skillId` — it
+ *  does NOT register them as Claude-Code `Skill` / slash commands. This backing
+ *  project carries no active skill, so phrasing like "use the brand-extract
+ *  skill" gets executed by the agent as a `Skill {"skill":"brand-extract"}`
+ *  tool call that has no registry to resolve against and ALWAYS fails (it burns
+ *  a turn and confuses the run). Keep this prompt describing the methodology
+ *  inline and steer the agent away from invoking any skill / slash command. */
 function brandExtractionPrompt(input: {
   url: string;
   brandId: string;
@@ -861,7 +869,7 @@ function brandExtractionPrompt(input: {
     `Source URL: ${input.url}`,
     `Brand id: ${input.brandId}`,
     '',
-    'A usable design system has ALREADY been extracted programmatically and registered — the daemon harvested the site deterministically (logo, palette, typography, a one-line description, cover imagery, source URL) and the design-system page (`brand.html`) is open as the active tab, already in the `ready` state and applyable everywhere RIGHT NOW. Your job is to ENRICH that provisional design system into the full, precise version: re-measure anything the deterministic pass got approximately, add what it could not infer (voice & tone, imagery direction, layout posture, accent-secondary), and replace any weak guesses with measured truth.' + designMdNote + ' The target site is also open in a secondary in-app Browser tab. Use the `brand-extract` skill and the `agent-browser` tool to drive and observe the site. Do not guess — measure.',
+    'A usable design system has ALREADY been extracted programmatically and registered — the daemon harvested the site deterministically (logo, palette, typography, a one-line description, cover imagery, source URL) and the design-system page (`brand.html`) is open as the active tab, already in the `ready` state and applyable everywhere RIGHT NOW. Your job is to ENRICH that provisional design system into the full, precise version: re-measure anything the deterministic pass got approximately, add what it could not infer (voice & tone, imagery direction, layout posture, accent-secondary), and replace any weak guesses with measured truth.' + designMdNote + ' The target site is also open in a secondary in-app Browser tab. This task already contains the full brand-extract workflow inline (the numbered steps below) — follow it directly. Do NOT try to load or invoke a `brand-extract` skill, `Skill`, or any slash command: none is registered here and the call will fail. Drive and observe the site with the `agent-browser` tool. Do not guess — measure.',
     '',
     'Work the branding-agent chain, optimizing for PROGRESSIVE fill-in (never batch everything to the end). The page is already populated from the programmatic pass — refine it module by module so the user watches it sharpen:',
     '',
@@ -914,7 +922,7 @@ function brandExtractionFallbackPrompt(input: {
     '',
     'The daemon opened a live extraction scaffold (`brand.html`) in the project, but a ready design system is NOT guaranteed yet. Treat the page as an empty/in-progress workspace until you have measured the target site and written `brand.json`; do not assume a registered `brand.json` or design system already exists.' + designMdNote,
     '',
-    'Use the `brand-extract` skill and the `agent-browser` tool to drive and observe the target site. Measure before you synthesize: capture the real colors, fonts, logo candidates, representative imagery, voice, and layout posture. If the page is an anti-bot verification interstitial, emit a `<question-form>` asking the user to complete verification in the browser, then continue after they respond.',
+    'This task already contains the full brand-extract workflow inline — follow it directly. Do NOT try to load or invoke a `brand-extract` skill, `Skill`, or any slash command: none is registered here and the call will fail. Drive and observe the target site with the `agent-browser` tool. Measure before you synthesize: capture the real colors, fonts, logo candidates, representative imagery, voice, and layout posture. If the page is an anti-bot verification interstitial, emit a `<question-form>` asking the user to complete verification in the browser, then continue after they respond.',
     '',
     'Write `brand.json` as soon as you have the name, a couple of measured colors, and a logo candidate, then run `od brand preview ' + input.brandId + '` so the scaffold fills in progressively. Keep updating `brand.json`, `BRAND.md`, saved `logos/`, fonts, and `imagery/` samples as you measure each field group.',
     '',

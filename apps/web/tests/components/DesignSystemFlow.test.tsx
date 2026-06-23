@@ -389,11 +389,100 @@ describe('DesignSystemCreationFlow', () => {
     expect(JSON.parse(requestInit.body)).not.toHaveProperty('url');
   });
 
-  it('requires a website before extracting and surfaces a kickoff failure', async () => {
+  it('previews pasted DESIGN.md as a component kit and returns to edit mode', () => {
+    render(<DesignSystemCreationFlow onBack={() => {}} onCreated={() => {}} />);
+
+    const designMd = [
+      '---',
+      'name: Heritage',
+      'colors:',
+      '  primary: "#1A1C1E"',
+      '  tertiary: "#B8422E"',
+      '  background: "#FFFFFF"',
+      '---',
+      '',
+      '## Overview',
+      'Editorial design system.',
+      '',
+      '## Typography',
+      '- **Display:** Public Sans — 700',
+      '- **Body:** Public Sans — 400',
+    ].join('\n');
+
+    fireEvent.change(screen.getByPlaceholderText(/name: Heritage/i), {
+      target: { value: designMd },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^preview$/i }));
+
+    expect(screen.getByText('DESIGN.md preview')).toBeTruthy();
+    expect(screen.getByText(/Heritage .* component kit/i)).toBeTruthy();
+    expect(screen.getByText('colorPrimary')).toBeTruthy();
+    expect(screen.getByText('#1a1c1e')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^dark$/i }));
+    expect(screen.getByRole('button', { name: /^dark$/i }).getAttribute('aria-pressed')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByDisplayValue(designMd)).toBeTruthy();
+  });
+
+  it('creates from a brand description by sending a fallback DESIGN.md', async () => {
+    const project: Project = {
+      id: 'brand-description-only',
+      name: 'Description Design System',
+      skillId: 'brand-extract',
+      designSystemId: 'user:description-only',
+      createdAt: 1,
+      updatedAt: 1,
+      metadata: { kind: 'brand', importedFrom: 'brand-extraction' },
+    };
+    mocks.getProject.mockResolvedValue(project);
+    const fetchMock = vi.fn(async (input: unknown, _init?: unknown) => {
+      if (typeof input === 'string' && input.startsWith('/api/brands')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'description-only',
+            projectId: project.id,
+            conversationId: 'conv-description-only',
+            sourceUrl: 'designmd://description-only',
+            status: 'ready',
+            designSystemId: 'user:description-only',
+            brandName: 'Description',
+          }),
+        } as unknown as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const onCreated = vi.fn();
+
+    render(<DesignSystemCreationFlow onBack={() => {}} onCreated={onCreated} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Mission Impastabowl/i), {
+      target: { value: 'A newsroom product with a precise editorial voice.' },
+    });
+    expect(
+      (screen.getByRole('button', { name: /continue to generation/i }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    continueToGeneration();
+    fireEvent.click(screen.getByRole('button', { name: /extract design system/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project.id, project));
+    const requestInit = fetchMock.mock.calls.find(([url]) => url === '/api/brands')?.[1] as unknown as { body: string };
+    const body = JSON.parse(requestInit.body) as { url?: string; description?: string; designMd?: string };
+    expect(body).not.toHaveProperty('url');
+    expect(body.description).toBe('A newsroom product with a precise editorial voice.');
+    expect(body.designMd).toContain('A newsroom product with a precise editorial voice.');
+    expect(body.designMd).toContain('## Source Material');
+  });
+
+  it('requires source material before extracting and surfaces a kickoff failure', async () => {
     const onCreated = vi.fn();
     render(<DesignSystemCreationFlow onBack={() => {}} onCreated={onCreated} />);
 
-    // The action stays disabled until a website (or brand) is provided.
+    // The action stays disabled until at least one source field is provided.
     expect(
       (screen.getByRole('button', { name: /continue to generation/i }) as HTMLButtonElement).disabled,
     ).toBe(true);

@@ -25,7 +25,7 @@ import styles from './NextStepActions.module.css';
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 export type NextStepActionsVariant = 'default' | 'design-system';
 
-const DESIGN_SYSTEM_NEXT_STEP_ACTIONS = [
+export const DESIGN_SYSTEM_NEXT_STEP_ACTIONS = [
   {
     id: 'design-system-ai-refine',
     icon: 'sparkles' as IconName,

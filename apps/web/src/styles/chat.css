@@ -1119,6 +1119,36 @@
   white-space: nowrap;
   max-width: calc(100% - 8px);
 }
+.composer-input-wrap .home-hero__carousel {
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  color: var(--text-faint);
+  font-size: 13.5px;
+  line-height: 1.6;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.composer-input-wrap .home-hero__carousel-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-input-wrap .home-hero__carousel-caret {
+  width: 1px;
+  height: 1.25em;
+  flex: 0 0 auto;
+  background: var(--accent);
+  opacity: 0.85;
+  animation: home-hero-carousel-caret 900ms steps(1) infinite;
+}
 /* Single-paragraph + LineBreakNode model: collapse paragraph margins so a
    serialized "\n" reads as a single visual line break (no \n\n gap). */
 .composer-input-editor p,

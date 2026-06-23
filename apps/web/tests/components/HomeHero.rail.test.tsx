@@ -195,6 +195,28 @@ describe('HomeHero intent rail', () => {
     expect(trigger.textContent).not.toContain('Slide deck');
   });
 
+  it('clears the template pill to None when Clear is pressed on a stale hover-preview', () => {
+    // Hovering a rail card previews it in the footer pill while the active chip
+    // is still null. The reset that drops the preview keys on the *committed*
+    // chip changing, so when the pointer never leaves the card (or the rail
+    // unmounts mid-hover) the preview outlives the hover with activeChipId still
+    // null. Pressing Clear there is a no-op on the active chip, so the pill must
+    // drop the preview itself or it stays stuck on the hovered template.
+    // (Reported: pill stayed on the picked template after Clear.)
+    const { onClearActiveChip } = renderHero({ activeChipId: null });
+
+    fireEvent.mouseEnter(screen.getByTestId('home-hero-rail-deck'));
+    expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Slide deck');
+
+    fireEvent.click(screen.getByTestId('home-hero-template-trigger'));
+    fireEvent.click(screen.getByTestId('home-hero-template-clear'));
+
+    expect(onClearActiveChip).toHaveBeenCalledTimes(1);
+    const trigger = screen.getByTestId('home-hero-template-trigger');
+    expect(trigger.textContent).toContain('None');
+    expect(trigger.textContent).not.toContain('Slide deck');
+  });
+
   it('uses the active creation chip as the only clear control for a chip-bound plugin', () => {
     const activePlugin = makePlugin('example-image-a', 'image', 'Product image');
     renderHero({

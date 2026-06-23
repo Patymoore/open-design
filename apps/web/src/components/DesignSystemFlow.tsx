@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Button, Textarea } from '@open-design/components';
 import type { ConnectorConnectResponse, ConnectorDetail, ConnectorStatusResponse, LibraryAsset } from '@open-design/contracts';
 import { streamViaDaemon } from '../providers/daemon';
@@ -35,6 +35,7 @@ import {
   saveTabs,
 } from '../state/projects';
 import { appendErrorStatusEvent } from '../runtime/chat-events';
+import { parseDesignMd } from '../runtime/design-md-parse';
 import {
   buildDesignSystemPackageAuditRepairPrompt,
   summarizeDesignSystemPackageAudit,
@@ -182,6 +183,8 @@ interface DetailProps {
 
 type SetupStep = 'setup' | 'confirm';
 type ReviewTab = 'system' | 'files';
+type DesignMdMode = 'edit' | 'preview';
+type DesignMdPreviewTheme = 'light' | 'dark';
 
 interface ResolvedDesignSystemWorkspaceProject {
   projectId: string;
@@ -336,6 +339,8 @@ export function DesignSystemCreationFlow({
   const [generationStarting, setGenerationStarting] = useState(false);
   const [sourceProcessingCount, setSourceProcessingCount] = useState(0);
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
+  const [designMdMode, setDesignMdMode] = useState<DesignMdMode>('edit');
+  const [designMdPreviewTheme, setDesignMdPreviewTheme] = useState<DesignMdPreviewTheme>('light');
   // "Start from a brand" reference picker on the URL field + the Advanced
   // disclosure that hides the lower-frequency source inputs.
   const [brandPickerOpen, setBrandPickerOpen] = useState(false);
@@ -1054,15 +1059,44 @@ export function DesignSystemCreationFlow({
             </div>
             <div className="ds-resource-row ds-resource-row--design-md">
               <strong>Paste DESIGN.md <span>optional</span></strong>
-              <label className="ds-resource-description">
-                <span>Paste a DESIGN.md to create directly from tokens, rationale and component guidance.</span>
-                <textarea
-                  rows={5}
-                  value={state.designMd}
-                  onChange={(event) => setState((curr) => ({ ...curr, designMd: event.target.value }))}
-                  placeholder={'---\nname: Heritage\ncolors:\n  primary: "#1A1C1E"\n  tertiary: "#B8422E"\ntypography:\n  h1:\n    fontFamily: Public Sans\n---\n\n## Overview\n...'}
-                />
-              </label>
+              <div className="ds-design-md-field">
+                <div className="ds-design-md-field-head">
+                  <span>Paste a DESIGN.md to create directly from tokens, rationale and component guidance.</span>
+                  <div className="ds-design-md-actions" aria-label="DESIGN.md view mode">
+                    <button
+                      type="button"
+                      className={designMdMode === 'edit' ? 'active' : ''}
+                      aria-pressed={designMdMode === 'edit'}
+                      onClick={() => setDesignMdMode('edit')}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className={designMdMode === 'preview' ? 'active' : ''}
+                      aria-pressed={designMdMode === 'preview'}
+                      disabled={!state.designMd.trim()}
+                      onClick={() => setDesignMdMode('preview')}
+                    >
+                      Preview
+                    </button>
+                  </div>
+                </div>
+                {designMdMode === 'preview' && state.designMd.trim() ? (
+                  <DesignMdComponentKitPreview
+                    markdown={state.designMd}
+                    theme={designMdPreviewTheme}
+                    onThemeChange={setDesignMdPreviewTheme}
+                  />
+                ) : (
+                  <textarea
+                    rows={5}
+                    value={state.designMd}
+                    onChange={(event) => setState((curr) => ({ ...curr, designMd: event.target.value }))}
+                    placeholder={'---\nname: Heritage\ncolors:\n  primary: "#1A1C1E"\n  tertiary: "#B8422E"\ntypography:\n  h1:\n    fontFamily: Public Sans\n---\n\n## Overview\n...'}
+                  />
+                )}
+              </div>
             </div>
             <div className="ds-resource-advanced">
               <button
@@ -1242,6 +1276,157 @@ export function DesignSystemCreationFlow({
         />
       ) : null}
     </div>
+  );
+}
+
+interface DesignMdPreviewColor {
+  label: string;
+  hex: string;
+}
+
+interface DesignMdPreviewModel {
+  name: string;
+  description: string;
+  displayFont: string;
+  bodyFont: string;
+  radius: number;
+  fontSize: number;
+  colors: DesignMdPreviewColor[];
+  colorPrimary: string;
+  colorPrimaryBg: string;
+  colorPrimaryHover: string;
+  colorPrimaryActive: string;
+  light: DesignMdThemeTokens;
+  dark: DesignMdThemeTokens;
+}
+
+interface DesignMdThemeTokens {
+  background: string;
+  surface: string;
+  foreground: string;
+  muted: string;
+  border: string;
+}
+
+function DesignMdComponentKitPreview({
+  markdown,
+  theme,
+  onThemeChange,
+}: {
+  markdown: string;
+  theme: DesignMdPreviewTheme;
+  onThemeChange: (theme: DesignMdPreviewTheme) => void;
+}) {
+  const model = useMemo(() => buildDesignMdPreviewModel(markdown), [markdown]);
+  const themeTokens = theme === 'dark' ? model.dark : model.light;
+  const style = {
+    '--ds-md-bg': themeTokens.background,
+    '--ds-md-surface': themeTokens.surface,
+    '--ds-md-foreground': themeTokens.foreground,
+    '--ds-md-muted': themeTokens.muted,
+    '--ds-md-border': themeTokens.border,
+    '--ds-md-primary': model.colorPrimary,
+    '--ds-md-primary-bg': model.colorPrimaryBg,
+    '--ds-md-primary-hover': model.colorPrimaryHover,
+    '--ds-md-primary-active': model.colorPrimaryActive,
+    '--ds-md-radius': `${model.radius}px`,
+    '--ds-md-display-font': model.displayFont,
+    '--ds-md-body-font': model.bodyFont,
+    '--ds-md-font-size': `${model.fontSize}px`,
+  } as CSSProperties;
+  const primaryText = readableTextColor(model.colorPrimary);
+
+  return (
+    <div className="ds-design-md-preview" style={style} data-theme={theme}>
+      <div className="ds-design-md-preview-head">
+        <strong>DESIGN SYSTEM</strong>
+        <span>DESIGN.md preview</span>
+      </div>
+      <div className="ds-design-md-kit">
+        <div className="ds-design-md-kit-tabs">
+          <button
+            type="button"
+            className={theme === 'light' ? 'active' : ''}
+            aria-pressed={theme === 'light'}
+            onClick={() => onThemeChange('light')}
+          >
+            Light
+          </button>
+          <button
+            type="button"
+            className={theme === 'dark' ? 'active' : ''}
+            aria-pressed={theme === 'dark'}
+            onClick={() => onThemeChange('dark')}
+          >
+            Dark
+          </button>
+          <span>component kit</span>
+        </div>
+        <div className="ds-design-md-kit-stage">
+          <span className="ds-design-md-kit-badge">{model.name} · default theme</span>
+          <h3>{model.name} — component kit</h3>
+          <p>{model.description || 'Generated from pasted DESIGN.md tokens, rationale and component guidance.'}</p>
+          <div className="ds-design-md-specimen">
+            <section>
+              <h4>Buttons</h4>
+              <small>Five types across three sizes.</small>
+              <div className="ds-design-md-button-row">
+                <button type="button" className="primary" style={{ color: primaryText }}>Primary</button>
+                <button type="button">Default</button>
+                <button type="button" className="dashed">Dashed</button>
+                <button type="button" className="text">Text</button>
+                <button type="button" className="link">Link</button>
+              </div>
+              <div className="ds-design-md-size-row">
+                <button type="button" className="primary small" style={{ color: primaryText }}>Small</button>
+                <button type="button" className="primary" style={{ color: primaryText }}>Medium</button>
+                <button type="button" className="primary large" style={{ color: primaryText }}>Large</button>
+              </div>
+            </section>
+            <section>
+              <h4>Type scale</h4>
+              <small>{model.displayFont} · {model.bodyFont}</small>
+              <div className="ds-design-md-type-row">
+                <strong>Aa</strong>
+                <span>Aa</span>
+                <small>Aa</small>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+      <div className="ds-design-md-token-row" aria-label="Extracted DESIGN.md tokens">
+        <DesignMdTokenChip label="colorPrimary" hex={model.colorPrimary} />
+        <DesignMdTokenChip label="colorPrimaryBg" hex={model.colorPrimaryBg} />
+        <DesignMdTokenChip label="colorPrimaryHover" hex={model.colorPrimaryHover} />
+        <DesignMdTokenChip label="colorPrimaryActive" hex={model.colorPrimaryActive} />
+        <DesignMdValueChip label="fontSize" value={String(model.fontSize)} />
+        <DesignMdValueChip label="borderRadius" value={String(model.radius)} />
+      </div>
+    </div>
+  );
+}
+
+function DesignMdTokenChip({ label, hex }: { label: string; hex: string }) {
+  return (
+    <span className="ds-design-md-token-chip">
+      <i style={{ background: hex }} aria-hidden />
+      <span>
+        <strong>{label}</strong>
+        <small>{hex}</small>
+      </span>
+    </span>
+  );
+}
+
+function DesignMdValueChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="ds-design-md-token-chip ds-design-md-token-chip--value">
+      <i aria-hidden>{value}</i>
+      <span>
+        <strong>{label}</strong>
+      </span>
+    </span>
   );
 }
 
@@ -4062,6 +4247,175 @@ function SourceLinkFavicon({ url }: { url: string }) {
   );
 }
 
+function buildDesignMdPreviewModel(markdown: string): DesignMdPreviewModel {
+  const parsed = parseDesignMd(markdown);
+  const colors = parsed.colors
+    .map((color) => ({
+      label: color.name || color.role || 'Color',
+      role: color.role,
+      usage: color.usage,
+      hex: normalizePreviewHex(color.hex),
+    }))
+    .filter((color): color is DesignMdPreviewColor & { role: string; usage: string } => Boolean(color.hex))
+    .slice(0, 8);
+  const allColors = colors.length > 0 ? colors : [
+    { label: 'Primary', role: 'accent', usage: 'Primary actions', hex: '#cc6344' },
+    { label: 'Background', role: 'background', usage: 'Page canvas', hex: '#ffffff' },
+    { label: 'Foreground', role: 'foreground', usage: 'Text', hex: '#1f1f22' },
+  ];
+  const colorPrimary =
+    findPreviewColor(allColors, /(accent|primary|brand|cta|tertiary|link)/)
+    ?? firstNonNeutralColor(allColors)
+    ?? allColors[0]!.hex;
+  const lightBackground =
+    findPreviewColor(allColors, /(background|canvas|page|paper|white)/, 'light')
+    ?? '#ffffff';
+  const lightForeground =
+    findPreviewColor(allColors, /(foreground|text|ink|heading|body|black)/, 'dark')
+    ?? '#222326';
+  const lightSurface =
+    findPreviewColor(allColors, /(surface|card|panel|raised)/, 'light')
+    ?? mixPreviewHex(lightBackground, '#f5f4f0', 0.72);
+  const lightBorder =
+    findPreviewColor(allColors, /(border|divider|line|stroke|hairline)/)
+    ?? mixPreviewHex(lightForeground, lightBackground, 0.14);
+  const lightMuted =
+    findPreviewColor(allColors, /(muted|secondary|caption|metadata|slate)/)
+    ?? mixPreviewHex(lightForeground, lightBackground, 0.54);
+  const darkBackground =
+    findPreviewColor(allColors, /(background|canvas|page|paper)/, 'dark')
+    ?? mixPreviewHex(lightForeground, '#000000', 0.72);
+  const darkForeground =
+    findPreviewColor(allColors, /(foreground|text|ink|heading|body)/, 'light')
+    ?? mixPreviewHex(lightBackground, '#ffffff', 0.92);
+  const colorPrimaryBg = mixPreviewHex(colorPrimary, lightBackground, 0.14);
+  return {
+    name: parsed.name || 'Design system',
+    description: parsed.description || parsed.tagline,
+    displayFont: cssFontFamily(parsed.typography.display?.family ?? parsed.typography.body?.family ?? fontFromMarkdown(markdown) ?? 'Inter'),
+    bodyFont: cssFontFamily(parsed.typography.body?.family ?? parsed.typography.display?.family ?? fontFromMarkdown(markdown) ?? 'Inter'),
+    radius: radiusFromDesignMd(parsed.layout.radius || markdown),
+    fontSize: fontSizeFromDesignMd(markdown),
+    colors: allColors.map((color) => ({ label: color.label, hex: color.hex })),
+    colorPrimary,
+    colorPrimaryBg,
+    colorPrimaryHover: mixPreviewHex(colorPrimary, '#ffffff', 0.86),
+    colorPrimaryActive: mixPreviewHex(colorPrimary, '#000000', 0.82),
+    light: {
+      background: lightBackground,
+      surface: lightSurface,
+      foreground: lightForeground,
+      muted: lightMuted,
+      border: lightBorder,
+    },
+    dark: {
+      background: darkBackground,
+      surface: mixPreviewHex(darkBackground, '#ffffff', 0.9),
+      foreground: darkForeground,
+      muted: mixPreviewHex(darkForeground, darkBackground, 0.68),
+      border: mixPreviewHex(darkForeground, darkBackground, 0.2),
+    },
+  };
+}
+
+function normalizePreviewHex(value: string | undefined): string | null {
+  const match = value?.match(/#[0-9a-fA-F]{3}\b|#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{8}\b/);
+  if (!match) return null;
+  const raw = match[0].toLowerCase();
+  if (raw.length === 4) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
+  }
+  if (raw.length === 9) return raw.slice(0, 7);
+  return raw;
+}
+
+function findPreviewColor(
+  colors: Array<DesignMdPreviewColor & { role?: string; usage?: string }>,
+  matcher: RegExp,
+  tone?: 'light' | 'dark',
+): string | null {
+  for (const color of colors) {
+    const text = `${color.label} ${color.role ?? ''} ${color.usage ?? ''}`.toLowerCase();
+    if (!matcher.test(text)) continue;
+    if (tone === 'light' && previewLuminance(color.hex) < 0.72) continue;
+    if (tone === 'dark' && previewLuminance(color.hex) > 0.34) continue;
+    return color.hex;
+  }
+  return null;
+}
+
+function firstNonNeutralColor(colors: Array<DesignMdPreviewColor & { role?: string; usage?: string }>): string | null {
+  return colors.find((color) => {
+    const rgb = previewRgb(color.hex);
+    if (!rgb) return false;
+    const spread = Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+    return spread > 18 && previewLuminance(color.hex) > 0.08 && previewLuminance(color.hex) < 0.88;
+  })?.hex ?? null;
+}
+
+function previewRgb(hex: string): { r: number; g: number; b: number } | null {
+  const normalized = normalizePreviewHex(hex);
+  if (!normalized) return null;
+  return {
+    r: parseInt(normalized.slice(1, 3), 16),
+    g: parseInt(normalized.slice(3, 5), 16),
+    b: parseInt(normalized.slice(5, 7), 16),
+  };
+}
+
+function previewLuminance(hex: string): number {
+  const rgb = previewRgb(hex);
+  if (!rgb) return 1;
+  return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+}
+
+function mixPreviewHex(hex: string, other: string, hexWeight: number): string {
+  const a = previewRgb(hex) ?? { r: 0, g: 0, b: 0 };
+  const b = previewRgb(other) ?? { r: 255, g: 255, b: 255 };
+  const weight = Math.max(0, Math.min(1, hexWeight));
+  const mixed = {
+    r: Math.round(a.r * weight + b.r * (1 - weight)),
+    g: Math.round(a.g * weight + b.g * (1 - weight)),
+    b: Math.round(a.b * weight + b.b * (1 - weight)),
+  };
+  return `#${toHexByte(mixed.r)}${toHexByte(mixed.g)}${toHexByte(mixed.b)}`;
+}
+
+function toHexByte(value: number): string {
+  return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0');
+}
+
+function readableTextColor(hex: string): string {
+  return previewLuminance(hex) > 0.56 ? '#111111' : '#ffffff';
+}
+
+function cssFontFamily(family: string): string {
+  const clean = family.replace(/["'`]/g, '').trim();
+  if (!clean) return 'Inter, ui-sans-serif, system-ui, sans-serif';
+  const head = /\s/.test(clean) ? `'${clean}'` : clean;
+  return `${head}, ui-sans-serif, system-ui, sans-serif`;
+}
+
+function fontFromMarkdown(markdown: string): string | null {
+  const match =
+    markdown.match(/fontFamily:\s*["']?([^"'\n]+)/i)
+    ?? markdown.match(/font-family:\s*["']?([^"'\n;]+)/i)
+    ?? markdown.match(/family:\s*["']?([^"'\n]+)/i);
+  return match ? match[1]!.trim() : null;
+}
+
+function radiusFromDesignMd(value: string): number {
+  const match = value.match(/(?:radius|borderRadius)[^0-9]{0,16}(\d+(?:\.\d+)?)/i);
+  if (!match) return 6;
+  return Math.max(0, Math.min(24, Math.round(Number(match[1]))));
+}
+
+function fontSizeFromDesignMd(markdown: string): number {
+  const match = markdown.match(/(?:fontSize|font-size|base font)[^0-9]{0,16}(\d+(?:\.\d+)?)/i);
+  if (!match) return 14;
+  return Math.max(11, Math.min(22, Math.round(Number(match[1]))));
+}
+
 function githubRepoLabel(url: string): string {
   try {
     const parsed = new URL(sourceUrlHref(url) ?? url);
@@ -4080,6 +4434,13 @@ function sourceUrlsFromState(state: SetupState): string[] {
   ].filter(Boolean)));
 }
 
+function figmaUrlsFromState(state: SetupState): string[] {
+  return Array.from(new Set([
+    ...state.figmaUrls,
+    ...(state.figmaUrl.trim() ? [state.figmaUrl.trim()] : []),
+  ].filter(Boolean)));
+}
+
 function githubUrlsFromState(state: SetupState): string[] {
   return sourceUrlsFromState(state).filter(isGithubRepositoryUrl);
 }
@@ -4089,7 +4450,20 @@ function nonGithubSourceUrlsFromState(state: SetupState): string[] {
 }
 
 function hasCreationSource(state: SetupState): boolean {
-  return sourceUrlsFromState(state).length > 0 || state.designMd.trim().length > 0;
+  return (
+    sourceUrlsFromState(state).length > 0
+    || figmaUrlsFromState(state).length > 0
+    || state.designMd.trim().length > 0
+    || state.company.trim().length > 0
+    || state.notes.trim().length > 0
+    || state.codeFolders.length > 0
+    || state.codeFiles.length > 0
+    || state.codeFileObjects.length > 0
+    || state.figFiles.length > 0
+    || state.figFileObjects.length > 0
+    || state.assetFiles.length > 0
+    || state.assetFileObjects.length > 0
+  );
 }
 
 function isGithubRepositoryUrl(url: string): boolean {
@@ -4367,6 +4741,7 @@ function buildSourceNotes(state: SetupState): string {
   const sourceUrls = sourceUrlsFromState(state);
   const githubUrls = githubUrlsFromState(state);
   const websiteUrls = nonGithubSourceUrlsFromState(state);
+  const figmaUrls = figmaUrlsFromState(state);
   const localCode = localCodeReferences(state);
   return [
     sourceUrls.length ? `Source links: ${sourceUrls.join(', ')}` : '',
@@ -4374,9 +4749,66 @@ function buildSourceNotes(state: SetupState): string {
     websiteUrls.length ? `Website/source URLs: ${websiteUrls.join(', ')}` : '',
     localCode.length ? `Local code: ${localCode.join(', ')}` : '',
     state.figFiles.length ? `Figma files: ${state.figFiles.join(', ')}` : '',
+    figmaUrls.length ? `Figma URLs: ${figmaUrls.join(', ')}` : '',
     state.assetFiles.length ? `Fonts, logos and assets: ${state.assetFiles.join(', ')}` : '',
     state.notes.trim() ? `Additional notes: ${state.notes.trim()}` : '',
   ].filter(Boolean).join('\n');
+}
+
+function buildFallbackDesignMdFromState(state: SetupState): string {
+  if (!hasCreationSource(state)) return '';
+  const title = inferDesignSystemTitle(state);
+  const sourceNotes = buildSourceNotes(state);
+  const overview =
+    state.company.trim()
+    || state.notes.trim()
+    || sourceNotes
+    || 'Design system generated from source material supplied in Open Design.';
+  return [
+    '---',
+    `name: ${yamlString(title.replace(/\s+Design System$/iu, ''))}`,
+    `description: ${yamlString(truncateForDesignMd(overview, 320))}`,
+    'colors:',
+    '  background: "#ffffff"',
+    '  foreground: "#111111"',
+    '  accent: "#1677ff"',
+    '  surface: "#f7f8fa"',
+    '  muted: "#6b7280"',
+    '  border: "#d9dee7"',
+    'typography:',
+    '  display: "Inter"',
+    '  body: "Inter"',
+    'radius: "8px"',
+    'spacing: "8px baseline grid"',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    '## Overview',
+    '',
+    overview,
+    '',
+    '## Source Material',
+    '',
+    sourceNotes || 'No website was linked. Use the provided files, notes, and source context as the design-system basis.',
+    '',
+    '## Components',
+    '',
+    '- Button',
+    '- Card',
+    '- Form field',
+    '- Navigation',
+  ].join('\n');
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value.replace(/\s+/g, ' ').trim());
+}
+
+function truncateForDesignMd(value: string, max: number): string {
+  const clean = value.replace(/\s+/g, ' ').trim();
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trim()}...`;
 }
 
 function buildCreationAgentPrompt(

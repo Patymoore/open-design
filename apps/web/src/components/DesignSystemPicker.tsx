@@ -22,6 +22,7 @@ import { fetchDesignSystemPreview } from '../providers/registry';
 import { navigate } from '../router';
 import { useBrandsByDesignSystemId } from '../runtime/brands';
 import { BrandPreviewCard } from './BrandPreviewCard';
+import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 import { Icon } from './Icon';
 
 interface PopoverAnchor {
@@ -74,7 +75,7 @@ export function DesignSystemPicker({
   const [hoveredNone, setHoveredNone] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [fullscreenPreview, setFullscreenPreview] = useState(false);
+  const [previewModalSystem, setPreviewModalSystem] = useState<DesignSystemSummary | null>(null);
 
   const selected = useMemo(
     () => designSystems.find((d) => d.id === selectedId) ?? null,
@@ -90,14 +91,12 @@ export function DesignSystemPicker({
   useEffect(() => {
     if (!open) return;
     function onPointer(e: MouseEvent) {
-      if (fullscreenPreview) return;
       const target = e.target as Node;
       if (wrapRef.current?.contains(target)) return;
       if (popoverRef.current?.contains(target)) return;
       setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
-      if (fullscreenPreview) return;
       if (e.key === 'Escape') setOpen(false);
     }
     document.addEventListener('mousedown', onPointer);
@@ -106,7 +105,7 @@ export function DesignSystemPicker({
       document.removeEventListener('mousedown', onPointer);
       document.removeEventListener('keydown', onKey);
     };
-  }, [fullscreenPreview, open]);
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return undefined;
@@ -156,18 +155,8 @@ export function DesignSystemPicker({
       setQuery('');
       setHovered(null);
       setHoveredNone(false);
-      setFullscreenPreview(false);
     }
   }, [open]);
-
-  useEffect(() => {
-    if (!fullscreenPreview) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setFullscreenPreview(false);
-    }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [fullscreenPreview]);
 
   // Resolve what the right pane previews. Priority: a hovered system, the
   // hovered "不指定" row, the selected system, then "不指定" when nothing is
@@ -240,6 +229,11 @@ export function DesignSystemPicker({
   const createDesignSystem = () => {
     setOpen(false);
     navigate({ kind: 'design-system-create' });
+  };
+
+  const openSystemPreview = (system: DesignSystemSummary) => {
+    setOpen(false);
+    setPreviewModalSystem(system);
   };
 
   // The trigger shows a neutral palette icon rather than a few swatches: a 3-dot
@@ -386,6 +380,15 @@ export function DesignSystemPicker({
                       variant="compact"
                       summary={brandsByDesignSystem.get(previewSystem.id)!}
                     />
+                    <button
+                      type="button"
+                      className="project-ds-picker-preview-open"
+                      data-testid="project-ds-picker-preview-expand"
+                      onClick={() => openSystemPreview(previewSystem)}
+                    >
+                      <Icon name="eye" size={13} strokeWidth={1.9} />
+                      <span>{t('designSystemPicker.openPreview')}</span>
+                    </button>
                   </div>
                 ) : previewSystem ? (
                   <>
@@ -429,7 +432,7 @@ export function DesignSystemPicker({
                           type="button"
                           className="project-ds-picker-preview-expand"
                           data-testid="project-ds-picker-preview-expand"
-                          onClick={() => setFullscreenPreview(true)}
+                          onClick={() => openSystemPreview(previewSystem)}
                           title={t('designSystemPicker.openPreview')}
                           aria-label={t('designSystemPicker.openPreview')}
                         >
@@ -459,50 +462,12 @@ export function DesignSystemPicker({
         )
       : null;
 
-  const fullscreen: ReactNode =
-    fullscreenPreview && previewSystem && previewHtml && typeof document !== 'undefined'
-      ? createPortal(
-          <div
-            className="project-ds-picker-fullscreen"
-            role="dialog"
-            aria-label={t('designSystemPicker.fullscreenAria', { title: previewSystem.title })}
-            onClick={(event) => {
-              if (event.target === event.currentTarget) {
-                setFullscreenPreview(false);
-              }
-            }}
-          >
-            <div className="project-ds-picker-fullscreen-frame">
-              <div className="project-ds-picker-fullscreen-head">
-                <div className="project-ds-picker-fullscreen-title">
-                  <strong>{previewSystem.title}</strong>
-                  {previewSystem.category ? (
-                    <span className="project-ds-picker-preview-cat">
-                      {localizeDesignSystemCategory(locale, previewSystem.category)}
-                    </span>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  className="project-ds-picker-fullscreen-close"
-                  onClick={() => setFullscreenPreview(false)}
-                  aria-label={t('designSystemPicker.closeFullscreen')}
-                  title={t('designSystemPicker.closeEsc')}
-                >
-                  <Icon name="close" size={18} strokeWidth={2.1} />
-                </button>
-              </div>
-              <iframe
-                className="project-ds-picker-fullscreen-iframe"
-                srcDoc={previewHtml}
-                sandbox="allow-same-origin"
-                title={t('designSystemPicker.fullscreenFrameTitle', { title: previewSystem.title })}
-              />
-            </div>
-          </div>,
-          document.body,
-        )
-      : null;
+  const previewModal: ReactNode = previewModalSystem ? (
+    <DesignSystemPreviewModal
+      system={previewModalSystem}
+      onClose={() => setPreviewModalSystem(null)}
+    />
+  ) : null;
 
   if (variant === 'home') {
     return (
@@ -531,7 +496,7 @@ export function DesignSystemPicker({
           <Icon name="chevron-down" size={11} className="home-hero__ds-row-trigger-chevron" />
         </button>
         {popover}
-        {fullscreen}
+        {previewModal}
       </div>
     );
   }
@@ -563,7 +528,7 @@ export function DesignSystemPicker({
           <Icon name="chevron-down" size={12} aria-hidden />
         </button>
         {popover}
-        {fullscreen}
+        {previewModal}
       </div>
     );
   }
@@ -592,7 +557,7 @@ export function DesignSystemPicker({
         <Icon name="chevron-down" size={11} />
       </button>
       {popover}
-      {fullscreen}
+      {previewModal}
     </div>
   );
 }

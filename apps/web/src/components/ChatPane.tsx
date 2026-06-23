@@ -41,7 +41,10 @@ import { isTodoWriteToolName, latestTodoWriteInputForPinnedCard } from '../runti
 import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, ChatMessageFeedbackChange, Conversation, DesignSystemSummary, PreviewComment, Project, ProjectFile, ProjectMetadata, SkillSummary } from '../types';
 import { commentTargetDisplayName, commentsToAttachments, simplePositionLabel } from '../comments';
 import { AssistantMessage, type QuestionFormOpenRequest } from './AssistantMessage';
-import type { NextStepActionsVariant } from './NextStepActions';
+import {
+  DESIGN_SYSTEM_NEXT_STEP_ACTIONS,
+  type NextStepActionsVariant,
+} from './NextStepActions';
 import { AmrGuidance } from './AmrGuidance';
 import { AmrLoginPill } from './AmrLoginPill';
 import {
@@ -59,6 +62,7 @@ import {
   type ChatComposerHandle,
   type ChatSendMeta,
 } from './ChatComposer';
+import type { PlaceholderScenario } from './home-hero/placeholderScenarios';
 import { listDesignArtifactCandidates } from './design-files/designArtifacts';
 import type { PluginFolderAgentAction } from './design-files/pluginFolderActions';
 import { Icon, type IconName } from './Icon';
@@ -876,6 +880,47 @@ export function ChatPane({
     }
     return map;
   }, [skills]);
+  const blankProjectComposerScenarios = useMemo<PlaceholderScenario[]>(
+    () => pickStarters(projectMetadata, t).map((starter, index) => ({
+      id: `blank-${projectMetadata?.kind ?? 'prototype'}-${index}`,
+      text: starter.prompt,
+      chipId: 'project',
+    })),
+    [projectMetadata, t],
+  );
+  const followUpComposerScenarios = useMemo<PlaceholderScenario[]>(() => {
+    if (nextStepVariant === 'design-system') {
+      return DESIGN_SYSTEM_NEXT_STEP_ACTIONS.map((action) => ({
+        id: action.id,
+        text: action.prompt,
+        chipId: 'design-system',
+      }));
+    }
+    const promptPairs: Array<[string, string]> = [
+      ['auto-match', t('chat.designToolbox.prompt.autoMatchIntro')],
+      ['visual-polish', t('chat.designToolbox.prompt.visualPolish')],
+      ['anti-ai-polish', t('chat.designToolbox.prompt.antiAiPolish')],
+      ['motion-polish', t('chat.designToolbox.prompt.motionPolish')],
+    ];
+    return promptPairs.map(([id, text]) => ({
+      id: `follow-up-${id}`,
+      text,
+      chipId: 'design-toolbox',
+    }));
+  }, [nextStepVariant, t]);
+  const composerPlaceholderScenarios = useMemo<PlaceholderScenario[]>(() => {
+    if (loading || initialDraft?.trim()) return [];
+    if (messages.length === 0 && queuedItems.length === 0) return blankProjectComposerScenarios;
+    if (messages.length > 0) return followUpComposerScenarios;
+    return [];
+  }, [
+    blankProjectComposerScenarios,
+    followUpComposerScenarios,
+    initialDraft,
+    loading,
+    messages.length,
+    queuedItems.length,
+  ]);
   const [tab, setTab] = useState<Tab>('chat');
   const [showConvList, setShowConvList] = useState(false);
   const [conversationSearch, setConversationSearch] = useState('');
@@ -1728,6 +1773,7 @@ export function ChatPane({
       sendDisabled={sendDisabled}
       initialDraft={initialDraft}
       composerPlaceholder={composerPlaceholder}
+      placeholderScenarios={composerPlaceholderScenarios}
       draftStorageKey={composerDraftStorageKey}
       onEnsureProject={onEnsureProject}
       commentAttachments={commentsToAttachments(attachedComments)}
