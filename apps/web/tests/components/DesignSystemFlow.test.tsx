@@ -286,6 +286,9 @@ describe('DesignSystemCreationFlow', () => {
             projectId: project.id,
             conversationId: 'conv-acme',
             sourceUrl: 'https://acme.com',
+            status: 'ready',
+            designSystemId: 'user:acme-com',
+            brandName: 'Acme',
           }),
         } as unknown as Response;
       }

@@ -88,6 +88,12 @@ import {
   type CaretRect,
 } from './composer/LexicalComposerInput';
 import { CaretFloatingLayer } from './composer/CaretFloatingLayer';
+import { PlaceholderCarousel } from './home-hero/PlaceholderCarousel';
+import {
+  PLACEHOLDER_BASE_HINT_KEY,
+  PLACEHOLDER_SCENARIO_DEFS,
+  type PlaceholderScenario,
+} from './home-hero/placeholderScenarios';
 
 export interface HomeHeroSubmitHandler {
   (): void;
@@ -121,6 +127,10 @@ interface Props {
   prompt: string;
   onPromptChange: (value: string) => void;
   onSubmit: HomeHeroSubmitHandler;
+  // Send pressed on an EMPTY composer while the placeholder carousel is
+  // showing: the host seeds the prompt with `scenario.text`, binds the
+  // scenario's template, and creates the project — one-click "just start".
+  onSubmitScenario?: (scenario: PlaceholderScenario) => void;
   sessionMode?: ChatSessionMode;
   onSessionModeChange?: (mode: ChatSessionMode) => void;
   activePluginTitle: string | null;
@@ -253,6 +263,7 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
     prompt,
     onPromptChange,
     onSubmit,
+    onSubmitScenario = () => undefined,
     firstRunGuide,
     sessionMode = 'design',
     onSessionModeChange,
@@ -337,6 +348,9 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
   // Local-only: it filters the example-prompt cards below the rail. It never
   // binds a plugin or stamps an active badge.
   const [selectedSubcategory, setSelectedSubcategory] = useState<string | null>(null);
+  // Footer Template pill preview: the create-rail card the pointer is over,
+  // so hovering a card below previews it in the pill (cleared on rail-leave).
+  const [previewTemplateId, setPreviewTemplateId] = useState<string | null>(null);
   const [selectedPromptExample, setSelectedPromptExample] = useState<SelectedPromptExample | null>(null);
   const [previewHomeFileKey, setPreviewHomeFileKey] = useState<string | null>(null);
   const [stagedFilePreviewUrls, setStagedFilePreviewUrls] = useState<Map<string, string>>(() => new Map());
@@ -344,6 +358,9 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
   // getContextMention regex) + the caret box the popover anchors to.
   const [mentionTrigger, setMentionTrigger] = useState<{ query: string } | null>(null);
   const [caretRect, setCaretRect] = useState<CaretRect | null>(null);
+  // The scenario the placeholder carousel is currently showing. A Send on an
+  // empty composer submits THIS scenario's text + template (see handleSend).
+  const [carouselScenario, setCarouselScenario] = useState<PlaceholderScenario | null>(null);
   const editorRef = useRef<LexicalComposerInputHandle | null>(null);
   const promptEditorRef = useRef<HTMLDivElement | null>(null);
   const mentionPickerRef = useRef<HTMLDivElement | null>(null);
@@ -361,6 +378,55 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
     : t('homeHero.placeholder');
   const mentionActive = Boolean(mentionTrigger);
   const mentionQuery = mentionTrigger?.query ?? '';
+  // Scenarios the carousel cycles, with copy resolved through `t()` so the
+  // typed placeholder AND the submitted query follow the locale. With a
+  // create-template chip selected we narrow to that template's scenarios (so
+  // the suggestions match the picked output and a submit keeps that template);
+  // with nothing bound we cycle the full set. Memoised by chip + locale so the
+  // reference only changes on a real switch, which restarts the carousel.
+  const carouselScenarios = useMemo<PlaceholderScenario[]>(() => {
+    const resolved = PLACEHOLDER_SCENARIO_DEFS.map((def) => ({
+      id: def.id,
+      chipId: def.chipId,
+      text: t(def.textKey),
+    }));
+    return activeChipId
+      ? resolved.filter((scenario) => scenario.chipId === activeChipId)
+      : resolved;
+  }, [activeChipId, t]);
+  // The placeholder carousel runs while the composer is empty and nothing
+  // OTHER than a create-template chip is bound. A selected template keeps it
+  // alive (showing that template's scenarios); only an explicit plugin/skill
+  // pick — which owns its own placeholder — or a non-empty composer stops it.
+  // Media/live-artifact templates carry no scenarios, so the pool is empty and
+  // the editor falls back to its own placeholder there.
+  const carouselActive =
+    active &&
+    !submitting &&
+    !submitDisabled &&
+    prompt.trim().length === 0 &&
+    stagedFiles.length === 0 &&
+    !activeSkillTitle &&
+    !activePluginIsExplicit &&
+    !mentionActive &&
+    carouselScenarios.length > 0;
+  // Empty composer, but the carousel is offering a runnable scenario from the
+  // CURRENT pool: Send stays highlighted and submits that scenario instead of
+  // sitting disabled. The membership check guards the brief window after a
+  // template switch before the carousel reports the new pool's first scenario.
+  const carouselSubmittable =
+    carouselActive &&
+    carouselScenario !== null &&
+    carouselScenarios.some((scenario) => scenario.id === carouselScenario.id);
+  const sendEnabled = canSubmit || carouselSubmittable;
+  function handleSend() {
+    if (submitting || submitDisabled) return;
+    if (canSubmit) {
+      onSubmit();
+      return;
+    }
+    if (carouselSubmittable && carouselScenario) onSubmitScenario(carouselScenario);
+  }
   const fileMatches = useMemo(
     () =>
       mentionActive
@@ -1245,8 +1311,11 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
               ref={editorRef}
               testId="home-hero-input"
               draft={prompt}
-              placeholder={placeholder}
-              title={placeholder}
+              // While the carousel animates, blank the editor's own placeholder
+              // so it doesn't double under the overlay; keep the base hint as
+              // the accessible/tooltip label.
+              placeholder={carouselActive ? '' : placeholder}
+              title={carouselActive ? t(PLACEHOLDER_BASE_HINT_KEY) : placeholder}
               knownEntities={promptMentionEntities}
               onChange={(plainText) => {
                 // A programmatic seed (host setPrompt → draft prop →
@@ -1265,9 +1334,7 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
                 }
               }}
               onTrigger={handleTrigger}
-              onEnterSend={() => {
-                if (canSubmit) onSubmit();
-              }}
+              onEnterSend={handleSend}
               onPasteFiles={handleFiles}
               popoverOpen={pickerOpen && visiblePickerOptions.length > 0}
               onPopoverKey={handlePopoverKey}
@@ -1275,6 +1342,11 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
                 expanded: pickerOpen,
                 activeId: pickerOpen ? `home-hero-option-${selectedIndex}` : null,
               }}
+            />
+            <PlaceholderCarousel
+              active={carouselActive}
+              scenarios={carouselScenarios}
+              onScenarioChange={setCarouselScenario}
             />
           </div>
         </div>
@@ -1507,19 +1579,17 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
                 onConfirm={(assets) => importLibraryAssets(assets)}
               />
             ) : null}
-            {activeCreateChip ? (
-              <ActiveTypeChip chip={activeCreateChip} onClear={onClearActiveChip} />
-            ) : (
-              <TemplatePicker
-                templates={templateChips}
-                activeChipId={activeChipId}
-                disabled={pluginsLoading || pendingChipId !== null || pendingPluginId !== null}
-                labelFor={(id) => homeHeroChipLabel(id, t)}
-                descriptionFor={(id) => homeHeroChipDescription(id, t)}
-                onPick={handlePickTaskChip}
-                onClear={onClearActiveChip}
-              />
-            )}
+            <TemplatePicker
+              templates={templateChips}
+              activeChipId={activeChipId}
+              previewChipId={previewTemplateId}
+              disabled={pluginsLoading}
+              pickDisabled={pluginsLoading || pendingChipId !== null || pendingPluginId !== null}
+              labelFor={(id) => homeHeroChipLabel(id, t)}
+              descriptionFor={(id) => homeHeroChipDescription(id, t)}
+              onPick={handlePickTaskChip}
+              onClear={onClearActiveChip}
+            />
             {footerInputFields.length > 0 ? (
               <div className="home-hero__footer-options" data-testid="home-hero-footer-options">
                 {footerInputFields.map((field) => (
@@ -1550,11 +1620,11 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
               type="button"
               className={`home-hero__submit od-tooltip${sendAttention ? ' home-hero__attention-sheen' : ''}${submitting ? ' is-sending' : ''}`}
               data-testid="home-hero-submit"
-              onClick={onSubmit}
+              onClick={handleSend}
               onAnimationEnd={() => setSendAttention(false)}
-              disabled={!canSubmit}
-              title={submitting ? t('chat.comments.sending') : canSubmit ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
-              data-tooltip={submitting ? t('chat.comments.sending') : canSubmit ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
+              disabled={!sendEnabled}
+              title={submitting ? t('chat.comments.sending') : sendEnabled ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
+              data-tooltip={submitting ? t('chat.comments.sending') : sendEnabled ? t('homeHero.run') : t('homeHero.typeSomethingToRun')}
               aria-label={submitting ? t('chat.comments.sending') : t('homeHero.run')}
               aria-busy={submitting}
             >
@@ -1625,6 +1695,7 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
             onPickChip={handlePickTaskChip}
             variant="tabs"
             pulseChipId={guidePulseChipId}
+            onHoverChip={setPreviewTemplateId}
           >
             <ShortcutsMenu
               activeChipId={activeChipId}
@@ -2687,6 +2758,9 @@ interface RailGroupProps {
   variant?: 'rail' | 'tabs';
   // First-run guide: this chip carries the attention sheen.
   pulseChipId?: string | null;
+  // Hover-preview hook: the create rail reports which chip the pointer is over
+  // (or null on leave) so the footer Template picker can preview it.
+  onHoverChip?: (chipId: string | null) => void;
   children?: ReactNode;
 }
 
@@ -2699,6 +2773,7 @@ function RailGroup({
   onPickChip,
   variant = 'rail',
   pulseChipId = null,
+  onHoverChip,
   children,
 }: RailGroupProps) {
   const t = useT();
@@ -2740,6 +2815,7 @@ function RailGroup({
           data-chip-id={chip.id}
           data-testid={`home-hero-rail-${chip.id}`}
           onClick={() => onPickChip(chip)}
+          onMouseEnter={() => onHoverChip?.(chip.id)}
           disabled={disabled}
           role="tab"
           aria-selected={isActive}
@@ -2789,7 +2865,10 @@ function RailGroup({
 
   if (isTabs) {
     return (
-      <div className="home-hero__scenario-cards-wrap">
+      <div
+        className="home-hero__scenario-cards-wrap"
+        onMouseLeave={() => onHoverChip?.(null)}
+      >
         <div
           ref={edgeScroll.scrollRef}
           className={`home-hero__type-tabs home-hero__type-tabs--${group} home-hero__scenario-cards`}
@@ -2875,28 +2954,6 @@ function SubTypeRow({
         );
       })}
     </div>
-  );
-}
-
-function ActiveTypeChip({ chip, onClear }: { chip: HomeHeroChip; onClear: () => void }) {
-  const t = useT();
-  return (
-    <button
-      type="button"
-      className="home-hero__active-type-chip is-active"
-      data-testid="home-hero-active-type-chip"
-      data-chip-id={chip.id}
-      title={homeHeroChipTitle(chip, t)}
-      aria-label={`${homeHeroChipLabel(chip.id, t)} ${t('common.delete')}`}
-      aria-pressed="true"
-      onClick={onClear}
-    >
-      <span className="home-hero__active-type-chip-icon" aria-hidden>
-        <Icon name={chip.icon} size={13} />
-      </span>
-      <span>{homeHeroChipLabel(chip.id, t)}</span>
-      <Icon name="close" size={12} className="home-hero__active-type-chip-close" />
-    </button>
   );
 }
 

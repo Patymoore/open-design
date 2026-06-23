@@ -46,7 +46,7 @@ import {
 } from "./design-files/pluginFolders";
 import type { PluginFolderAgentAction } from "./design-files/pluginFolderActions";
 import { Icon } from "./Icon";
-import { NextStepActions } from "./NextStepActions";
+import { NextStepActions, type NextStepActionsVariant } from "./NextStepActions";
 import type { DesignToolboxActionId } from "../runtime/design-toolbox";
 import { copyToClipboard } from "../lib/copy-to-clipboard";
 import { useT } from "../i18n";
@@ -316,10 +316,12 @@ interface Props {
   // composer with an action / opening the toolbox both route through the
   // composer; see ChatPane's composer ref wiring.
   onToolboxAction?: (id: DesignToolboxActionId) => void;
+  onNextStepPromptAction?: (prompt: string) => void;
   onPickSkill?: (skillId: string) => void;
   onArtifactDownload?: (fileName: string) => void;
   nextStepSkills?: SkillSummary[];
   toolboxSkillNames?: Partial<Record<DesignToolboxActionId, string | null>>;
+  nextStepVariant?: NextStepActionsVariant;
 }
 
 // Props compared by reference to decide whether a memoized AssistantMessage can
@@ -358,6 +360,7 @@ const ASSISTANT_MESSAGE_COMPARED_PROPS: Array<keyof Props> = [
   // More → Design toolbox global resources.
   'toolboxSkillNames',
   'nextStepSkills',
+  'nextStepVariant',
   // Live streaming tool input changes identity on every `tool_input_delta`.
   // ChatPane passes it only to the streaming row (undefined elsewhere), so
   // comparing it re-renders just that row as the card grows — without it the
@@ -417,10 +420,12 @@ function AssistantMessageImpl({
   hasDesignSystemContext = false,
   onArtifactShare,
   onToolboxAction,
+  onNextStepPromptAction,
   onPickSkill,
   onArtifactDownload,
   nextStepSkills,
   toolboxSkillNames,
+  nextStepVariant = 'default',
 }: Props) {
   const t = useT();
   const events = message.events ?? [];
@@ -799,12 +804,14 @@ function AssistantMessageImpl({
             fileName={isLast ? nextStepArtifactName : null}
             onShare={isLast && nextStepArtifactName ? onArtifactShare : undefined}
             onToolboxAction={isLast ? onToolboxAction : undefined}
+            onPromptAction={isLast ? onNextStepPromptAction : undefined}
             onPickSkill={isLast ? onPickSkill : undefined}
             onDownload={isLast && nextStepArtifactName ? onArtifactDownload : undefined}
             skills={isLast ? nextStepSkills : undefined}
             toolboxSkillNames={isLast ? toolboxSkillNames : undefined}
             onShareToOpenDesign={showOpenDesignSubmission ? onShareToOpenDesign : undefined}
             shareToOpenDesignBusy={shareToOpenDesignBusy}
+            variant={nextStepVariant}
           />
         ) : null}
       </div>

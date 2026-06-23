@@ -17,6 +17,7 @@ import {
   localizeDesignSystemCategory,
   localizeDesignSystemSummary,
 } from '../i18n/content';
+import { BRAND_REFERENCES } from '../runtime/brand-references';
 import {
   deleteDesignSystemDraft,
   fetchDesignSystem,
@@ -27,7 +28,7 @@ import {
 import { useDesignKit } from '../runtime/design-kit';
 import { useKitModuleUpload } from '../runtime/kit-upload';
 import { DesignKitView } from './DesignKitView';
-import { BrandLogo, hostnameOf } from './BrandPreviewCard';
+import { hostnameOf } from './BrandPreviewCard';
 import { Icon } from './Icon';
 import type { DesignSystemDetail, DesignSystemSummary, ProjectTemplate, Surface } from '../types';
 import styles from './DesignSystemsTab.module.css';
@@ -67,12 +68,119 @@ const SURFACE_PILLS: { value: SurfaceFilter; labelKey: 'examples.modeAll' | 'ds.
   { value: 'audio', labelKey: 'ds.surfaceAudio' },
 ];
 
+const OFFICIAL_PRESET_DOMAINS: Record<string, string> = {
+  airbnb: 'airbnb.com',
+  airtable: 'airtable.com',
+  ant: 'ant.design',
+  apple: 'apple.com',
+  arc: 'arc.net',
+  binance: 'binance.com',
+  bmw: 'bmw.com',
+  'bmw-m': 'bmw-m.com',
+  bugatti: 'bugatti.com',
+  cal: 'cal.com',
+  canva: 'canva.com',
+  cisco: 'cisco.com',
+  claude: 'claude.ai',
+  clay: 'clay.com',
+  clickhouse: 'clickhouse.com',
+  cohere: 'cohere.com',
+  coinbase: 'coinbase.com',
+  composio: 'composio.dev',
+  cursor: 'cursor.com',
+  discord: 'discord.com',
+  duolingo: 'duolingo.com',
+  elevenlabs: 'elevenlabs.io',
+  expo: 'expo.dev',
+  ferrari: 'ferrari.com',
+  figma: 'figma.com',
+  framer: 'framer.com',
+  github: 'github.com',
+  hashicorp: 'hashicorp.com',
+  huggingface: 'huggingface.co',
+  ibm: 'ibm.com',
+  intercom: 'intercom.com',
+  kraken: 'kraken.com',
+  lamborghini: 'lamborghini.com',
+  'linear-app': 'linear.app',
+  lingo: 'lingo.dev',
+  loom: 'loom.com',
+  lovable: 'lovable.dev',
+  mastercard: 'mastercard.com',
+  material: 'material.io',
+  meta: 'meta.com',
+  minimax: 'minimax.io',
+  miro: 'miro.com',
+  mistral: 'mistral.ai',
+  'mistral-ai': 'mistral.ai',
+  mongodb: 'mongodb.com',
+  nike: 'nike.com',
+  notion: 'notion.so',
+  nvidia: 'nvidia.com',
+  ollama: 'ollama.com',
+  openai: 'openai.com',
+  'opencode-ai': 'opencode.ai',
+  perplexity: 'perplexity.ai',
+  pinterest: 'pinterest.com',
+  playstation: 'playstation.com',
+  posthog: 'posthog.com',
+  raycast: 'raycast.com',
+  renault: 'renault.com',
+  replicate: 'replicate.com',
+  resend: 'resend.com',
+  revolut: 'revolut.com',
+  runwayml: 'runwayml.com',
+  sanity: 'sanity.io',
+  sentry: 'sentry.io',
+  shadcn: 'ui.shadcn.com',
+  shopify: 'shopify.com',
+  slack: 'slack.com',
+  spacex: 'spacex.com',
+  spotify: 'spotify.com',
+  starbucks: 'starbucks.com',
+  stripe: 'stripe.com',
+  supabase: 'supabase.com',
+  superhuman: 'superhuman.com',
+  tesla: 'tesla.com',
+  theverge: 'theverge.com',
+  'together-ai': 'together.ai',
+  uber: 'uber.com',
+  vercel: 'vercel.com',
+  vodafone: 'vodafone.com',
+  voltagent: 'voltagent.dev',
+  warp: 'warp.dev',
+  webex: 'webex.com',
+  webflow: 'webflow.com',
+  wechat: 'wechat.com',
+  wired: 'wired.com',
+  wise: 'wise.com',
+  'x-ai': 'x.ai',
+  xiaohongshu: 'xiaohongshu.com',
+  zapier: 'zapier.com',
+};
+
+function brandKey(value: string): string {
+  return value.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '');
+}
+
+const REFERENCE_BRAND_DOMAINS = new Map(
+  BRAND_REFERENCES.map((brand) => [brandKey(brand.name), brand.domain] as const),
+);
+
 function surfaceOf(system: DesignSystemSummary): Surface {
   return system.surface ?? 'web';
 }
 
 function isUserSystem(system: DesignSystemSummary): boolean {
   return system.source === 'user' || system.isEditable === true;
+}
+
+function designSystemLogoHost(system: DesignSystemSummary): string {
+  const sourceUrl = system.provenance?.sourceUrls?.[0];
+  if (sourceUrl) return hostnameOf(sourceUrl);
+  const fromReference = REFERENCE_BRAND_DOMAINS.get(brandKey(system.title));
+  if (fromReference) return fromReference;
+  return OFFICIAL_PRESET_DOMAINS[system.id] ?? '';
 }
 
 // `system.status` is the DesignSystemSummary status string from the
@@ -658,31 +766,50 @@ interface SystemRowProps {
   onSelect: () => void;
 }
 
-// Row thumbnail: prefer the brand's logo (favicon for systems that recorded a
-// source URL), otherwise a monogram tile tinted with the primary swatch — a
-// brand-led identity instead of an anonymous strip of colour bars.
-function SystemRowLogo({ system }: { system: DesignSystemSummary }) {
-  const sourceUrl = system.provenance?.sourceUrls?.[0];
-  const host = sourceUrl ? hostnameOf(sourceUrl) : '';
-  const tint = system.swatches?.[0];
-  if (!host) {
-    return (
-      <span
-        className={styles.itemThumbFallback}
-        style={tint ? { background: `color-mix(in srgb, ${tint} 20%, var(--bg))`, color: tint } : undefined}
-        aria-hidden
-      >
-        {(system.title || '?').charAt(0).toUpperCase()}
-      </span>
-    );
-  }
+function fallbackSwatches(seed: string): string[] {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  const base = h % 360;
+  return [
+    `hsl(${base}, 24%, 94%)`,
+    `hsl(${(base + 90) % 360}, 34%, 74%)`,
+    `hsl(${(base + 180) % 360}, 42%, 34%)`,
+    `hsl(${(base + 28) % 360}, 76%, 54%)`,
+  ];
+}
+
+function SystemRowPaletteLogo({ system }: { system: DesignSystemSummary }) {
+  const swatches = system.swatches && system.swatches.length > 0
+    ? system.swatches.slice(0, 4)
+    : fallbackSwatches(system.title || system.id);
   return (
-    <BrandLogo
-      host={host}
-      name={system.title}
-      faviconSize={64}
+    <span className={styles.itemSwatches} aria-hidden>
+      {swatches.map((color, index) => (
+        <span key={`${color}-${index}`} style={{ background: color }} />
+      ))}
+    </span>
+  );
+}
+
+// Row thumbnail: prefer a real site favicon (captured source URL, reference
+// brand, or curated official-preset domain), otherwise fall back to palette.
+function SystemRowLogo({ system }: { system: DesignSystemSummary }) {
+  const host = designSystemLogoHost(system);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [host, system.id]);
+
+  if (!host) {
+    return <SystemRowPaletteLogo system={system} />;
+  }
+  if (failed) return <SystemRowPaletteLogo system={system} />;
+  return (
+    <img
       className={styles.itemLogo}
-      fallbackClassName={styles.itemThumbFallback}
+      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
     />
   );
 }
@@ -777,7 +904,7 @@ function DesignSystemDetail({
   }, [system.id]);
 
   const sourceUrl = system.provenance?.sourceUrls?.[0];
-  const host = sourceUrl ? hostnameOf(sourceUrl) : undefined;
+  const host = designSystemLogoHost(system) || undefined;
   const projectId = detail?.projectId ?? system.projectId;
 
   const { uploading, uploadModule } = useKitModuleUpload({
@@ -825,6 +952,7 @@ function DesignSystemDetail({
           className={styles.actionButton}
           onClick={() => onEdit(system.id)}
           disabled={busy}
+          title={t('dsManager.openSystemAria', { title: system.title })}
         >
           <Icon name="external-link" />
           {t('dsManager.openSystem')}
@@ -837,6 +965,7 @@ function DesignSystemDetail({
           data-testid={`design-system-select-${system.id}`}
           onClick={() => onMakeDefault(system)}
           disabled={busy}
+          title="Preselect this design system for new chats and new projects."
         >
           {t('dsManager.makeDefault')}
         </Button>
@@ -847,6 +976,7 @@ function DesignSystemDetail({
         data-testid={`design-system-preview-${system.id}`}
         onClick={() => onPreviewFull(system)}
         disabled={busy}
+        title={t('ds.previewTitle')}
       >
         <Icon name="external-link" />
         {t('ds.preview')}

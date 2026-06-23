@@ -143,16 +143,14 @@ describe('HomeHero intent rail', () => {
     renderHero({ activeChipId: 'video' });
     expect(screen.queryByTestId('home-hero-type-tabs')).toBeNull();
     expect(screen.queryByTestId('home-hero-rail-video')).toBeNull();
-    const node = screen.getByTestId('home-hero-active-type-chip');
-    expect(node.getAttribute('data-chip-id')).toBe('video');
-    expect(node.className).toContain('is-active');
-    expect(node.getAttribute('aria-pressed')).toBe('true');
+    const node = screen.getByTestId('home-hero-template-trigger');
     expect(node.textContent).toContain('Video');
   });
 
   it('lets the active creation chip be removed from the composer', () => {
     const { onClearActiveChip } = renderHero({ activeChipId: 'prototype' });
-    fireEvent.click(screen.getByTestId('home-hero-active-type-chip'));
+    fireEvent.click(screen.getByTestId('home-hero-template-trigger'));
+    fireEvent.click(screen.getByTestId('home-hero-template-clear'));
     expect(onClearActiveChip).toHaveBeenCalledTimes(1);
   });
 
@@ -166,7 +164,7 @@ describe('HomeHero intent rail', () => {
     });
 
     expect(screen.getByTestId('home-hero-active-plugin')).toBeTruthy();
-    expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy();
+    expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None');
     expect(screen.queryByLabelText('Clear active plugin')).toBeNull();
   });
 

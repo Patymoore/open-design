@@ -85,18 +85,19 @@ export function registerBrandRoutes(app: Application, deps: BrandRoutesDeps): vo
     }
   });
 
-  // POST /api/brands { url } — reserve the brand and stand up its extraction
+  // POST /api/brands { url?, description?, designMd? } — reserve the brand and stand up its extraction
   // project (target site open in a browser tab + a seeded prompt that drives an
   // agent through the extraction chain). Returns the ids to navigate into.
   app.post('/api/brands', async (req: Request, res: Response) => {
     const url = typeof req.body?.url === 'string' ? req.body.url : '';
-    if (!url.trim()) {
-      res.status(400).json({ error: 'url is required' });
+    const description = typeof req.body?.description === 'string' ? req.body.description : '';
+    const designMd = typeof req.body?.designMd === 'string' ? req.body.designMd : '';
+    if (!url.trim() && !designMd.trim()) {
+      res.status(400).json({ error: 'url or designMd is required' });
       return;
     }
     try {
       const startOptions: Parameters<typeof startBrandExtraction>[0] = {
-        url,
         brandsRoot,
         projectsRoot,
         skillsRoot,
@@ -108,6 +109,9 @@ export function registerBrandRoutes(app: Application, deps: BrandRoutesDeps): vo
         userDesignSystemsRoot,
         dataDir,
       };
+      if (url.trim()) startOptions.url = url;
+      if (description.trim()) startOptions.description = description;
+      if (designMd.trim()) startOptions.designMd = designMd;
       if (randomId) startOptions.randomId = randomId;
       const result = await startBrandExtraction(startOptions);
       res.json(result);

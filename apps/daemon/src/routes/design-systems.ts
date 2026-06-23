@@ -40,6 +40,11 @@ export interface RegisterDesignSystemRoutesDeps extends RouteDeps<'db' | 'paths'
     prepareDesignTokenContractRebuild: (root: string, id: string, options?: { force?: boolean }) => Promise<DesignTokenContractRebuildPreparation>;
     readAvailableDesignSystem: (id: string) => Promise<string | null>;
     readAvailableDesignSystemPackageInfo: (id: string) => Promise<DesignSystemPackageInfo | null>;
+    readAvailableDesignSystemStaticFile: (id: string, filePath: string) => Promise<{
+      bytes: Buffer;
+      contentType: string;
+      updatedAt: string;
+    } | null>;
     readDesignSystemWorkspaceTextFile: (db: DbHandle, summary: AvailableDesignSystemSummary | undefined, filePath: string) => Promise<string | null>;
     readUserDesignSystemFile: (root: string, id: string, filePath: string) => Promise<DesignSystemFileDetail | null>;
     renderDesignSystemPreview: (id: string, body: string) => string;
@@ -68,6 +73,7 @@ export function registerDesignSystemRoutes(app: Express, ctx: RegisterDesignSyst
     prepareDesignTokenContractRebuild,
     readAvailableDesignSystem,
     readAvailableDesignSystemPackageInfo,
+    readAvailableDesignSystemStaticFile,
     readDesignSystemWorkspaceTextFile,
     readUserDesignSystemFile,
     renderDesignSystemPreview,
@@ -217,6 +223,19 @@ export function registerDesignSystemRoutes(app: Express, ctx: RegisterDesignSyst
       if (body === null) return res.status(404).type('text/plain').send('not found');
       const html = renderDesignSystemShowcase(req.params.id, body);
       res.type('text/html').send(html);
+    } catch (err) {
+      res.status(500).type('text/plain').send(String(err));
+    }
+  });
+
+  app.get('/api/design-systems/:id/static', async (req, res) => {
+    try {
+      const requestedPath = typeof req.query.path === 'string' ? req.query.path : '';
+      const file = await readAvailableDesignSystemStaticFile(req.params.id, requestedPath);
+      if (!file) return res.status(404).type('text/plain').send('not found');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Last-Modified', file.updatedAt);
+      res.type(file.contentType).send(file.bytes);
     } catch (err) {
       res.status(500).type('text/plain').send(String(err));
     }

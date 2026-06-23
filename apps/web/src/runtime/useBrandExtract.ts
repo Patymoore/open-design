@@ -50,7 +50,10 @@ export interface UseBrandExtract {
   state: BrandExtractState;
   /** Start an extraction. Resolves to the kickoff result, or null on failure
    *  (in which case `state.error` is set). */
-  run: (url: string) => Promise<BrandExtractStartResponse | null>;
+  run: (
+    url: string,
+    options?: { description?: string; designMd?: string },
+  ) => Promise<BrandExtractStartResponse | null>;
   reset: () => void;
 }
 
@@ -63,7 +66,10 @@ export function useBrandExtract(): UseBrandExtract {
     setState(INITIAL_STATE);
   }, []);
 
-  const run = useCallback(async (url: string): Promise<BrandExtractStartResponse | null> => {
+  const run = useCallback(async (
+    url: string,
+    options: { description?: string; designMd?: string } = {},
+  ): Promise<BrandExtractStartResponse | null> => {
     if (inFlightRef.current) return null;
     inFlightRef.current = true;
     setState({ ...INITIAL_STATE, phase: 'starting' });
@@ -74,7 +80,11 @@ export function useBrandExtract(): UseBrandExtract {
         method: 'POST',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({
+          ...(url.trim() ? { url } : {}),
+          ...(options.description?.trim() ? { description: options.description.trim() } : {}),
+          ...(options.designMd?.trim() ? { designMd: options.designMd.trim() } : {}),
+        }),
       });
     } catch (err) {
       inFlightRef.current = false;
@@ -118,9 +128,9 @@ export function useBrandExtract(): UseBrandExtract {
       brandId: result.id,
       projectId: result.projectId,
       conversationId: result.conversationId,
-      extractStatus: null,
-      designSystemId: null,
-      brandName: null,
+      extractStatus: result.status,
+      designSystemId: result.designSystemId ?? null,
+      brandName: result.brandName ?? null,
       error: null,
     });
     return result;

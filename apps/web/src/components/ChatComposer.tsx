@@ -167,6 +167,7 @@ interface Props {
   onSessionModeChange?: (mode: ChatSessionMode) => void;
   sendDisabled?: boolean;
   initialDraft?: string;
+  composerPlaceholder?: string;
   draftStorageKey?: string;
   // Lazy ensure — the composer calls this before its first upload, so the
   // project folder exists on disk before files land in it. Returns the
@@ -336,6 +337,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       onSessionModeChange,
       sendDisabled = false,
       initialDraft,
+      composerPlaceholder,
       draftStorageKey,
       onEnsureProject,
       commentAttachments = [],
@@ -2284,9 +2286,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               placeholder={
                 activeFileDisplayName
                   ? t('chat.activeFilePlaceholder', { file: activeFileDisplayName })
-                  : t('chat.composerPlaceholder')
+                  : composerPlaceholder ?? t('chat.composerPlaceholder')
               }
-              title={activeFileDisplayName ?? t('chat.composerPlaceholder')}
+              title={activeFileDisplayName ?? composerPlaceholder ?? t('chat.composerPlaceholder')}
               knownEntities={composerMentionEntities}
               onChange={handleEditorChange}
               onTrigger={handleEditorTrigger}

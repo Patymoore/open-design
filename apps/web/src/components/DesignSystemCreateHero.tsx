@@ -10,9 +10,9 @@ import { Icon } from './Icon';
 import styles from './DesignSystemCreateHero.module.css';
 
 const STEPS: { n: number; title: string; desc: string }[] = [
-  { n: 1, title: 'Describe', desc: 'Your brand or product in a sentence' },
-  { n: 2, title: 'Add material', desc: 'Repo, code, .fig or assets — optional' },
-  { n: 3, title: 'Generate', desc: 'Open Design builds the system for you' },
+  { n: 1, title: 'Website or DESIGN.md', desc: 'Paste a link, pick a brand, or copy tokens' },
+  { n: 2, title: 'Add material', desc: 'Images, fonts, repo or .fig — optional' },
+  { n: 3, title: 'Generate', desc: 'Fast extract first; AI can refine later' },
 ];
 
 // A calm, brand-agnostic palette — illustrative only.
@@ -28,8 +28,8 @@ export function DesignSystemCreateHero({ stacked = false }: { stacked?: boolean 
         </span>
         <h1 className={styles.title}>Design a system, in minutes</h1>
         <p className={styles.lede}>
-          Turn a short description — plus whatever you already have — into a complete, on-brand
-          design system you can build with.
+          Turn a website or DESIGN.md — plus whatever context you already have — into a
+          complete, on-brand design system you can use right away.
         </p>
         <div className={styles.meta}>
           <span className={styles.metaPill}>

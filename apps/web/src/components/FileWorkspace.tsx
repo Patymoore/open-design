@@ -2897,11 +2897,12 @@ function DesignSystemProjectPanel({
           type="button"
           className={`ds-project-default-toggle ${isDefault ? 'is-on' : ''}`}
           aria-pressed={isDefault}
+          title="Preselect this design system for new chats and new projects."
           disabled={statusBusy || defaultBusy || !onSetDefaultDesignSystem}
           onClick={() => void toggleDefault(!isDefault)}
         >
           {isDefault ? <Icon name="check" size={14} /> : null}
-          {isDefault ? 'Default' : 'Make default'}
+          {isDefault ? 'Chat default' : 'Default for new chats'}
         </button>
       ) : null}
     </>

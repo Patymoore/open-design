@@ -23,6 +23,24 @@ import type { SkillSummary } from '../types';
 import styles from './NextStepActions.module.css';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
+export type NextStepActionsVariant = 'default' | 'design-system';
+
+const DESIGN_SYSTEM_NEXT_STEP_ACTIONS = [
+  {
+    id: 'design-system-ai-refine',
+    icon: 'sparkles' as IconName,
+    title: 'AI refine design system',
+    prompt:
+      'Use AI extraction to refine this design system in place. Read the current DESIGN.md, brand.json, source context, tokens, typography, palette, assets, and component kit previews. Re-measure any linked website or source files when available, then update the same design system id without creating a duplicate. Focus on stronger token roles, brand voice, component guidance, light/dark kit quality, and reusable implementation notes. Finish by summarizing what changed and which files were updated.',
+  },
+  {
+    id: 'design-system-audit-kit',
+    icon: 'blocks' as IconName,
+    title: 'Audit tokens & kit',
+    prompt:
+      'Audit this design system for readiness. Check DESIGN.md, brand.json, variables.css, theme.json, kit.html, kit.dark.html, generated artifacts, palette contrast, typography specimens, spacing/radius rules, and component coverage. Fix the highest-impact issues directly, keep the same registered design system id, and report remaining gaps before publishing or using it in other projects.',
+  },
+] as const;
 
 // Surfaced under More → Design toolbox. The two featured ids already have their
 // own rows at the top of the card, so we drop them here to avoid duplicating
@@ -42,6 +60,10 @@ interface Props {
   // Seed the composer with a featured design-toolbox action (matched skill +
   // prompt). Does NOT auto-send — the composer draft waits for the user.
   onToolboxAction?: (id: DesignToolboxActionId) => void;
+  // Seed the composer with a custom prompt. Used for design-system projects,
+  // where the primary next steps are system optimization rather than generic
+  // artifact polishing.
+  onPromptAction?: (prompt: string) => void;
   // Seed the composer with a specific global skill resource picked from the toolbox.
   onPickSkill?: (skillId: string) => void;
   // Available global skill resources. The full composer toolbox also includes
@@ -53,6 +75,7 @@ interface Props {
   // Contribute the artifact to the Open Design community gallery.
   onShareToOpenDesign?: () => void;
   shareToOpenDesignBusy?: boolean;
+  variant?: NextStepActionsVariant;
 }
 
 const FLYOUT_GAP = 8;
@@ -98,11 +121,13 @@ export function NextStepActions({
   onShare,
   onDownload,
   onToolboxAction,
+  onPromptAction,
   onPickSkill,
   skills = [],
   toolboxSkillNames,
   onShareToOpenDesign,
   shareToOpenDesignBusy = false,
+  variant = 'default',
 }: Props) {
   const { t, locale } = useI18n();
   const analytics = useAnalytics();
@@ -226,6 +251,14 @@ export function NextStepActions({
     },
     [closeAll, onToolboxAction, track],
   );
+  const handlePromptAction = useCallback(
+    (action: (typeof DESIGN_SYSTEM_NEXT_STEP_ACTIONS)[number]) => {
+      track('toolbox_action', action.id);
+      onPromptAction?.(action.prompt);
+      closeAll();
+    },
+    [closeAll, onPromptAction, track],
+  );
 
   const handlePickSkill = useCallback(
     (skillId: string) => {
@@ -270,6 +303,7 @@ export function NextStepActions({
   const hasShareGroup = canShare || canDownload || canContribute;
   const hasMore = !!onToolboxAction || hasShareGroup;
   const showToolbox = !!onToolboxAction;
+  const showDesignSystemRows = variant === 'design-system' && !!onPromptAction;
 
   // Hover handlers shared by every flyout surface: stay open while hovered.
   const keepOpen = { onMouseEnter: cancelClose, onMouseLeave: scheduleClose };
@@ -277,9 +311,24 @@ export function NextStepActions({
   return (
     <div className={styles.root} data-testid="next-step-actions">
       <div className={styles.label}>{t('nextStep.title')}</div>
-      {showToolbox || hasMore ? (
+      {showDesignSystemRows || showToolbox || hasMore ? (
         <div className={styles.toolboxList} data-testid="next-step-toolbox">
-          {showToolbox
+          {showDesignSystemRows
+            ? DESIGN_SYSTEM_NEXT_STEP_ACTIONS.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  className={styles.toolboxRow}
+                  data-testid={`next-step-design-system-action-${action.id}`}
+                  onClick={() => handlePromptAction(action)}
+                >
+                  <Icon name={action.icon} size={14} className={styles.toolboxRowIcon} />
+                  <span className={styles.toolboxRowTitle}>{action.title}</span>
+                  <Icon name="chevron-right" size={13} className={styles.toolboxRowArrow} />
+                </button>
+              ))
+            : null}
+          {showToolbox && !showDesignSystemRows
             ? FEATURED_DESIGN_TOOLBOX_ACTION_IDS.map((id) => {
                 const action = getDesignToolboxAction(id);
                 if (!action) return null;

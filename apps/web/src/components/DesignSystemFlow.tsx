@@ -126,6 +126,7 @@ import { useI18n } from '../i18n';
 export interface DesignSystemGenerateSnapshot {
   sourceCount: number;
   hasBrandDescription: boolean;
+  hasDesignMd: boolean;
   sourceUrlCount: number;
   githubRepoCount: number;
   localFolderCount: number;
@@ -189,6 +190,7 @@ interface ResolvedDesignSystemWorkspaceProject {
 
 interface SetupState {
   company: string;
+  designMd: string;
   sourceUrl: string;
   sourceUrls: string[];
   figmaUrl: string;
@@ -205,6 +207,7 @@ interface SetupState {
 
 const EMPTY_SETUP: SetupState = {
   company: '',
+  designMd: '',
   sourceUrl: '',
   sourceUrls: [],
   figmaUrl: '',
@@ -749,10 +752,12 @@ export function DesignSystemCreationFlow({
     const localFolderCount = state.codeFolders?.length ?? 0;
     const figFileCount = state.figFiles?.length ?? 0;
     const assetFileCount = state.assetFiles?.length ?? 0;
+    const hasDesignMd = Boolean(state.designMd.trim());
     const snapshot = {
       sourceCount:
-        sourceUrlCount + localFolderCount + figFileCount + assetFileCount,
+        sourceUrlCount + localFolderCount + figFileCount + assetFileCount + (hasDesignMd ? 1 : 0),
       hasBrandDescription: Boolean(state.company?.trim()),
+      hasDesignMd,
       sourceUrlCount,
       githubRepoCount,
       localFolderCount,
@@ -805,14 +810,17 @@ export function DesignSystemCreationFlow({
       // a backing project where the brand-extract skill enriches it live.
       const extractUrl =
         nonGithubSourceUrlsFromState(state)[0] ?? sourceUrlsFromState(state)[0] ?? '';
-      if (!extractUrl) {
-        setError('Add a website (or pick a brand) to extract a design system from.');
+      if (!extractUrl && !hasDesignMd) {
+        setError('Add a website, pick a brand, or paste a DESIGN.md to create a design system.');
         setStep('setup');
         emitCreateResult('failed', undefined, 'DS_EXTRACT_NO_URL', undefined);
         onGenerateSettled?.(snapshot, { result: 'failed', errorCode: 'DS_EXTRACT_NO_URL' });
         return;
       }
-      const result = await brandExtract.run(extractUrl);
+      const result = await brandExtract.run(extractUrl, {
+        description: state.company,
+        designMd: state.designMd,
+      });
       if (!result) {
         setError('Could not start the extraction. Check the link and try again.');
         setStep('setup');
@@ -824,9 +832,17 @@ export function DesignSystemCreationFlow({
       // `projects` list yet — hydrate it so onCreated can prepend it before
       // navigating into the live extraction.
       const project = (await getProject(result.projectId).catch(() => undefined)) ?? undefined;
-      void onSystemsRefresh?.();
+      if (result.designSystemId && result.status === 'ready') {
+        try {
+          await onSystemsRefresh?.();
+        } catch {
+          // The project is still usable; the picker can refresh again from the destination.
+        }
+      } else {
+        void onSystemsRefresh?.();
+      }
       onCreated(result.projectId, project);
-      emitCreateResult('success', result.id, undefined, result.projectId);
+      emitCreateResult('success', result.designSystemId, undefined, result.projectId);
       onGenerateSettled?.(snapshot, { result: 'success' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not prepare the design system project.');
@@ -898,11 +914,11 @@ export function DesignSystemCreationFlow({
           </span>
           <Button
             variant="primary"
-            disabled={sourceUrlsFromState(state).length === 0}
+            disabled={!hasCreationSource(state)}
             onClick={() => {
               emitCreateFormClick('continue_to_generation');
-              if (sourceUrlsFromState(state).length === 0) {
-                setError('Add a website (or pick a brand) to extract a design system from.');
+              if (!hasCreationSource(state)) {
+                setError('Add a website, pick a brand, or paste a DESIGN.md to create a design system.');
                 return;
               }
               setStep('confirm');
@@ -918,7 +934,7 @@ export function DesignSystemCreationFlow({
         {embedded ? (
           <>
             <h1>Generate from your material</h1>
-            <p>Start with a short description, then add any source files you already have.</p>
+            <p>Start with a website or brand reference, then add any source files you already have.</p>
           </>
         ) : (
           <aside className="ds-setup-hero-col">
@@ -927,19 +943,9 @@ export function DesignSystemCreationFlow({
         )}
 
         <div className="ds-setup-form-col">
-        <label className="ds-setup-field">
-          <span>Describe your brand or product</span>
-          <textarea
-            rows={4}
-            value={state.company}
-            onChange={(event) => setState((curr) => ({ ...curr, company: event.target.value }))}
-            placeholder="e.g. Mission Impastabowl: fast-casual pasta restaurant with in-store touchscreen kiosk, mobile app and website"
-          />
-        </label>
-
         <section className="ds-resource-section">
-          <h2>Extract from a website</h2>
-          <p>Paste a link (or pick a brand) and add any files that show your style — images, fonts, logos, PDF, slides or HTML. Open Design measures it into a complete design system.</p>
+          <h2>Extract from source material</h2>
+          <p>Paste a website, a DESIGN.md, or files that show your style. Open Design first creates a usable system quickly, then AI can refine it inside the project.</p>
           <div className="ds-resource-card">
             <div className="ds-resource-row">
               <strong>Website</strong>
@@ -1029,6 +1035,30 @@ export function DesignSystemCreationFlow({
                   setLibraryPickerOpen(true);
                 }}
               />
+            </div>
+            <div className="ds-resource-row ds-resource-row--description">
+              <strong>Describe brand <span>optional</span></strong>
+              <label className="ds-resource-description">
+                <span>Brand voice, intro and product context. Used in the fast pass and AI refinement.</span>
+                <textarea
+                  rows={3}
+                  value={state.company}
+                  onChange={(event) => setState((curr) => ({ ...curr, company: event.target.value }))}
+                  placeholder="e.g. Mission Impastabowl: fast-casual pasta restaurant with kiosk, mobile app and website"
+                />
+              </label>
+            </div>
+            <div className="ds-resource-row ds-resource-row--design-md">
+              <strong>Paste DESIGN.md <span>optional</span></strong>
+              <label className="ds-resource-description">
+                <span>Paste a DESIGN.md to create directly from tokens, rationale and component guidance.</span>
+                <textarea
+                  rows={5}
+                  value={state.designMd}
+                  onChange={(event) => setState((curr) => ({ ...curr, designMd: event.target.value }))}
+                  placeholder={'---\nname: Heritage\ncolors:\n  primary: "#1A1C1E"\n  tertiary: "#B8422E"\ntypography:\n  h1:\n    fontFamily: Public Sans\n---\n\n## Overview\n...'}
+                />
+              </label>
             </div>
             <div className="ds-resource-advanced">
               <button
@@ -1182,11 +1212,11 @@ export function DesignSystemCreationFlow({
             </Button>
             <Button
               variant="primary"
-              disabled={sourceUrlsFromState(state).length === 0}
+              disabled={!hasCreationSource(state)}
               onClick={() => {
                 emitCreateFormClick('continue_to_generation');
-                if (sourceUrlsFromState(state).length === 0) {
-                  setError('Add a website (or pick a brand) to extract a design system from.');
+                if (!hasCreationSource(state)) {
+                  setError('Add a website, pick a brand, or paste a DESIGN.md to create a design system.');
                   return;
                 }
                 setStep('confirm');
@@ -2140,6 +2170,7 @@ export function DesignSystemDetailView({
             }}
             onStop={stopProjectChat}
             initialDraft={chatSeed?.text}
+            composerPlaceholder="Follow-up action: use AI extraction to refine this system. Longer run; updates land here."
             conversations={conversations}
             activeConversationId={activeConversationId}
             // Intentionally omit `messagesConversationId`: the loader above does
@@ -2209,6 +2240,7 @@ export function DesignSystemDetailView({
                 <Button
                   variant="ghost"
                   className="compact"
+                  title="Preselect this design system for new chats and new projects."
                   onClick={() => {
                     const statusBefore = mapDsStatusToTracking(system.status);
                     onSetDefault(system.id);
@@ -2227,7 +2259,7 @@ export function DesignSystemDetailView({
                     });
                   }}
                 >
-                  Make default
+                  Default for new chats
                 </Button>
               ) : null}
             </div>
@@ -3806,6 +3838,7 @@ function dominantRepoHost(urls: string[]): TrackingDesignSystemRepoHost {
 function deriveDesignSystemOrigin(snapshot: {
   sourceCount: number;
   hasBrandDescription: boolean;
+  hasDesignMd?: boolean;
   sourceUrlCount: number;
   githubRepoCount: number;
   localFolderCount: number;
@@ -3819,6 +3852,7 @@ function deriveDesignSystemOrigin(snapshot: {
     snapshot.localFolderCount > 0,
     snapshot.figFileCount > 0,
     snapshot.assetFileCount > 0,
+    snapshot.hasDesignMd === true,
   ].filter(Boolean).length;
   if (filled >= 2) return 'mixed';
   if (snapshot.githubRepoCount > 0) return 'github_repo';
@@ -3826,6 +3860,7 @@ function deriveDesignSystemOrigin(snapshot: {
   if (snapshot.localFolderCount > 0) return 'local_code';
   if (snapshot.figFileCount > 0) return 'fig';
   if (snapshot.assetFileCount > 0) return 'assets';
+  if (snapshot.hasDesignMd) return 'manual_create';
   if (snapshot.hasBrandDescription) return 'manual_create';
   return 'unknown';
 }
@@ -4047,6 +4082,10 @@ function githubUrlsFromState(state: SetupState): string[] {
 
 function nonGithubSourceUrlsFromState(state: SetupState): string[] {
   return sourceUrlsFromState(state).filter((url) => !isGithubRepositoryUrl(url));
+}
+
+function hasCreationSource(state: SetupState): boolean {
+  return sourceUrlsFromState(state).length > 0 || state.designMd.trim().length > 0;
 }
 
 function isGithubRepositoryUrl(url: string): boolean {

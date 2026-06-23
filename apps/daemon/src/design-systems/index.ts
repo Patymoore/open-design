@@ -77,6 +77,16 @@ export type DesignSystemPullFileDetail = {
   content: string;
 };
 
+export type DesignSystemStaticFileDetail = {
+  path: string;
+  name: string;
+  kind: DesignSystemFileKind;
+  size: number;
+  updatedAt: string;
+  contentType: string;
+  bytes: Buffer;
+};
+
 export type DesignSystemPackageInfo = {
   manifest?: DesignSystemProjectManifest;
   sourceEvidence?: {
@@ -507,6 +517,45 @@ export async function readDesignSystemPullFile(
   }
 }
 
+export async function readDesignSystemStaticFile(
+  root: string,
+  id: string,
+  relativePath: string,
+  options: { idPrefix?: string } = {},
+): Promise<DesignSystemStaticFileDetail | null> {
+  const dirId = stripPrefixAndValidateId(id, options.idPrefix);
+  const cleanPath = sanitizeRelativeFilePath(relativePath);
+  if (!dirId || !cleanPath) return null;
+
+  const brandRoot = path.join(root, dirId);
+  const manifest = await readProjectManifest(brandRoot, dirId);
+  if (!(await isAllowedDesignSystemStaticFile(brandRoot, manifest, cleanPath))) return null;
+
+  const resolvedRoot = path.resolve(brandRoot);
+  const filePath = path.resolve(brandRoot, cleanPath);
+  if (filePath !== resolvedRoot && !filePath.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return null;
+  }
+
+  try {
+    const stats = await stat(filePath);
+    if (!stats.isFile()) return null;
+    const bytes = await readFile(filePath);
+    return {
+      path: cleanPath,
+      name: path.basename(cleanPath),
+      kind: classifyDesignSystemFile(cleanPath, false),
+      size: stats.size,
+      updatedAt: stats.mtime.toISOString(),
+      contentType: designSystemStaticContentType(cleanPath),
+      bytes,
+    };
+  } catch (err) {
+    if (isAbsenceError(err)) return null;
+    throw err;
+  }
+}
+
 export function isDesignTokenChannelEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -818,6 +867,83 @@ async function buildDesignSystemPullFileAllowlist(
   }
 
   return allowed;
+}
+
+const DESIGN_SYSTEM_STATIC_SYSTEM_FILES = new Set([
+  'system/index.html',
+  'system/kit.html',
+  'system/kit.dark.html',
+  'system/tokens.default.json',
+  'system/artifacts/landing.html',
+  'system/artifacts/deck.html',
+  'system/artifacts/poster.html',
+  'system/artifacts/email.html',
+  'system/artifacts/newsletter.html',
+  'system/artifacts/form.html',
+]);
+
+async function isAllowedDesignSystemStaticFile(
+  brandRoot: string,
+  manifest: DesignSystemProjectManifest | null,
+  relativePath: string,
+): Promise<boolean> {
+  if (!isSafeManifestPath(relativePath)) return false;
+  if (DESIGN_SYSTEM_STATIC_SYSTEM_FILES.has(relativePath)) return true;
+
+  const allowed = new Set<string>();
+  const add = (filePath: string | undefined): void => {
+    const cleanPath = typeof filePath === 'string' ? sanitizeRelativeFilePath(filePath) : null;
+    if (cleanPath) allowed.add(cleanPath);
+  };
+
+  add(manifest?.files.design ?? 'DESIGN.md');
+  add(manifest?.files.tokens ?? 'tokens.css');
+  add(manifest?.files.components ?? 'components.html');
+  add(manifest?.files.designTokens);
+  add(manifest?.files.tailwind);
+  add(manifest?.usage ?? 'USAGE.md');
+  add(manifest?.componentsManifest ?? 'components.manifest.json');
+  for (const page of manifest?.preview?.pages ?? []) add(page.path);
+  for (const font of manifest?.fonts ?? []) add(font.file);
+
+  if (manifest?.assetsDir === 'assets') {
+    await addFilesUnderDeclaredDir(brandRoot, 'assets', allowed);
+  }
+
+  return allowed.has(relativePath);
+}
+
+function designSystemStaticContentType(relativePath: string): string {
+  const ext = path.extname(relativePath).toLowerCase();
+  switch (ext) {
+    case '.html':
+      return 'text/html; charset=utf-8';
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    case '.woff':
+      return 'font/woff';
+    case '.woff2':
+      return 'font/woff2';
+    case '.ttf':
+      return 'font/ttf';
+    case '.otf':
+      return 'font/otf';
+    default:
+      return 'application/octet-stream';
+  }
 }
 
 async function addFilesUnderDeclaredDir(

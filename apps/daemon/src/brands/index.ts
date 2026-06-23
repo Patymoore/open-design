@@ -44,6 +44,7 @@ import {
   updateProject,
 } from '../db.js';
 import { readProjectFile, resolveProjectDir, writeProjectFile } from '../projects.js';
+import { brandFromDesignMd, sourceUrlForDesignMd } from './design-md-input.js';
 import { brandGuideMd, brandToDesignMd } from './design-md.js';
 import { reflowBrandToMemory } from './memory.js';
 import { brandSystemDir, rebuildSystem } from './system.js';
@@ -84,7 +85,12 @@ export { brandToDesignMd, brandGuideMd } from './design-md.js';
 export { extractJsonBlock, validateBrand } from './validate.js';
 
 export interface StartBrandExtractionOptions {
-  url: string;
+  /** Website/source URL. Optional when a pasted DESIGN.md is provided. */
+  url?: string;
+  /** Short human context; the fast path uses it as intro + voice. */
+  description?: string;
+  /** Pasted DESIGN.md content to parse locally before AI enrichment. */
+  designMd?: string;
   brandsRoot: string;
   projectsRoot: string;
   /** Skills root so the seeded `brand.html` can be rendered from the bundled
@@ -133,6 +139,9 @@ export interface StartBrandExtractionResult {
   projectId: string;
   conversationId: string;
   sourceUrl: string;
+  status: BrandMeta['status'];
+  designSystemId?: string;
+  brandName?: string;
 }
 
 /** Normalize a user-typed URL: prepend https:// when no scheme is present;
@@ -151,6 +160,21 @@ function normalizeUrl(raw: string): string | null {
   return parsed.href;
 }
 
+const MAX_DESIGN_MD_INPUT_CHARS = 240_000;
+
+function normalizeDesignMdInput(raw: string | undefined): string {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, MAX_DESIGN_MD_INPUT_CHARS);
+}
+
+function writeDesignMdInput(brandsRoot: string, id: string, designMd: string): void {
+  const dir = resolveBrandFile(brandsRoot, id, ['context']);
+  if (!dir) return;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'input-DESIGN.md'), designMd, 'utf8');
+}
+
 function hostnameOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./i, '');
@@ -167,8 +191,13 @@ function hostnameOf(url: string): string {
 export async function startBrandExtraction(
   opts: StartBrandExtractionOptions,
 ): Promise<StartBrandExtractionResult> {
-  const url = normalizeUrl(opts.url);
-  if (!url) throw new Error('Enter a valid http(s) website URL.');
+  const designMd = normalizeDesignMdInput(opts.designMd);
+  const rawUrl = (opts.url ?? '').trim();
+  const url = rawUrl ? normalizeUrl(rawUrl) : designMd ? sourceUrlForDesignMd(designMd, opts.description) : null;
+  if (rawUrl && !url) throw new Error('Enter a valid http(s) website URL.');
+  if (!url) throw new Error('Enter a valid http(s) website URL or paste a DESIGN.md.');
+  const hasWebsiteSource = /^https?:\/\//i.test(url);
+  const hasDesignMdSource = Boolean(designMd);
 
   const {
     brandsRoot,
@@ -194,6 +223,7 @@ export async function startBrandExtraction(
     projectId,
   };
   createBrandDir(brandsRoot, id, meta);
+  if (designMd) writeDesignMdInput(brandsRoot, id, designMd);
 
   const metadata: ProjectMetadata = {
     kind: 'brand',
@@ -207,8 +237,8 @@ export async function startBrandExtraction(
   const name = `${host} Design System`;
   const runProgrammatic = Boolean(opts.userDesignSystemsRoot);
   const pendingPrompt = runProgrammatic
-    ? brandExtractionFallbackPrompt({ url, brandId: id, host })
-    : brandExtractionPrompt({ url, brandId: id, host });
+    ? brandExtractionFallbackPrompt({ url, brandId: id, host, hasWebsiteSource, hasDesignMdSource })
+    : brandExtractionPrompt({ url, brandId: id, host, hasWebsiteSource, hasDesignMdSource });
   insertProject(db, {
     id: projectId,
     name,
@@ -272,6 +302,9 @@ export async function startBrandExtraction(
     host,
     metadata,
   });
+  if (designMd) {
+    await writeProjectFile(projectsRoot, projectId, 'context/input-DESIGN.md', designMd, { overwrite: true }, metadata);
+  }
 
   // brand.html is the star of the workspace (active tab). The target site stays
   // available as a secondary in-app browser tab so the user can glance at it /
@@ -279,7 +312,9 @@ export async function startBrandExtraction(
   setTabs(db, projectId, {
     tabs: [BRAND_KIT_FILE],
     active: BRAND_KIT_FILE,
-    browserTabs: [{ id: BRAND_BROWSER_TAB_ID, label: 'Browser', url, title: host }],
+    ...(hasWebsiteSource
+      ? { browserTabs: [{ id: BRAND_BROWSER_TAB_ID, label: 'Browser', url, title: host }] }
+      : {}),
   });
 
   // Programmatic-first: synchronously harvest + synthesize + finalize a usable
@@ -300,9 +335,12 @@ export async function startBrandExtraction(
       db,
       logoFallback,
       imageryFallback,
+      hasWebsiteSource,
     };
     if (opts.dataDir) programmaticOptions.dataDir = opts.dataDir;
     if (opts.prefetch) programmaticOptions.prefetch = opts.prefetch;
+    if (opts.description) programmaticOptions.description = opts.description;
+    if (designMd) programmaticOptions.designMd = designMd;
 
     // The full programmatic finalize (harvest + synthesize + register) keeps
     // running to completion — but the start response only WAITS for it up to a
@@ -329,7 +367,16 @@ export async function startBrandExtraction(
     if (!finishedInBudget) opts.onBackgroundExtraction?.(settled);
   }
 
-  return { id, projectId, conversationId, sourceUrl: url };
+  const latest = readBrandDetail(brandsRoot, id);
+  return {
+    id,
+    projectId,
+    conversationId,
+    sourceUrl: url,
+    status: latest?.meta.status ?? meta.status,
+    ...(latest?.meta.designSystemId ? { designSystemId: latest.meta.designSystemId } : {}),
+    ...(latest?.brand?.name ? { brandName: latest.brand.name } : {}),
+  };
 }
 
 /** How long `startBrandExtraction` waits for the synchronous programmatic
@@ -624,6 +671,9 @@ export interface RunProgrammaticExtractionOptions {
   skillsRoot: string;
   db: Parameters<typeof insertProject>[0];
   dataDir?: string;
+  description?: string;
+  designMd?: string;
+  hasWebsiteSource?: boolean;
   /** Deterministic material harvester; defaults to the live network prefetch. */
   prefetch?: PrefetchFn;
   logoFallback?: LogoFallbackFn;
@@ -648,6 +698,31 @@ export async function runProgrammaticExtraction(
   const brandDir = resolveBrandFile(brandsRoot, id, []);
   if (!brandDir) return null;
 
+  if (opts.designMd?.trim()) {
+    const brand = brandFromDesignMd({
+      markdown: opts.designMd,
+      sourceUrl: meta.sourceUrl,
+      description: opts.description,
+      fallbackName: hostnameOf(meta.sourceUrl),
+    });
+    if (brand) {
+      const guideMd = brandGuideMd(brand);
+      const finalized = await finalizeBrandCore({ ...opts, brand, guideMd });
+      updateProject(opts.db, opts.projectId, {
+        pendingPrompt: brandExtractionPrompt({
+          url: meta.sourceUrl,
+          brandId: id,
+          host: hostnameOf(meta.sourceUrl),
+          hasWebsiteSource: opts.hasWebsiteSource === true,
+          hasDesignMdSource: true,
+        }),
+      });
+      return finalized;
+    }
+  }
+
+  if (opts.hasWebsiteSource === false) return null;
+
   const material = await prefetch(meta.sourceUrl, brandDir);
   if (!material) return null;
   if (material.blocked || material.thin) return null;
@@ -660,6 +735,8 @@ export async function runProgrammaticExtraction(
       url: meta.sourceUrl,
       brandId: id,
       host: hostnameOf(meta.sourceUrl),
+      hasWebsiteSource: true,
+      hasDesignMdSource: false,
     }),
   });
   return finalized;
@@ -750,13 +827,41 @@ export async function renderBrandPreviewIntoProject(
 /** The first prompt the enrichment agent auto-runs. Self-sufficient (does not
  *  rely on the brand-extract skill auto-loading) but names it so a runtime that
  *  surfaces skills can pull in the longer methodology + craft guides. */
-function brandExtractionPrompt(input: { url: string; brandId: string; host: string }): string {
+function brandExtractionPrompt(input: {
+  url: string;
+  brandId: string;
+  host: string;
+  hasWebsiteSource?: boolean;
+  hasDesignMdSource?: boolean;
+}): string {
+  if (input.hasDesignMdSource && !input.hasWebsiteSource) {
+    return [
+      `This is a DESIGN SYSTEM ENRICHMENT task for ${input.host}.`,
+      `Source: pasted DESIGN.md (${input.url})`,
+      `Brand id: ${input.brandId}`,
+      '',
+      'A usable design system has ALREADY been parsed from `context/input-DESIGN.md`, finalized programmatically, and registered. The design-system page (`brand.html`) is open as the active tab, already in the `ready` state and applyable everywhere RIGHT NOW. Your job is to ENRICH that provisional system in place: inspect `context/input-DESIGN.md`, `DESIGN.md`, `brand.json`, `system/variables.css`, `system/theme.json`, and the component kit pages; then replace weak guesses with clearer token roles, component guidance, voice, and implementation notes.',
+      '',
+      'Do not create a duplicate design system. Keep the same registered user design-system id. Update `brand.json` and `BRAND.md` incrementally, run `od brand preview ' + input.brandId + '` after field groups, then run `od brand finalize ' + input.brandId + '` when ready.',
+      '',
+      'Focus areas:',
+      '- Normalize color roles from the pasted DESIGN.md into background, surface, foreground, muted, border, accent, and accent-secondary.',
+      '- Strengthen typography guidance, spacing/radius/layout posture, component kit coverage, and do/don\'t rules from the source prose.',
+      '- Keep `DESIGN.md`, `brand.json`, `system/kit.html`, `system/kit.dark.html`, token JSON/CSS files, and artifact previews coherent.',
+      '',
+      'Finish by summarizing which tokens and component-kit files changed.',
+    ].join('\n');
+  }
+
+  const designMdNote = input.hasDesignMdSource
+    ? ' The user also pasted `context/input-DESIGN.md`; treat its machine-readable tokens and prose as source evidence and authoritative overrides when they conflict with rough website guesses.'
+    : '';
   return [
     `This is a DESIGN SYSTEM ENRICHMENT task for ${input.host}.`,
     `Source URL: ${input.url}`,
     `Brand id: ${input.brandId}`,
     '',
-    'A usable design system has ALREADY been extracted programmatically and registered — the daemon harvested the site deterministically (logo, palette, typography, a one-line description, cover imagery, source URL) and the design-system page (`brand.html`) is open as the active tab, already in the `ready` state and applyable everywhere RIGHT NOW. Your job is to ENRICH that provisional design system into the full, precise version: re-measure anything the deterministic pass got approximately, add what it could not infer (voice & tone, imagery direction, layout posture, accent-secondary), and replace any weak guesses with measured truth. The target site is also open in a secondary in-app Browser tab. Use the `brand-extract` skill and the `agent-browser` tool to drive and observe the site. Do not guess — measure.',
+    'A usable design system has ALREADY been extracted programmatically and registered — the daemon harvested the site deterministically (logo, palette, typography, a one-line description, cover imagery, source URL) and the design-system page (`brand.html`) is open as the active tab, already in the `ready` state and applyable everywhere RIGHT NOW. Your job is to ENRICH that provisional design system into the full, precise version: re-measure anything the deterministic pass got approximately, add what it could not infer (voice & tone, imagery direction, layout posture, accent-secondary), and replace any weak guesses with measured truth.' + designMdNote + ' The target site is also open in a secondary in-app Browser tab. Use the `brand-extract` skill and the `agent-browser` tool to drive and observe the site. Do not guess — measure.',
     '',
     'Work the branding-agent chain, optimizing for PROGRESSIVE fill-in (never batch everything to the end). The page is already populated from the programmatic pass — refine it module by module so the user watches it sharpen:',
     '',
@@ -778,13 +883,36 @@ function brandExtractionPrompt(input: { url: string; brandId: string; host: stri
 /** Prompt used while the programmatic harvest is not known-good yet. It must
  * not claim the design system is already ready: blocked/thin sites stay on
  * this path and need the agent to do the initial extraction from the scaffold. */
-function brandExtractionFallbackPrompt(input: { url: string; brandId: string; host: string }): string {
+function brandExtractionFallbackPrompt(input: {
+  url: string;
+  brandId: string;
+  host: string;
+  hasWebsiteSource?: boolean;
+  hasDesignMdSource?: boolean;
+}): string {
+  if (input.hasDesignMdSource && !input.hasWebsiteSource) {
+    return [
+      `This is a DESIGN SYSTEM EXTRACTION task for ${input.host}.`,
+      `Source: pasted DESIGN.md (${input.url})`,
+      `Brand id: ${input.brandId}`,
+      '',
+      'The daemon created a live design-system scaffold and saved the pasted source at `context/input-DESIGN.md`. A ready design system may already be registered from the programmatic parser; if not, use the pasted file as the canonical source and complete it.',
+      '',
+      'Read `context/input-DESIGN.md`, then update `brand.json`, `BRAND.md`, and `DESIGN.md` progressively. Run `od brand preview ' + input.brandId + '` after meaningful field groups, then `od brand finalize ' + input.brandId + '` to register or update the same design system in place.',
+      '',
+      'Finish by pointing the user at the completed brand.html and reusable design-system assets.',
+    ].join('\n');
+  }
+
+  const designMdNote = input.hasDesignMdSource
+    ? ' The user also pasted `context/input-DESIGN.md`; read it before drafting and let its tokens/prose override weaker URL-derived guesses.'
+    : '';
   return [
     `This is a DESIGN SYSTEM EXTRACTION task for ${input.host}.`,
     `Source URL: ${input.url}`,
     `Brand id: ${input.brandId}`,
     '',
-    'The daemon opened a live extraction scaffold (`brand.html`) in the project, but a ready design system is NOT guaranteed yet. Treat the page as an empty/in-progress workspace until you have measured the target site and written `brand.json`; do not assume a registered `brand.json` or design system already exists.',
+    'The daemon opened a live extraction scaffold (`brand.html`) in the project, but a ready design system is NOT guaranteed yet. Treat the page as an empty/in-progress workspace until you have measured the target site and written `brand.json`; do not assume a registered `brand.json` or design system already exists.' + designMdNote,
     '',
     'Use the `brand-extract` skill and the `agent-browser` tool to drive and observe the target site. Measure before you synthesize: capture the real colors, fonts, logo candidates, representative imagery, voice, and layout posture. If the page is an anti-bot verification interstitial, emit a `<question-form>` asking the user to complete verification in the browser, then continue after they respond.',
     '',
@@ -897,6 +1025,7 @@ async function syncBrandFilesToProject(input: {
   await copyOptionalDirectoryToProject(input.projectsRoot, input.projectId, input.metadata, path.join(brandRoot, 'fonts'), 'fonts');
   await copyOptionalDirectoryToProject(input.projectsRoot, input.projectId, input.metadata, path.join(brandRoot, 'imagery'), 'imagery');
   await copyOptionalDirectoryToProject(input.projectsRoot, input.projectId, input.metadata, path.join(brandRoot, 'prefetch'), 'prefetch');
+  await copyOptionalDirectoryToProject(input.projectsRoot, input.projectId, input.metadata, path.join(brandRoot, 'context'), 'context');
 }
 
 async function writeOptionalFileToProject(

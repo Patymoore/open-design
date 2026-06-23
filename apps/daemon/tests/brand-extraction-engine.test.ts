@@ -812,6 +812,9 @@ describe('agent-driven brand extraction engine', () => {
     expect(detail?.brand?.name).toBe('Acme');
     expect(detail?.brand?.tagline).toBe('We make things');
     expect(detail?.brand?.logo.primary).toBe('logos/header.svg');
+    expect(result.status).toBe('ready');
+    expect(result.designSystemId).toBe(detail?.meta.designSystemId);
+    expect(result.brandName).toBe('Acme');
 
     // The backing project's design system page renders ready, with the six
     // artifacts built, so it is immediately applyable.
@@ -1009,6 +1012,8 @@ describe('agent-driven brand extraction engine', () => {
 
     // At return time the brand is still extracting (skeleton page), so the user
     // sees a progress state rather than waiting on the network.
+    expect(result.status).toBe('extracting');
+    expect(result.designSystemId).toBeUndefined();
     expect(readBrandDetail(brandsRoot, result.id)?.meta.status).toBe('extracting');
 
     // Once the background harvest settles, the brand finalizes to ready.

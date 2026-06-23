@@ -67,8 +67,8 @@ export function BrandEnrichmentBanner({ onContinue, busy = false }: Props) {
         <span className={styles.copy}>
           <span className={styles.title}>Continue with AI optimization</span>
           <span className={styles.text}>
-            Your design system was extracted automatically. Refine it with AI —
-            optionally pick the design-system skills to apply.
+            Your design system is already usable from the fast extraction. Run the slower AI extraction
+            when you want it to measure deeper and update this system in place.
           </span>
         </span>
       </div>

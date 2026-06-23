@@ -149,7 +149,12 @@ export interface BrandDetailResponse {
 
 /** POST /api/brands request — start an agent-driven brand extraction. */
 export interface BrandCreateRequest {
-  url: string;
+  /** Website/source URL. Optional when `designMd` is supplied directly. */
+  url?: string;
+  /** Short brand/product context, used as voice + intro copy in the fast pass. */
+  description?: string;
+  /** Pasted DESIGN.md content. Parsed locally before the AI enrichment pass. */
+  designMd?: string;
 }
 
 /**
@@ -174,6 +179,12 @@ export interface BrandExtractStartResponse {
   conversationId: string;
   /** The normalized source URL the browser tab was opened to. */
   sourceUrl: string;
+  /** Current lifecycle after the bounded programmatic-first pass. */
+  status: BrandStatus;
+  /** Present when the fast pass already registered an applyable `user:<id>` design system. */
+  designSystemId?: string;
+  /** Display name from the fast pass, when available. */
+  brandName?: string;
 }
 
 /**

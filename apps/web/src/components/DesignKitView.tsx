@@ -201,6 +201,13 @@ export interface DesignKitViewProps {
   noticeSlot?: ReactNode;
   /** Rendered above the modules (e.g. publish / default card). */
   topSlot?: ReactNode;
+  /**
+   * Opens a full, scrollable preview when the user clicks the hover button
+   * over the showcase cover. When omitted, the cover falls back to a built-in
+   * scrollable modal of the same showcase HTML. Lets the Design Systems list
+   * route the hover button to its richer "Preview full system" modal.
+   */
+  onPreviewCover?: () => void;
   /** When provided, exposes a Visualize / Edit / Source toggle for DESIGN.md. */
   editor?: KitEditor;
   onUploadModule?: (module: KitUploadModule, file: File) => void;
@@ -217,6 +224,7 @@ export function DesignKitView({
   actionsSlot,
   noticeSlot,
   topSlot,
+  onPreviewCover,
   editor,
   onUploadModule,
   uploading,
@@ -225,11 +233,13 @@ export function DesignKitView({
   const t = useT();
   const compact = variant === 'compact';
   const [mode, setMode] = useState<KitMode>('visualize');
+  const [coverPreviewOpen, setCoverPreviewOpen] = useState(false);
   const [tokens, setTokens] = useState<BrandTokenSubset | null>(null);
   const [dsTheme, setDsTheme] = useState<'light' | 'dark'>('light');
   const [activeLogo, setActiveLogo] = useState(0);
   const [imagesExpanded, setImagesExpanded] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; caption: string } | null>(null);
+  const [assetPreview, setAssetPreview] = useState<{ url: string; label: string } | null>(null);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -245,6 +255,8 @@ export function DesignKitView({
     setActiveLogo(0);
     setImagesExpanded(false);
     setLightbox(null);
+    setAssetPreview(null);
+    setCoverPreviewOpen(false);
   }, [kit.designSystemId, kit.brandId]);
 
   // Engine token chips, when the system dir exists.
@@ -727,12 +739,18 @@ export function DesignKitView({
               <h3 className={styles.sectionTitle}>{t('brandDetail.brandAssets')}</h3>
               <div className={styles.assets}>
                 {kit.assets.map((a) => (
-                  <a
+                  <div
+                    role="button"
+                    tabIndex={0}
                     key={a.kind}
                     className={styles.asset}
-                    href={a.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
+                    onClick={() => setAssetPreview({ url: a.url, label: a.label })}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setAssetPreview({ url: a.url, label: a.label });
+                      }
+                    }}
                   >
                     <div className={styles.assetFrame}>
                       <iframe
@@ -747,7 +765,7 @@ export function DesignKitView({
                     <div className={styles.assetMeta}>
                       <span className={styles.assetName}>{a.label}</span>
                     </div>
-                  </a>
+                  </div>
                 ))}
               </div>
             </section>
@@ -777,6 +795,36 @@ export function DesignKitView({
             alt={lightbox.caption}
             onClick={(e) => e.stopPropagation()}
           />
+        </div>
+      ) : null}
+
+      {assetPreview ? (
+        <div
+          className={styles.assetModal}
+          role="dialog"
+          aria-modal="true"
+          aria-label={assetPreview.label}
+          onClick={() => setAssetPreview(null)}
+        >
+          <div className={styles.assetModalPanel} onClick={(event) => event.stopPropagation()}>
+            <div className={styles.assetModalHeader}>
+              <h3>{assetPreview.label}</h3>
+              <button
+                type="button"
+                className={styles.assetModalClose}
+                onClick={() => setAssetPreview(null)}
+                aria-label={t('newBrand.close')}
+              >
+                <CloseGlyph />
+              </button>
+            </div>
+            <iframe
+              className={styles.assetModalFrame}
+              src={assetPreview.url}
+              title={assetPreview.label}
+              sandbox=""
+            />
+          </div>
         </div>
       ) : null}
     </div>

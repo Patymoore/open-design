@@ -726,7 +726,7 @@ describe('HomeView prompt handoff', () => {
     fireEvent.click(await screen.findByTestId('home-hero-rail-prototype'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Prototype');
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Prototype');
     });
     expect(fetchMock.mock.calls.some(([url]) => (
       typeof url === 'string' && url.includes('/api/plugins/example-web-prototype/apply')
@@ -828,7 +828,7 @@ describe('HomeView prompt handoff', () => {
     fireEvent.click(await screen.findByTestId('home-hero-rail-prototype'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Prototype');
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Prototype');
     });
     expect(
       screen.getByTestId('home-hero-design-system-trigger').textContent,
@@ -961,7 +961,7 @@ describe('HomeView prompt handoff', () => {
     expect(fetchMock.mock.calls.some(([url]) => (
       typeof url === 'string' && url.includes('/api/plugins/example-web-prototype/apply')
     ))).toBe(false);
-    expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Prototype');
+    expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Prototype');
     // The design-system picker is now the persistent control below the composer.
     expect(
       screen.getByTestId('home-hero-design-system-trigger').textContent,
@@ -1067,7 +1067,7 @@ describe('HomeView prompt handoff', () => {
     expect(fetchMock.mock.calls.some(([url]) => (
       typeof url === 'string' && url.includes('/apply')
     ))).toBe(false);
-    expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Live artifact');
+    expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Live artifact');
     expect(screen.queryByTestId('plugin-inputs-form')).toBeNull();
 
     fireEvent.click(screen.getByTestId('home-hero-submit'));
@@ -1126,7 +1126,7 @@ describe('HomeView prompt handoff', () => {
     fireEvent.click(await screen.findByTestId('home-hero-rail-live-artifact'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Live artifact');
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Live artifact');
     });
     expect(fetchMock.mock.calls.some(([url]) => (
       typeof url === 'string' && url.includes('/api/plugins/example-live-artifact/apply')
@@ -1196,7 +1196,7 @@ describe('HomeView prompt handoff', () => {
     fireEvent.click(await screen.findByTestId('home-hero-rail-deck'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Slide deck');
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Slide deck');
     });
     expect(screen.queryByTestId('home-hero-footer-option-speakerNotes')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-slideCount')).toBeNull();
@@ -1250,7 +1250,7 @@ describe('HomeView prompt handoff', () => {
     fireEvent.click(await screen.findByTestId('home-hero-rail-prototype'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Prototype');
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Prototype');
     });
     expect(fetchMock.mock.calls.some(([url]) => (
       typeof url === 'string' && url.includes('/api/plugins/example-web-prototype/apply')
@@ -1298,7 +1298,7 @@ describe('HomeView prompt handoff', () => {
     await clearActiveTypeChip();
     fireEvent.click(await screen.findByTestId('home-hero-rail-deck'));
     await waitFor(() => {
-      expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Slide deck');
+      expect(screen.getByTestId('home-hero-template-trigger').textContent).toContain('Slide deck');
     });
     expect(screen.getByTestId('home-hero-plugin-presets')).toBeTruthy();
     expect(screen.getByTestId('home-hero-plugin-presets').textContent).toContain('Simple Deck');
@@ -1854,8 +1854,13 @@ async function setPromptAndSettle(value: string): Promise<void> {
 }
 
 async function clearActiveTypeChip() {
-  const chip = screen.queryByTestId('home-hero-active-type-chip');
-  if (chip) fireEvent.click(chip);
+  // Reset the Template selection back to "None" via the dropdown's Clear.
+  const trigger = screen.queryByTestId('home-hero-template-trigger');
+  if (!trigger) return;
+  fireEvent.click(trigger);
+  const clear = screen.queryByTestId('home-hero-template-clear');
+  if (clear) fireEvent.click(clear);
+  fireEvent.keyDown(document, { key: 'Escape' });
 }
 
 async function clickHomeShortcut(id: string) {

@@ -65,7 +65,7 @@
   margin: 0;
   font-family: var(--serif);
   font-weight: 600;
-  font-size: 30px;
+  font-size: 40px;
   letter-spacing: -0.02em;
   color: var(--text-strong);
   text-align: center;
@@ -347,7 +347,8 @@
 }
 .home-hero__input-card:has(.inline-switcher__popover),
 .home-hero__input-card:has(.session-mode-toggle__popover),
-.home-hero__input-card:has(.home-hero__plugin-picker) {
+.home-hero__input-card:has(.home-hero__plugin-picker),
+.home-hero__input-card:has(.home-hero__template-menu) {
   z-index: 1700;
   overflow: visible;
 }
@@ -556,6 +557,55 @@
   top: 8px;
   left: 4px;
   color: var(--text-soft);
+}
+/* Typewriter placeholder carousel — a pointer-events-none overlay aligned to
+   the editor's first text line (matches .composer-input-placeholder metrics).
+   Shown only while the composer is empty; the editor's own placeholder is
+   blanked behind it. See home-hero/PlaceholderCarousel.tsx. */
+.home-hero__lexical .home-hero__carousel {
+  position: absolute;
+  top: 8px;
+  left: 4px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  user-select: none;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-soft);
+  overflow: hidden;
+}
+.home-hero__carousel-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-hero__carousel-caret {
+  flex: none;
+  width: 1.5px;
+  align-self: stretch;
+  margin: 3px 0 3px 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: home-hero-caret-blink 1.05s steps(1, end) infinite;
+}
+@keyframes home-hero-caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-hero__carousel-caret {
+    animation: none;
+    opacity: 1;
+  }
 }
 .home-hero__input-card .plugin-inputs-form {
   display: grid;
@@ -2408,7 +2458,7 @@
 
 @media (max-width: 900px) {
   .home-hero__title {
-    font-size: 24px;
+    font-size: 30px;
   }
   .home-hero__prompt-examples-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2700,6 +2750,23 @@
   font-weight: 600;
   letter-spacing: 0;
 }
+/* Mini ScenarioArt thumbnail in the trigger so the pill's leading glyph matches
+   the dropdown's illustrative cards (instead of a flat line icon). */
+.home-hero__template-trigger-thumb {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: var(--radius-xs, 4px);
+  color: var(--accent);
+}
+.home-hero__template-trigger-thumb .home-hero__scenario-art-svg {
+  width: 24px;
+  height: auto;
+}
 .home-hero__template-menu {
   position: absolute;
   left: 0;
@@ -2812,33 +2879,72 @@
     background-color 120ms var(--ease-out),
     transform 120ms var(--ease-out);
 }
-.home-hero__template-card:hover,
+.home-hero__template-card:hover:not(:disabled),
 .home-hero__template-card:focus-visible {
   outline: none;
   border-color: var(--border-strong);
   background: var(--bg-subtle);
   transform: translateY(-1px);
 }
+.home-hero__template-card:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 .home-hero__template-card.is-active {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: var(--accent-tint);
 }
 .home-hero__template-card-art {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  height: 46px;
+  height: 54px;
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bg-subtle) 70%, var(--bg-panel));
-  color: var(--text-muted);
-}
-.home-hero__template-card.is-active .home-hero__template-card-art {
+  /* Same illustrative gradient as the rail's scenario-card art, so the
+     dropdown thumbnails read as the same template set. */
+  background: radial-gradient(
+    120% 120% at 30% 20%,
+    color-mix(in srgb, var(--accent-tint) 78%, var(--bg-panel)),
+    var(--bg-subtle)
+  );
   color: var(--accent);
+}
+.home-hero__template-card .home-hero__scenario-art-svg {
+  transition: transform 160ms var(--ease-out);
+}
+.home-hero__template-card:hover:not(:disabled) .home-hero__scenario-art-svg {
+  transform: scale(1.05);
+}
+.home-hero__template-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: center;
 }
 .home-hero__template-card-label {
   color: var(--text-strong);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 650;
   line-height: 1.2;
-  text-align: center;
+}
+.home-hero__template-card.is-active .home-hero__template-card-label {
+  color: var(--accent);
+}
+.home-hero__template-card-desc {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+/* Hover-preview value in the trigger reads as transient (lighter) until
+   committed by a click. */
+.home-hero__template-option .home-hero__footer-select-label.is-preview {
+  color: var(--text-muted);
+  font-style: italic;
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-hero__template-card .home-hero__scenario-art-svg {
+    transition: none;
+  }
 }

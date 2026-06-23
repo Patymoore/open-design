@@ -9,13 +9,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HomeHeroChip } from './chips';
 import { Icon } from '../Icon';
+import { ScenarioArt } from './ScenarioArt';
 import { useT } from '../../i18n';
 
 interface Props {
   // Selectable templates, already ordered (the apply-scenario create chips).
   templates: HomeHeroChip[];
   activeChipId: string | null;
+  // Hover-preview from the rail below: when set (and a known template), the
+  // trigger previews that template instead of the committed value, so hovering
+  // a rail card updates the pill. Cleared on rail-leave → reverts to None.
+  previewChipId?: string | null;
+  // Disables opening the dropdown (initial plugin load only). The dropdown
+  // stays reachable during a pending apply so the user can still clear/switch.
   disabled?: boolean;
+  // Disables picking a *new* template while an apply is in flight (mirrors the
+  // rail's per-card guard); opening + Clear remain available.
+  pickDisabled?: boolean;
   // Localized label / description for a chip id (reuses HomeHero's chip copy).
   labelFor: (chipId: string) => string;
   descriptionFor: (chipId: string) => string;
@@ -26,7 +36,9 @@ interface Props {
 export function TemplatePicker({
   templates,
   activeChipId,
+  previewChipId = null,
   disabled = false,
+  pickDisabled = false,
   labelFor,
   descriptionFor,
   onPick,
@@ -76,7 +88,14 @@ export function TemplatePicker({
     };
   }, [open]);
 
-  const valueLabel = active ? labelFor(active.id) : t('common.none');
+  // Hover-preview wins over the committed value so pointing at a rail card
+  // updates the pill; falls back to the committed template, then "None".
+  const previewChip = previewChipId
+    ? templates.find((chip) => chip.id === previewChipId) ?? null
+    : null;
+  const shown = previewChip ?? active;
+  const isPreviewing = Boolean(previewChip) && previewChip !== active;
+  const valueLabel = shown ? labelFor(shown.id) : t('common.none');
 
   return (
     <div
@@ -95,14 +114,24 @@ export function TemplatePicker({
         title={t('homeHero.templatePicker.label')}
         onClick={() => setOpen((v) => !v)}
       >
-        <span
-          className="home-hero__footer-option-icon home-hero__footer-option-icon--compact"
-          aria-hidden
-        >
-          <Icon name={active ? active.icon : 'layout'} size={13} />
-        </span>
+        {shown ? (
+          <span className="home-hero__template-trigger-thumb" aria-hidden>
+            <ScenarioArt chipId={shown.id} fallbackIcon={shown.icon} />
+          </span>
+        ) : (
+          <span
+            className="home-hero__footer-option-icon home-hero__footer-option-icon--compact"
+            aria-hidden
+          >
+            <Icon name="grid" size={13} />
+          </span>
+        )}
         <span className="home-hero__template-kicker">{t('homeHero.templatePicker.label')}</span>
-        <span className="home-hero__footer-select-label">{valueLabel}</span>
+        <span
+          className={`home-hero__footer-select-label${isPreviewing ? ' is-preview' : ''}`}
+        >
+          {valueLabel}
+        </span>
         <Icon name="chevron-down" size={12} aria-hidden />
       </button>
       {open ? (
@@ -153,6 +182,7 @@ export function TemplatePicker({
                     className={`home-hero__template-card${isActive ? ' is-active' : ''}`}
                     role="option"
                     aria-selected={isActive}
+                    disabled={pickDisabled}
                     data-chip-id={chip.id}
                     data-testid={`home-hero-template-card-${chip.id}`}
                     title={descriptionFor(chip.id) || labelFor(chip.id)}
@@ -162,9 +192,16 @@ export function TemplatePicker({
                     }}
                   >
                     <span className="home-hero__template-card-art" aria-hidden>
-                      <Icon name={chip.icon} size={18} />
+                      <ScenarioArt chipId={chip.id} fallbackIcon={chip.icon} />
                     </span>
-                    <span className="home-hero__template-card-label">{labelFor(chip.id)}</span>
+                    <span className="home-hero__template-card-copy">
+                      <span className="home-hero__template-card-label">{labelFor(chip.id)}</span>
+                      {descriptionFor(chip.id) ? (
+                        <span className="home-hero__template-card-desc">
+                          {descriptionFor(chip.id)}
+                        </span>
+                      ) : null}
+                    </span>
                   </button>
                 );
               })}

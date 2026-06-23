@@ -15,7 +15,7 @@ import type {
   BrandVoice,
   DesignSystemPackageInfo,
 } from '@open-design/contracts';
-import { fetchProjectFileText, projectRawUrl } from '../providers/registry';
+import { designSystemStaticUrl, fetchProjectFileText, projectRawUrl } from '../providers/registry';
 import { parseDesignMd, type ParsedDesignMd } from './design-md-parse';
 
 // ── shared pure helpers (also re-exported from BrandPreviewCard) ──────────
@@ -348,6 +348,9 @@ export function parsedToKit(parsed: ParsedDesignMd, opts: ParsedKitOptions): Des
     avoid: parsed.imagery.avoid,
     samples: [],
   };
+  const staticUrl = !opts.editable && opts.designSystemId && opts.packageInfo?.manifest
+    ? (rel: string): string => designSystemStaticUrl(opts.designSystemId!, rel)
+    : null;
 
   return {
     designSystemId: opts.designSystemId,
@@ -366,6 +369,17 @@ export function parsedToKit(parsed: ParsedDesignMd, opts: ParsedKitOptions): Des
     voice: hasVoice(parsed.voice) ? parsed.voice : undefined,
     imagery: hasImagery(imagery) ? imagery : undefined,
     layout: hasLayout(layout) ? layout : undefined,
+    system: staticUrl
+      ? {
+          kitUrl: staticUrl('system/kit.html'),
+          kitDarkUrl: staticUrl('system/kit.dark.html'),
+          tokensUrl: staticUrl('system/tokens.default.json'),
+          indexUrl: staticUrl('system/index.html'),
+        }
+      : undefined,
+    assets: staticUrl
+      ? ASSET_TILES.map((a) => ({ kind: a.kind, label: a.label, url: staticUrl(a.file) }))
+      : undefined,
     showcaseHtml: opts.showcaseHtml ?? null,
   };
 }

@@ -912,6 +912,21 @@ export interface Dict {
   'homeHero.subtitlePrefix': string;
   'homeHero.placeholder': string;
   'homeHero.placeholderActive': string;
+  // Rotating typewriter placeholder scenarios + idle hint (home-hero carousel).
+  'homeHero.carousel.hint': string;
+  'homeHero.carousel.onePageBrief': string;
+  'homeHero.carousel.notesToDeck': string;
+  'homeHero.carousel.signupFlow': string;
+  'homeHero.carousel.improveBrief': string;
+  'homeHero.carousel.loadingAnimation': string;
+  'homeHero.carousel.teamUpdateSlides': string;
+  'homeHero.carousel.ordersDashboard': string;
+  'homeHero.carousel.productDetail': string;
+  'homeHero.carousel.caseStudy': string;
+  'homeHero.carousel.landingIntro': string;
+  'homeHero.carousel.pitchDeck': string;
+  'homeHero.carousel.appIdea': string;
+  'homeHero.carousel.landingLayout': string;
   'homeHero.skills': string;
   'homeHero.addMenu': string;
   'homeHero.addPlugin': string;

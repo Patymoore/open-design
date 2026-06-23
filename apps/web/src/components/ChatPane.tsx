@@ -41,6 +41,7 @@ import { isTodoWriteToolName, latestTodoWriteInputForPinnedCard } from '../runti
 import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, ChatMessageFeedbackChange, Conversation, DesignSystemSummary, PreviewComment, Project, ProjectFile, ProjectMetadata, SkillSummary } from '../types';
 import { commentTargetDisplayName, commentsToAttachments, simplePositionLabel } from '../comments';
 import { AssistantMessage, type QuestionFormOpenRequest } from './AssistantMessage';
+import type { NextStepActionsVariant } from './NextStepActions';
 import { AmrGuidance } from './AmrGuidance';
 import { AmrLoginPill } from './AmrLoginPill';
 import {
@@ -495,6 +496,7 @@ interface Props {
   // time before the full `tool_use` arrives. Never persisted.
   liveToolInput?: Record<string, { name: string; text: string; seq?: number }>;
   initialDraft?: string;
+  composerPlaceholder?: string;
   // Focus the right-hand Questions tab from the chat banner.
   onOpenQuestions?: (request?: QuestionFormOpenRequest) => void;
   onContinueRemainingTasks?: (assistantMessage: ChatMessage, todos: TodoItem[]) => void;
@@ -701,6 +703,7 @@ export function ChatPane({
   forceStreamingMessageIds,
   liveToolInput,
   initialDraft,
+  composerPlaceholder,
   onOpenQuestions,
   onContinueRemainingTasks,
   onAssistantFeedback,
@@ -1718,6 +1721,7 @@ export function ChatPane({
       streaming={streaming}
       sendDisabled={sendDisabled}
       initialDraft={initialDraft}
+      composerPlaceholder={composerPlaceholder}
       draftStorageKey={composerDraftStorageKey}
       onEnsureProject={onEnsureProject}
       commentAttachments={commentsToAttachments(attachedComments)}

@@ -78,7 +78,7 @@ describe('HomeView media composer options', () => {
     expect(screen.getByTestId('home-hero-design-system-trigger')).toBeTruthy();
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
     expect(screen.queryByTestId('home-hero-footer-option-designSystem')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
@@ -87,7 +87,7 @@ describe('HomeView media composer options', () => {
     expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
     expect(screen.queryByTestId('home-hero-footer-option-designSystem')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
@@ -97,14 +97,14 @@ describe('HomeView media composer options', () => {
 
     // HyperFrames / Audio keep no pre-flight pills at all.
     await clickHomeRailChip('hyperframes');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
     expect(screen.queryByTestId('home-hero-footer-option-ratio')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
 
     await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
     expect(screen.queryByTestId('home-hero-footer-option-audioType')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-model')).toBeNull();
@@ -164,12 +164,12 @@ describe('HomeView media composer options', () => {
     renderHome();
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('dialog', { name: /replace current prompt/i })).toBeNull();
 
     await setHomePrompt('Make this prompt personally tuned.');
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('dialog', { name: /replace current prompt/i })).toBeNull();
   });
 
@@ -180,7 +180,7 @@ describe('HomeView media composer options', () => {
     // Audio type / model / duration / voice are no longer footer pills — the
     // agent asks for them during the run. The composer just stays empty.
     await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(promptIsEmpty()).toBe(true);
     expect(screen.queryByTestId('home-hero-footer-option-audioType')).toBeNull();
     expect(screen.queryByTestId('home-hero-footer-option-duration')).toBeNull();
@@ -193,20 +193,20 @@ describe('HomeView media composer options', () => {
     renderHome();
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('combobox', { name: 'Template' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Model' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Ratio' })).toBeNull();
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     expect(screen.queryByRole('combobox', { name: 'Duration' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Template' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Model' })).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Ratio' })).toBeNull();
 
     await clickHomeRailChip('audio');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     // No audio pills/combobox at all now — those questions moved to the agent.
     expect(screen.queryByTestId('home-hero-footer-option-audioType')).toBeNull();
     expect(screen.queryByRole('combobox', { name: 'Audio type' })).toBeNull();
@@ -252,7 +252,7 @@ describe('HomeView media composer options', () => {
     const view = render(<HomeView {...props} />);
 
     await clickHomeRailChip('image');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     await setHomePrompt('Create a campaign image.');
     await submitHome();
     await waitFor(() => {
@@ -288,7 +288,7 @@ describe('HomeView media composer options', () => {
     });
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     await chooseOption('designSystem', 'brand-alpha', 'Brand Alpha');
     setHomePrompt('Create a launch teaser.');
     await submitHome();
@@ -321,7 +321,7 @@ describe('HomeView media composer options', () => {
     renderHome({ onSubmit });
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     await setHomePrompt('Create a launch teaser.');
     await submitHome();
 
@@ -347,7 +347,7 @@ describe('HomeView media composer options', () => {
     renderHome({ onSubmit });
 
     await clickHomeRailChip('video');
-    await waitFor(() => expect(screen.getByTestId('home-hero-active-type-chip')).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId('home-hero-template-trigger').textContent).not.toContain('None'));
     await setHomePrompt('Create a launch teaser.');
     await submitHome();
 
@@ -485,11 +485,23 @@ async function openOption(name: string) {
 }
 
 async function clickHomeRailChip(id: string) {
-  const activeChip = screen.queryByTestId('home-hero-active-type-chip');
-  if (activeChip) {
-    fireEvent.click(activeChip);
+  // Wait until the target control is enabled (plugins load asynchronously, so a
+  // freshly-rendered rail/grid card is briefly disabled) before clicking.
+  const enabledClick = async (testId: string) => {
+    await waitFor(() =>
+      expect((screen.getByTestId(testId) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId(testId));
+  };
+  // No template selected → the rail card is visible; click it directly.
+  if (screen.queryByTestId(`home-hero-rail-${id}`)) {
+    await enabledClick(`home-hero-rail-${id}`);
+    return;
   }
-  fireEvent.click(await screen.findByTestId(`home-hero-rail-${id}`));
+  // A template is selected → the rail is hidden; open the Template dropdown and
+  // pick from its grid (picking closes the dropdown, so the next open is clean).
+  fireEvent.click(await screen.findByTestId('home-hero-template-trigger'));
+  await enabledClick(`home-hero-template-card-${id}`);
 }
 
 // Drive the Lexical editor and let the OnChange -> onPromptChange -> setPrompt

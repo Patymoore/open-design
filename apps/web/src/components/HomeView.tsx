@@ -70,6 +70,7 @@ import { smoothScrollToTop } from '../utils/smoothScrollToTop';
 import { missingRequiredInputs, pluginInputsAreValid } from '../utils/pluginRequiredInputs';
 import { HomeHero, type ExamplePromptInfo, type HomeHeroHandle } from './HomeHero';
 import { findChip, HOME_HERO_CHIPS, type HomeHeroChip } from './home-hero/chips';
+import type { PlaceholderScenario } from './home-hero/placeholderScenarios';
 import { consumePendingHomeChip, HOME_CHIP_INTENT_EVENT } from '../runtime/home-intent';
 import { navigate } from '../router';
 import {
@@ -270,6 +271,13 @@ export function HomeView({
   const [fallbackProjectMetadata, setFallbackProjectMetadata] =
     useState<ProjectMetadata | null>(null);
   const [active, setActive] = useState<ActivePlugin | null>(null);
+  // A placeholder-carousel scenario the user submitted on an empty composer.
+  // We seed the prompt + bind the template synchronously, then let an effect
+  // fire submit() once both have committed (submit() reads state, not args).
+  const [pendingCarouselSubmit, setPendingCarouselSubmit] = useState<{
+    text: string;
+    chipId: string | null;
+  } | null>(null);
   const [sessionMode, setSessionMode] = useState<ChatSessionMode>('design');
   const [activeSkill, setActiveSkill] = useState<SkillSummary | null>(null);
   const [selectedPluginContexts, setSelectedPluginContexts] = useState<SelectedPluginContext[]>([]);
@@ -1527,6 +1535,52 @@ export function HomeView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plugins, chipIntentTick]);
 
+  // Send pressed on an empty composer while the placeholder carousel showed a
+  // scenario. Bind that scenario's template exactly as a rail pick would and
+  // seed its text, then defer the create to submit() (which resolves the
+  // snapshot and builds the same payload the manual flow does).
+  function submitScenario(scenario: PlaceholderScenario) {
+    if (sending) return;
+    setError(null);
+    const chip = scenario.chipId ? findChip(scenario.chipId) : null;
+    const action = chip?.action ?? null;
+    const record =
+      action?.kind === 'apply-scenario'
+        ? plugins.find((plugin) => plugin.id === action.pluginId) ?? null
+        : null;
+    // When the user already picked this template (the carousel-over-a-selected-
+    // template case), its binding is live — reuse it instead of re-applying,
+    // which would reset the resolved snapshot and re-fire chip analytics.
+    const alreadyBound = Boolean(chip && active?.chipId === chip.id && !active.explicitPick);
+    if (chip && record && !alreadyBound) {
+      pickChip(chip);
+    } else if (!chip || !record) {
+      // Template unavailable (bundle missing / catalog still loading) — fall
+      // back to a free-form create from the line alone rather than dead-ending.
+      setActive(null);
+    }
+    setPrompt(scenario.text);
+    setPromptEditedByUser(true);
+    setPendingCarouselSubmit({
+      text: scenario.text,
+      chipId: chip && (record || alreadyBound) ? scenario.chipId : null,
+    });
+  }
+
+  // Fire the deferred carousel submit once the seeded prompt AND the bound
+  // chip have landed in state, so submit()'s closure reads the real values.
+  useEffect(() => {
+    const pending = pendingCarouselSubmit;
+    if (!pending || sending) return;
+    if (prompt.trim() !== pending.text.trim()) return;
+    if (pending.chipId !== null && active?.chipId !== pending.chipId) return;
+    setPendingCarouselSubmit(null);
+    void submit();
+    // submit() is a stable in-component declaration; depending on it would add
+    // churn without changing behavior (mirrors the chip-intent effect above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingCarouselSubmit, prompt, active, sending]);
+
   async function submit() {
     // The send button disables itself while sending, but the Enter-to-send
     // path lands here directly — swallow re-entry during the in-flight window.
@@ -1706,6 +1760,7 @@ export function HomeView({
         prompt={prompt}
         onPromptChange={handlePromptChange}
         onSubmit={submit}
+        onSubmitScenario={submitScenario}
         submitting={sending}
         sessionMode={sessionMode}
         onSessionModeChange={setSessionMode}

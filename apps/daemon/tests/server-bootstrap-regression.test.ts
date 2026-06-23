@@ -466,6 +466,7 @@ describe('bootstrap route regressions', () => {
         prepareDesignTokenContractRebuild: async () => ({ decision: { available: false } }) as never,
         readAvailableDesignSystem: async (id: string) => id === designSystemId ? designSystemBody : null,
         readAvailableDesignSystemPackageInfo: async () => null,
+        readAvailableDesignSystemStaticFile: async () => null,
         readDesignSystemWorkspaceTextFile: async () => null,
         readUserDesignSystemFile: async () => null,
         renderDesignSystemPreview: (id: string, body: string) =>
