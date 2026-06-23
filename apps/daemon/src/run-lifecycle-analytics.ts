@@ -35,14 +35,14 @@ export function resolveRunProjectKindForAnalytics({
 }: {
   hintProjectKind?: unknown;
   projectMetadata?: ProjectMetadataForAnalytics | null;
-}): string {
+}): string | null {
   if (typeof hintProjectKind === 'string') return hintProjectKind;
   if (projectMetadata?.importedFrom === 'design-system') return 'design_system';
   const kind = typeof projectMetadata?.kind === 'string' ? projectMetadata.kind : null;
   const videoModel = typeof projectMetadata?.videoModel === 'string'
     ? projectMetadata.videoModel
     : null;
-  return projectKindToTracking(kind, videoModel) ?? 'unknown';
+  return projectKindToTracking(kind, videoModel);
 }
 
 // Scans run.events newest→oldest to extract usage token counts and the

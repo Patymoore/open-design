@@ -62,6 +62,22 @@ describe('run lifecycle analytics', () => {
       }),
     ).toBe('video');
   });
+
+  it('returns null when project metadata is missing or unrecognized', () => {
+    expect(
+      resolveRunProjectKindForAnalytics({
+        hintProjectKind: null,
+        projectMetadata: null,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveRunProjectKindForAnalytics({
+        hintProjectKind: null,
+        projectMetadata: { kind: 'future-kind' },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe('scanRunEventsForFinishedProps', () => {
