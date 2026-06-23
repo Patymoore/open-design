@@ -14,7 +14,10 @@
  *
  * @see apps/packaged/src/startup-telemetry.ts
  */
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   STARTUP_FAILURE_EVENT,
@@ -22,6 +25,7 @@ import {
   classifyStartupFailure,
   parseDaemonLogTail,
   reportStartupFailure,
+  resolveStartupDistinctId,
   scrubUserPaths,
 } from '../src/startup-telemetry.js';
 
@@ -65,6 +69,15 @@ describe('classifyStartupFailure', () => {
     expect(c.failureKind).toBe('web-start');
   });
 
+  it('classifies a Windows (backslash) web-start log path as web-start', () => {
+    // startPackagedSidecars uses path.join, so on Windows the watched log path
+    // is backslash-separated. A naive "/web/" check would misreport this as
+    // daemon-start — the one platform split this field exists for.
+    const winWebMessage =
+      'daemon exited before reporting status (code=1, signal=none); see C:\\Users\\Alice\\AppData\\Roaming\\Open Design\\namespaces\\release-stable\\logs\\web\\latest.log for details';
+    expect(classifyStartupFailure(new Error(winWebMessage), false).failureKind).toBe('web-start');
+  });
+
   it('marks path-access failures without inventing a log path', () => {
     const c = classifyStartupFailure(new Error('whatever'), true);
     expect(c.failureKind).toBe('path-access');
@@ -89,6 +102,29 @@ describe('scrubUserPaths', () => {
     expect(scrubUserPaths('C:\\Users\\Alice\\AppData\\Roaming')).toBe(
       'C:\\Users\\<redacted>\\AppData\\Roaming',
     );
+  });
+});
+
+describe('resolveStartupDistinctId', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    delete process.env.OD_INSTALLATION_DIR;
+  });
+
+  it('reads installationId from an explicit installationRoot (not the child-only env)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'od-install-'));
+    dirs.push(root);
+    writeFileSync(join(root, 'installation.json'), JSON.stringify({ installationId: 'inst-abc' }));
+    // env is intentionally unset — proving the parent process resolves via the
+    // explicit arg, the bug PerishCode flagged.
+    expect(resolveStartupDistinctId('release-stable', root)).toBe('inst-abc');
+  });
+
+  it('falls back to a synthetic per-namespace id when no installation file exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'od-install-'));
+    dirs.push(root);
+    expect(resolveStartupDistinctId('release-stable', root)).toBe('packaged-release-stable');
   });
 });
 

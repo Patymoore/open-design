@@ -54,6 +54,7 @@ let startupTelemetryContext:
       appVersion: string | null;
       namespace: string;
       source: string;
+      installationRoot: string;
     }
   | null = null;
 
@@ -125,6 +126,9 @@ async function main(): Promise<void> {
     appVersion: activeConfig.appVersion,
     namespace,
     source: SIDECAR_SOURCES.PACKAGED,
+    // Pass installationRoot explicitly: OD_INSTALLATION_DIR is only set in the
+    // daemon child env, not this parent process (see startup-telemetry.ts).
+    installationRoot: paths.installationRoot,
   };
 
   await ensurePackagedNamespacePaths(paths);
@@ -273,7 +277,10 @@ void main().catch(async (error: unknown) => {
       isPathAccess,
       posthogKey: startupTelemetryContext.posthogKey,
       posthogHost: startupTelemetryContext.posthogHost,
-      distinctId: resolveStartupDistinctId(startupTelemetryContext.namespace),
+      distinctId: resolveStartupDistinctId(
+        startupTelemetryContext.namespace,
+        startupTelemetryContext.installationRoot,
+      ),
       appVersion: startupTelemetryContext.appVersion,
       namespace: startupTelemetryContext.namespace,
       source: startupTelemetryContext.source,

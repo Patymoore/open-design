@@ -72,7 +72,12 @@ export function classifyStartupFailure(
   const parsedCode = rawCode === "null" ? null : Number.parseInt(rawCode, 10);
   const exitCode = parsedCode == null || Number.isNaN(parsedCode) ? null : parsedCode;
   const signal = rawSignal === "none" ? null : rawSignal;
-  const failureKind: StartupFailureKind = logPath?.includes("/web/")
+  // `startPackagedSidecars` builds the watched log path with path.join, which is
+  // backslash-separated on Windows (`...\logs\web\latest.log`). Normalize before
+  // the segment check so a web-sidecar failure isn't misreported as daemon-start
+  // on Windows — exactly the platform split this field exists to capture.
+  const normalizedLogPath = logPath?.replace(/\\/g, "/") ?? null;
+  const failureKind: StartupFailureKind = normalizedLogPath?.includes("/web/")
     ? "web-start"
     : "daemon-start";
   return { failureKind, exitCode, signal, logPath };
@@ -114,9 +119,17 @@ function osName(platform: NodeJS.Platform = process.platform): string {
 // installationId (survives a namespace data reset); falls back to a synthetic
 // per-namespace id. Person identity is not critical for crash-distribution
 // analysis — we segment on os/version/channel, not per-user funnels.
-export function resolveStartupDistinctId(namespace: string): string {
+//
+// `installationRoot` must be passed explicitly from `paths.installationRoot`:
+// OD_INSTALLATION_DIR is only set in the daemon CHILD env, never in the packaged
+// main process, so relying on the env here would always fall through to the
+// synthetic id. The env is kept as a secondary fallback only.
+export function resolveStartupDistinctId(
+  namespace: string,
+  installationRoot?: string | null,
+): string {
+  const dir = installationRoot?.trim() || process.env.OD_INSTALLATION_DIR?.trim();
   try {
-    const dir = process.env.OD_INSTALLATION_DIR?.trim();
     if (dir) {
       const raw = readFileSync(join(dir, "installation.json"), "utf8");
       const parsed = JSON.parse(raw) as { installationId?: unknown };
