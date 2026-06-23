@@ -79,10 +79,15 @@ jobs:
         run: |
           OLD=data/plugin-previews/manifest.json
           NEW=.tmp/plugin-previews/manifest.json
-          if [ "$(node scripts/plugin-previews-diff.mjs "$OLD" "$NEW")" != "changed" ]; then
-            echo "previews unchanged (only generatedAt moved) — nothing to review"
-            exit 0
-          fi
+          # Capture on its own line so `set -e` surfaces a helper error (the diff
+          # script exits 2 on bad args / unreadable manifest) instead of command
+          # substitution swallowing it into the test and silently skipping the PR.
+          diff_result="$(node scripts/plugin-previews-diff.mjs "$OLD" "$NEW")"
+          case "$diff_result" in
+            changed) ;;
+            unchanged) echo "previews unchanged (only generatedAt moved) — nothing to review"; exit 0 ;;
+            *) echo "unexpected diff result: '$diff_result'" >&2; exit 1 ;;
+          esac
           cp "$NEW" "$OLD"
           BRANCH="chore/plugin-previews"
           git config user.name "open-design-bot"
