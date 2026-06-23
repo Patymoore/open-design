@@ -127,24 +127,42 @@ interface CaptureMetadata {
   handled?: boolean;
 }
 
-// Network / lifecycle fetch failures are environmental noise, not bugs:
-// the daemon restarting, the app booting before the daemon is ready, a
-// navigation / unmount aborting an in-flight request, or an offline blip.
-// In the packaged app (od://app) these surface as uncaught promise
-// rejections in enormous volume — a single polling loop on a flaky
-// connection can emit thousands — and bury every real exception. We drop
-// them at the single capture chokepoint so neither the window listeners
-// nor explicit reporters forward them.
-const IGNORED_EXCEPTION_VALUES = new Set([
+// Generic "the fetch could not complete" wordings across engines. As an
+// uncaught exception these carry no URL and no status, so they're
+// uninformative on their own — but we only suppress them in the packaged
+// runtime (see `isIgnorableNoise`), never the web app.
+const FETCH_FAILURE_MESSAGES = new Set([
   'Failed to fetch', // Chromium (Electron, Chrome)
   'Load failed', // WebKit (Safari)
   'NetworkError when attempting to fetch resource.', // Firefox
 ]);
 
-function isIgnorableNoise(type: unknown, value: unknown): boolean {
-  if (type === 'AbortError') return true;
-  if (typeof value === 'string' && IGNORED_EXCEPTION_VALUES.has(value)) return true;
-  return false;
+// True when the exception originated in packaged desktop app code, which is
+// served from the `od://` scheme. We key off the stack origin rather than
+// `window.location` so the decision is tied to where the failing call
+// actually ran, and so it's deterministic to test.
+function originatesInPackagedApp(list: Array<Record<string, unknown>>): boolean {
+  const stacktrace = list[0]?.stacktrace as
+    | { frames?: Array<Record<string, unknown>> }
+    | undefined;
+  const frames = stacktrace?.frames ?? [];
+  return frames.some((frame) => {
+    const path = typeof frame.abs_path === 'string' ? frame.abs_path : frame.filename;
+    return typeof path === 'string' && path.startsWith('od://');
+  });
+}
+
+// Fetch failures are environmental noise ONLY in the packaged app, where the
+// renderer constantly polls the local daemon and a momentary gap (daemon
+// restart, boot race, navigation/unmount abort, offline blip) makes
+// `Failed to fetch` ~90% of all captured exceptions — pure churn that buries
+// real bugs. We scope the drop to that runtime deliberately: in a normal
+// web context the very same TypeError can be the only signal of a broken
+// `/api/*` deployment or a CORS/TLS regression, so it must stay captured.
+function isIgnorableNoise(list: Array<Record<string, unknown>>): boolean {
+  const value = list[0]?.value;
+  if (typeof value !== 'string' || !FETCH_FAILURE_MESSAGES.has(value)) return false;
+  return originatesInPackagedApp(list);
 }
 
 function captureException(
@@ -153,7 +171,7 @@ function captureException(
   metadata: CaptureMetadata = {},
 ): void {
   const list = buildExceptionList(error, fallbackMessage, metadata);
-  if (isIgnorableNoise(list[0]?.type, list[0]?.value)) return;
+  if (isIgnorableNoise(list)) return;
   const scrubbed = scrubExceptionList(list);
   const properties: Record<string, unknown> = {
     $exception_list: scrubbed,

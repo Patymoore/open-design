@@ -294,42 +294,57 @@ describe('error-tracking', () => {
     }
   });
 
-  // Regression: `TypeError: Failed to fetch` from the daemon connection
-  // dropping (restart, boot race, navigation abort, offline) was ~90% of all
-  // captured exceptions — environmental noise, not a bug. Drop it, and the
-  // sibling network-error wordings, at the capture chokepoint.
-  it('drops environmental fetch/abort noise instead of reporting it as an exception', () => {
+  // Regression: `TypeError: Failed to fetch` from the packaged renderer's
+  // daemon connection dropping (restart, boot race, navigation abort,
+  // offline) was ~90% of all captured exceptions — environmental noise.
+  // Drop it, but ONLY when it originates in packaged app code (od:// scheme).
+  it('drops packaged-app fetch noise but keeps the same error from the web app', () => {
     setExceptionTrackingContext({
       apiKey: 'phc_test',
       host: 'https://us.i.posthog.com',
       distinctId: 'user-noise',
     });
 
-    reportHandledException(new TypeError('Failed to fetch')); // Chromium
-    reportHandledException(new TypeError('Load failed')); // WebKit
-    const aborted = new Error('the user aborted a request.');
-    aborted.name = 'AbortError';
-    reportHandledException(aborted);
-
-    // The dominant production source is the uncaught-rejection path.
-    installErrorHandlers();
-    const reason = new TypeError('Failed to fetch');
-    const rejection = new Event('unhandledrejection') as Event & {
-      reason?: unknown;
-      promise?: Promise<unknown>;
-    };
-    rejection.reason = reason;
-    rejection.promise = Promise.reject(reason);
-    rejection.promise.catch(() => undefined);
-    window.dispatchEvent(rejection);
-
+    // Packaged: the failing fetch ran in od:// app code → dropped.
+    const packaged = new TypeError('Failed to fetch');
+    packaged.stack = [
+      'TypeError: Failed to fetch',
+      '    at window.fetch (od://app/_next/static/chunks/abc.js:1:100)',
+      '    at poll (od://app/_next/static/chunks/abc.js:1:200)',
+    ].join('\n');
+    reportHandledException(packaged);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    // A genuine error still flows through untouched.
-    reportHandledException(new Error('real-bug'));
+    // Web app: SAME message, but the fetch failed in non-packaged code. In a
+    // browser this can be the only signal of a broken /api/* deploy or a
+    // CORS/TLS regression, so it must stay captured.
+    const web = new TypeError('Failed to fetch');
+    web.stack = [
+      'TypeError: Failed to fetch',
+      '    at loadProjects (https://app.example.com/_next/static/chunks/x.js:1:50)',
+    ].join('\n');
+    reportHandledException(web);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect((lastFetchedBody().properties as Record<string, unknown>).$exception_message).toBe(
-      'real-bug',
+      'Failed to fetch',
+    );
+  });
+
+  // AbortError is NOT blanket-dropped: it isn't necessarily fetch-lifecycle
+  // cancellation and was never a measured noise source. It flows through.
+  it('does not drop AbortError', () => {
+    setExceptionTrackingContext({
+      apiKey: 'phc_test',
+      host: 'https://us.i.posthog.com',
+      distinctId: 'user-abort',
+    });
+    const aborted = new Error('the operation was aborted.');
+    aborted.name = 'AbortError';
+    aborted.stack = 'AbortError: the operation was aborted.\n    at x (od://app/_next/static/chunks/y.js:1:1)';
+    reportHandledException(aborted);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((lastFetchedBody().properties as Record<string, unknown>).$exception_type).toBe(
+      'AbortError',
     );
   });
 });
