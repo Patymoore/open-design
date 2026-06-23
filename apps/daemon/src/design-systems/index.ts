@@ -455,7 +455,7 @@ export async function readDesignSystemAssets(
     readManifestFileOptional(brandRoot, manifest?.componentsManifest ?? 'components.manifest.json'),
   ]);
   const effectiveTokensCss =
-    tokensCss ?? (await deriveLegacyUserTokensCss(brandRoot, id, manifest !== null));
+    tokensCss ?? (await deriveLegacyUserTokensCss(root, dirId, id, manifest !== null));
   return withComponentsManifest(id, {
     usageMd,
     tokensCss: effectiveTokensCss,
@@ -2751,12 +2751,19 @@ function paletteToSourceTokens(palette: GeneratedPalette): SourceDesignToken[] {
 // package's DESIGN.md palette. Scoped to user packages with no manifest;
 // imported/manifest packages and built-in DESIGN.md-only brands are untouched.
 async function deriveLegacyUserTokensCss(
-  brandRoot: string,
+  root: string,
+  dirId: string,
   id: string,
   hasManifest: boolean,
 ): Promise<string | undefined> {
   if (hasManifest || !id.startsWith('user:')) return undefined;
-  const body = await readFileOptional(path.join(brandRoot, 'DESIGN.md'));
+  // Agent-managed packages intentionally skip writeGeneratedDesignSystemFiles:
+  // they stay DESIGN.md-only until the agent writes review artifacts itself.
+  // Synthesizing a token contract for them would mask that missing step and
+  // change the prompt assets for agent-managed reviews, so leave them as-is.
+  const metadata = await readUserMetadata(root, dirId);
+  if (metadata.artifactMode === 'agent-managed') return undefined;
+  const body = await readFileOptional(path.join(root, dirId, 'DESIGN.md'));
   if (!body) return undefined;
   const palette = normalizeSwatches(body);
   return buildDesignTokenContract({ sourceTokens: paletteToSourceTokens(palette) }).tokensCss;

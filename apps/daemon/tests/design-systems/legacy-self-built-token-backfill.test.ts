@@ -50,4 +50,21 @@ describe('legacy self-built design system token backfill', () => {
     expect(assets.tokensCss).toContain('--bg');
     expect(assets.tokensCss).toContain('--accent');
   });
+
+  // Regression: the backfill must not fire for agent-managed packages, which
+  // intentionally skip generated artifacts and stay DESIGN.md-only until the
+  // agent writes them. Synthesizing tokens for them would mask that missing
+  // step and change the prompt assets for agent-managed reviews.
+  it('does not synthesize tokens for agent-managed user packages', async () => {
+    const created = await createUserDesignSystem(root, {
+      title: 'Agent Managed',
+      summary: 'The agent writes review artifacts itself.',
+      category: 'Custom',
+      artifactMode: 'agent-managed',
+    });
+
+    const assets = await readDesignSystemAssets(root, created.id);
+
+    expect(assets.tokensCss).toBeUndefined();
+  });
 });
