@@ -21,6 +21,10 @@ export interface BuildDeckRenderInputOptions {
   index?: number;
   // Directory the desktop renderer writes the rendered images into (returned as
   // file paths) instead of base64 data URLs — keeps large images off the IPC.
+  // Project metadata. Imported-folder projects keep their workspace under
+  // `metadata.baseDir`; without it readProjectFile falls back to
+  // `<data>/projects/:id` and 404s for those projects (see resolveProjectDir).
+  metadata?: Record<string, unknown> | null;
   outputDir?: string;
   pageImageFormat?: 'png' | 'jpeg';
   projectId: string;
@@ -44,7 +48,12 @@ export interface DeckRenderRequest {
 export async function buildDeckRenderInput(
   options: BuildDeckRenderInputOptions,
 ): Promise<DeckRenderRequest> {
-  const file = await readProjectFile(options.projectsRoot, options.projectId, options.fileName);
+  const file = await readProjectFile(
+    options.projectsRoot,
+    options.projectId,
+    options.fileName,
+    options.metadata ?? undefined,
+  );
   const title = displayTitle(options.title, options.fileName);
   return {
     defaultFilename: `${safeFilename(title, 'deck')}`,

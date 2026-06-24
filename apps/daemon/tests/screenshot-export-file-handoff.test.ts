@@ -1,6 +1,7 @@
 import type http from 'node:http';
 import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -135,5 +136,34 @@ describe('screenshot export desktop renderer file handoff', () => {
     } finally {
       await new Promise<void>((resolve) => srv.server.close(() => resolve()));
     }
+  });
+
+  it('resolves an imported-folder project file via metadata.baseDir (not <data>/projects/:id)', async () => {
+    // Imported-folder projects keep their workspace OUTSIDE <data>/projects/:id
+    // (at metadata.baseDir). The screenshot export must thread that metadata into
+    // readProjectFile, or it 404s on the default dir even though the file exists.
+    const folder = path.join(realpathSync(os.tmpdir()), `od-import-export-${Date.now()}`);
+    await mkdir(folder, { recursive: true });
+    await writeFile(
+      path.join(folder, 'index.html'),
+      '<html><body><section class="slide">Imported</section></body></html>',
+    );
+    const importResp = await fetch(`${baseUrl}/api/import/folder`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ baseDir: folder }),
+    });
+    expect(importResp.status).toBe(200);
+    const { project } = (await importResp.json()) as { project: { id: string } };
+
+    const res = await fetch(`${baseUrl}/api/projects/${project.id}/export/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: 'index.html' }),
+    });
+    // 200 (image streamed back) proves the file was resolved via baseDir — a
+    // regression would surface as 404 FILE_NOT_FOUND.
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('image/png');
   });
 });

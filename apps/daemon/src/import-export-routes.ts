@@ -450,6 +450,10 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
       const renderOptions: BuildDeckRenderInputOptions = {
         daemonUrl: daemonUrlRef.current,
         fileName,
+        // Imported-folder projects keep their workspace under metadata.baseDir;
+        // thread it through so readProjectFile resolves the real file instead of
+        // 404ing on <data>/projects/:id.
+        metadata: getProject(db, projectId)?.metadata ?? null,
         outputDir: renderOutputDir,
         projectId,
         projectsRoot: PROJECTS_DIR,
@@ -732,6 +736,7 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
         daemonUrl: daemonUrlRef.current,
         deck: deck === true,
         fileName,
+        metadata: getProject(db, req.params.id)?.metadata ?? null,
         projectId: req.params.id,
         projectsRoot: PROJECTS_DIR,
         title: typeof title === 'string' ? title : undefined,
