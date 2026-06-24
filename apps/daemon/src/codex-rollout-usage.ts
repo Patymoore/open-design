@@ -11,6 +11,7 @@
 // This module is the pure extractor; locating the rollout file for a run lives
 // at the call site (it needs CODEX_HOME + the captured session id).
 
+import os from 'node:os';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -151,9 +152,13 @@ export async function readCodexRolloutFirstCall(opts: {
   codexHome: string | null | undefined;
   sessionId: string | null | undefined;
 }): Promise<CodexFirstCallUsage | null> {
-  const codexHome = opts.codexHome?.trim();
+  // codex resolves its home as `$CODEX_HOME || ~/.codex`. The daemon only sets
+  // CODEX_HOME when sandbox mode relocates it; with sandbox off the resolver
+  // returns empty and codex writes under ~/.codex, so mirror that default here
+  // rather than giving up (which silently dropped every non-sandboxed run).
+  const codexHome = opts.codexHome?.trim() || path.join(os.homedir(), '.codex');
   const sessionId = opts.sessionId?.trim();
-  if (!codexHome || !sessionId) return null;
+  if (!sessionId) return null;
   try {
     const rolloutPath = await findCodexRolloutPath(codexHome, sessionId);
     if (!rolloutPath) return null;

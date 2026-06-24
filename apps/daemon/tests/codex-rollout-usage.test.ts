@@ -1,8 +1,12 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
   codexSessionIdFromRunEvents,
   extractCodexLastTurnFirstCallUsage,
+  readCodexRolloutFirstCall,
 } from '../src/codex-rollout-usage.js';
 
 // Shapes mirror real codex 0.133.0 rollout JSONL (`~/.codex/sessions/**/rollout-*.jsonl`):
@@ -115,5 +119,51 @@ describe('codexSessionIdFromRunEvents', () => {
     expect(codexSessionIdFromRunEvents(null)).toBeNull();
     expect(codexSessionIdFromRunEvents('nope')).toBeNull();
     expect(codexSessionIdFromRunEvents([{ event: 'agent' }, 42])).toBeNull();
+  });
+});
+
+describe('readCodexRolloutFirstCall', () => {
+  // Plants a rollout under <home>/sessions/<y>/<m>/<d>/ exactly as codex names
+  // them, so the locate-and-read layer is covered (not just the pure extractor).
+  function plantRollout(sessionId: string, lines: string[]): string {
+    const home = mkdtempSync(path.join(tmpdir(), 'codex-home-'));
+    const dayDir = path.join(home, 'sessions', '2026', '06', '24');
+    mkdirSync(dayDir, { recursive: true });
+    writeFileSync(
+      path.join(dayDir, `rollout-2026-06-24T12-00-00-${sessionId}.jsonl`),
+      lines.join('\n'),
+    );
+    return home;
+  }
+  const rollout = (sid: string) => [
+    JSON.stringify({ type: 'event_msg', payload: { type: 'task_started' } }),
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: { last_token_usage: { input_tokens: 13342, cached_input_tokens: 12672 } },
+      },
+    }),
+  ];
+
+  it('locates the rollout by session id under CODEX_HOME and extracts first-call', async () => {
+    const sid = '019eef4f-7409-7c82-bebe-30504eed3959';
+    const home = plantRollout(sid, rollout(sid));
+    const result = await readCodexRolloutFirstCall({ codexHome: home, sessionId: sid });
+    expect(result?.first_call_input_tokens).toBe(13342);
+    expect(result?.first_call_cache_hit_ratio).toBeCloseTo(12672 / 13342);
+  });
+
+  it('returns null (never throws) when the session id has no matching rollout', async () => {
+    const home = plantRollout('some-other-session', rollout('some-other-session'));
+    await expect(
+      readCodexRolloutFirstCall({ codexHome: home, sessionId: 'missing-session' }),
+    ).resolves.toBeNull();
+  });
+
+  it('returns null when no session id is given', async () => {
+    await expect(
+      readCodexRolloutFirstCall({ codexHome: '/nonexistent', sessionId: null }),
+    ).resolves.toBeNull();
   });
 });
