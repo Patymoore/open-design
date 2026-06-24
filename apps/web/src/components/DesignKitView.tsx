@@ -22,6 +22,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Button, Textarea } from '@open-design/components';
 import { useT } from '../i18n';
 import { openExternalUrl, projectRawUrl } from '../providers/registry';
@@ -1054,128 +1055,139 @@ export function DesignKitView({
           ) : null}
         </>
 
-      {lightbox ? (
-        <div
-          className={styles.lightbox}
-          role="dialog"
-          aria-modal="true"
-          aria-label={lightbox.caption}
-          onClick={() => setLightbox(null)}
-        >
-          <button
-            type="button"
-            className={styles.lightboxClose}
-            onClick={() => setLightbox(null)}
-            aria-label={t('newBrand.close')}
-          >
-            <CloseGlyph />
-          </button>
-          <img
-            className={styles.lightboxImg}
-            src={lightbox.src}
-            alt={lightbox.caption}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      ) : null}
+      {/* Overlays portal to <body> so their z-index resolves in the ROOT
+          stacking context. Rendered inline, the DesignKitView host pane traps
+          them in a lower stacking context and the chat composer (a root-level
+          position:fixed layer) paints over them despite their higher z-index. */}
+      {typeof document !== 'undefined'
+        ? createPortal(
+            <>
+              {lightbox ? (
+                <div
+                  className={styles.lightbox}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={lightbox.caption}
+                  onClick={() => setLightbox(null)}
+                >
+                  <button
+                    type="button"
+                    className={styles.lightboxClose}
+                    onClick={() => setLightbox(null)}
+                    aria-label={t('newBrand.close')}
+                  >
+                    <CloseGlyph />
+                  </button>
+                  <img
+                    className={styles.lightboxImg}
+                    src={lightbox.src}
+                    alt={lightbox.caption}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+              ) : null}
 
-      {assetPreview ? (
-        <div
-          className={styles.assetModal}
-          role="dialog"
-          aria-modal="true"
-          aria-label={assetPreview.label}
-          onClick={() => setAssetPreview(null)}
-        >
-          <div className={styles.assetModalPanel} onClick={(event) => event.stopPropagation()}>
-            <div className={styles.assetModalHeader}>
-              <h3>{assetPreview.label}</h3>
-              <button
-                type="button"
-                className={styles.assetModalClose}
-                onClick={() => setAssetPreview(null)}
-                aria-label={t('newBrand.close')}
-              >
-                <CloseGlyph />
-              </button>
-            </div>
-            <iframe
-              className={styles.assetModalFrame}
-              src={assetPreview.url}
-              title={assetPreview.label}
-              sandbox={DESIGN_KIT_PREVIEW_SANDBOX}
-            />
-          </div>
-        </div>
-      ) : null}
+              {assetPreview ? (
+                <div
+                  className={styles.assetModal}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={assetPreview.label}
+                  onClick={() => setAssetPreview(null)}
+                >
+                  <div className={styles.assetModalPanel} onClick={(event) => event.stopPropagation()}>
+                    <div className={styles.assetModalHeader}>
+                      <h3>{assetPreview.label}</h3>
+                      <button
+                        type="button"
+                        className={styles.assetModalClose}
+                        onClick={() => setAssetPreview(null)}
+                        aria-label={t('newBrand.close')}
+                      >
+                        <CloseGlyph />
+                      </button>
+                    </div>
+                    <iframe
+                      className={styles.assetModalFrame}
+                      src={assetPreview.url}
+                      title={assetPreview.label}
+                      sandbox={DESIGN_KIT_PREVIEW_SANDBOX}
+                    />
+                  </div>
+                </div>
+              ) : null}
 
-      {coverPreviewOpen && kit.showcaseHtml ? (
-        <div
-          className={styles.assetModal}
-          role="dialog"
-          aria-modal="true"
-          aria-label={`${kit.name} preview`}
-          onClick={() => setCoverPreviewOpen(false)}
-        >
-          <div className={styles.assetModalPanel} onClick={(event) => event.stopPropagation()}>
-            <div className={styles.assetModalHeader}>
-              <h3>{kit.name}</h3>
-              <button
-                type="button"
-                className={styles.assetModalClose}
-                onClick={() => setCoverPreviewOpen(false)}
-                aria-label={t('newBrand.close')}
-              >
-                <CloseGlyph />
-              </button>
-            </div>
-            <iframe
-              className={styles.assetModalFrame}
-              title={`${kit.name} preview`}
-              sandbox={DESIGN_KIT_PREVIEW_SANDBOX}
-              srcDoc={buildSrcdoc(kit.showcaseHtml)}
-            />
-          </div>
-        </div>
-      ) : null}
+              {coverPreviewOpen && kit.showcaseHtml ? (
+                <div
+                  className={styles.assetModal}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`${kit.name} preview`}
+                  onClick={() => setCoverPreviewOpen(false)}
+                >
+                  <div className={styles.assetModalPanel} onClick={(event) => event.stopPropagation()}>
+                    <div className={styles.assetModalHeader}>
+                      <h3>{kit.name}</h3>
+                      <button
+                        type="button"
+                        className={styles.assetModalClose}
+                        onClick={() => setCoverPreviewOpen(false)}
+                        aria-label={t('newBrand.close')}
+                      >
+                        <CloseGlyph />
+                      </button>
+                    </div>
+                    <iframe
+                      className={styles.assetModalFrame}
+                      title={`${kit.name} preview`}
+                      sandbox={DESIGN_KIT_PREVIEW_SANDBOX}
+                      srcDoc={buildSrcdoc(kit.showcaseHtml)}
+                    />
+                  </div>
+                </div>
+              ) : null}
 
-      {designMdOpen && designMd ? (
-        <div
-          className={styles.assetModal}
-          role="dialog"
-          aria-modal="true"
-          aria-label="DESIGN.md"
-          onClick={() => setDesignMdOpen(false)}
-        >
-          <div className={`${styles.assetModalPanel} ${styles.designMdModalPanel}`} onClick={(event) => event.stopPropagation()}>
-            <div className={styles.assetModalHeader}>
-              <h3>DESIGN.md</h3>
-              <button
-                type="button"
-                className={styles.assetModalClose}
-                onClick={() => setDesignMdOpen(false)}
-                aria-label={t('newBrand.close')}
-              >
-                <CloseGlyph />
-              </button>
-            </div>
-            <Textarea
-              className={styles.designMdTextarea}
-              value={designMdDraft}
-              onChange={(event) => setDesignMdDraft(event.target.value)}
-              rows={20}
-              spellCheck={false}
-              aria-label="DESIGN.md"
-            />
-            <div className={styles.designMdModalBar}>
-              <span>{t('ds.editingDesignMdHint')}</span>
-              <Button variant="primary" disabled={Boolean(designMd.saving)} onClick={() => void saveDesignMdDraft()}>
-                {designMd.saving ? t('ds.saving') : t('ds.saveDesignMd')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+              {designMdOpen && designMd ? (
+                <div
+                  className={styles.assetModal}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="DESIGN.md"
+                  onClick={() => setDesignMdOpen(false)}
+                >
+                  <div className={`${styles.assetModalPanel} ${styles.designMdModalPanel}`} onClick={(event) => event.stopPropagation()}>
+                    <div className={styles.assetModalHeader}>
+                      <h3>DESIGN.md</h3>
+                      <button
+                        type="button"
+                        className={styles.assetModalClose}
+                        onClick={() => setDesignMdOpen(false)}
+                        aria-label={t('newBrand.close')}
+                      >
+                        <CloseGlyph />
+                      </button>
+                    </div>
+                    <Textarea
+                      className={styles.designMdTextarea}
+                      value={designMdDraft}
+                      onChange={(event) => setDesignMdDraft(event.target.value)}
+                      rows={20}
+                      spellCheck={false}
+                      aria-label="DESIGN.md"
+                    />
+                    <div className={styles.designMdModalBar}>
+                      <span>{t('ds.editingDesignMdHint')}</span>
+                      <Button variant="primary" disabled={Boolean(designMd.saving)} onClick={() => void saveDesignMdDraft()}>
+                        {designMd.saving ? t('ds.saving') : t('ds.saveDesignMd')}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

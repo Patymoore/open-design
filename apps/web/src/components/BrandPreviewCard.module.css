@@ -933,10 +933,13 @@
 .lightbox {
   position: fixed;
   inset: 0;
-  /* Must clear the chat composer, which shares this root stacking context and
-     rises to z-index 1500 with its mode-toggle popover (1700 for the home-hero
-     composer); preview modals (.ds-modal-backdrop) sit at 1700, so 1800 keeps
-     this overlay above every composer/popover state in all DesignKitView hosts. */
+  /* Must clear the chat composer, which rises to z-index 1500 with its
+     mode-toggle popover (1700 for the home-hero composer); preview modals
+     (.ds-modal-backdrop) sit at 1700, so 1800 keeps this overlay above every
+     composer/popover state. This z-index only resolves correctly because
+     DesignKitView portals these overlays to <body> — rendered inline, the host
+     pane traps them in a lower stacking context and the composer paints over
+     them regardless of z-index. Keep the portal. */
   z-index: 1800;
   display: flex;
   align-items: center;
