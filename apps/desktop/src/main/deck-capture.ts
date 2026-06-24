@@ -467,10 +467,14 @@ async function capturePage(
           mode: "page",
         };
       }
-      // Otherwise stitch by scrolling (too tall for one texture, or blank below
-      // the fold). Refuse rather than silently truncate a page taller than the
-      // single-image RAM budget — point the user at PDF, which paginates.
+      // Too tall for one image (RAM/texture limited). The PDF path (`jpeg`)
+      // paginates into a multi-page raster PDF so long landing pages still
+      // export; the single-image `/export/image` path refuses rather than
+      // silently truncate (it has nowhere to paginate to).
       if (outHpx > ramMaxOutH) {
+        if (jpeg) {
+          return await paginateTallPage(window, dbg, docW, docH, dpr, maxTexture, ramMaxOutH, jpeg, outputDir);
+        }
         return {
           ok: false,
           error: `page is too tall to export as one image (~${docH}px) — export as PDF instead`,
@@ -504,6 +508,62 @@ async function capturePage(
     };
   }
   return await scrollSegmentStitch(window, totalLogical, jpeg, outputDir);
+}
+
+// Renders a non-deck page taller than a single image into a MULTI-PAGE raster
+// PDF: the document is split into stacked chunks (each as tall as the GPU
+// texture / RAM budget allows) and every chunk is emitted as its own image, so
+// the daemon assembles one PDF page per chunk. Used only for the PDF path; the
+// single-image `/export/image` path keeps its refusal. Uses captureBeyondViewport
+// per chunk (the page rendered fully — it's only too tall for one texture), which
+// does not duplicate fixed elements (already neutralized in preparePageForCapture).
+async function paginateTallPage(
+  window: BrowserWindow,
+  dbg: Electron.Debugger,
+  docW: number,
+  docH: number,
+  dpr: number,
+  maxTexture: number,
+  ramMaxOutH: number,
+  jpeg: boolean,
+  outputDir: string | undefined,
+): Promise<DesktopRenderSlidesResult> {
+  // Largest per-page chunk (device px) that fits BOTH the GPU texture limit and
+  // the RAM byte budget.
+  const maxChunkDevH = Math.min(maxTexture, ramMaxOutH);
+  const chunks = tallPageChunkHeights(docH, maxChunkDevH, dpr);
+  const images: Array<{ buffer: Buffer; jpeg: boolean }> = [];
+  let offset = 0;
+  for (const chunkH of chunks) {
+    const shot = (await dbg.sendCommand("Page.captureScreenshot", {
+      captureBeyondViewport: true,
+      clip: { x: 0, y: offset, width: docW, height: chunkH, scale: 1 },
+      ...(jpeg ? { format: "jpeg", quality: 82 } : { format: "png" }),
+    })) as { data: string };
+    images.push({ buffer: Buffer.from(shot.data, "base64"), jpeg });
+    offset += chunkH;
+  }
+  return {
+    ok: true,
+    ...(await emitImages(images, outputDir)),
+    width: docW * dpr,
+    height: (chunks[0] ?? docH) * dpr,
+    mode: "page",
+  };
+}
+
+// Splits a document of logical height `docLogicalH` into per-page chunk heights
+// (logical px), each capped to the largest chunk that fits the device texture /
+// RAM budget (`maxChunkDevH`). Exported for tests. The last chunk is the
+// remainder; total always sums back to `docLogicalH`.
+export function tallPageChunkHeights(docLogicalH: number, maxChunkDevH: number, dpr: number): number[] {
+  const pageLogicalH = Math.max(1, Math.floor(Math.max(1, maxChunkDevH) / Math.max(1, dpr)));
+  const total = Math.max(1, Math.ceil(docLogicalH));
+  const chunks: number[] = [];
+  for (let offset = 0; offset < total; offset += pageLogicalH) {
+    chunks.push(Math.min(pageLogicalH, total - offset));
+  }
+  return chunks;
 }
 
 // Freezes animations/transitions and scroll-prewarms the page so reveal-on-

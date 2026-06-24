@@ -5,7 +5,27 @@ import {
   scrollStitchGeometry,
   scrollStitchRowOffset,
   shouldCaptureAsDeck,
+  tallPageChunkHeights,
 } from '../../src/main/deck-capture.js';
+
+// A non-deck page taller than one image is paginated into a multi-page raster
+// PDF; tallPageChunkHeights computes the per-page chunk heights (logical px).
+describe('tallPageChunkHeights', () => {
+  test('splits a tall page into texture/RAM-bounded chunks, remainder last', () => {
+    // maxChunkDevH 8192 @2x => 4096 logical per page; 10000 -> [4096,4096,1808].
+    const chunks = tallPageChunkHeights(10000, 8192, 2);
+    expect(chunks).toEqual([4096, 4096, 1808]);
+    expect(chunks.reduce((a, b) => a + b, 0)).toBe(10000);
+  });
+
+  test('a page that fits in one chunk yields a single page', () => {
+    expect(tallPageChunkHeights(3000, 8192, 2)).toEqual([3000]);
+  });
+
+  test('never yields a zero-height chunk', () => {
+    for (const c of tallPageChunkHeights(5000, 0, 0)) expect(c).toBeGreaterThan(0);
+  });
+});
 
 // imageSignature distinguishes two slide captures so the deck loop can detect a
 // stale-frame race (capturePage returning the previous slide's frame) and
