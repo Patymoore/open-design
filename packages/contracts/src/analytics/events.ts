@@ -35,6 +35,11 @@ export type AnalyticsEventName =
   // Packaged updater lifecycle
   | 'update_install_result'
   | 'update_apply_observed'
+  // Packaged startup failure — emitted by the packaged MAIN process (not the
+  // daemon) when daemon/web sidecars die before reporting status, i.e. the
+  // pre-daemon crash class that produces zero telemetry today (issue #4638).
+  // A `captureSafety`-class stability event; see apps/packaged/src/startup-telemetry.ts.
+  | 'packaged_runtime_failed'
   // File manager
   | 'file_upload_result'
   // Artifact
