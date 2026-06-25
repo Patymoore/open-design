@@ -2,7 +2,6 @@ export * from './common.js';
 export * from './errors.js';
 export * from './tasks.js';
 export * from './api/app-config.js';
-export * from './api/amrWallet.js';
 export * from './api/automations.js';
 export * from './api/artifacts.js';
 export * from './api/brands.js';

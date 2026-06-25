@@ -23,10 +23,6 @@ import {
   readVelaLoginStatus,
   spawnVelaLogin,
 } from '../integrations/vela.js';
-import {
-  clearVelaWalletSnapshotCache,
-  velaWalletSnapshotReader,
-} from '../integrations/vela-wallet.js';
 import { amrModelLoadingCache } from '../runtimes/amr-model-cache.js';
 import {
   fetchVelaPresetModels,
@@ -209,22 +205,6 @@ export function registerVelaRoutes(app: Express, deps: RegisterVelaRoutesDeps): 
     }
   });
 
-  app.get('/api/integrations/vela/wallet', async (req, res) => {
-    try {
-      const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
-      const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
-      const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
-      const snapshot = await velaWalletSnapshotReader.read({
-        env,
-        configuredEnv,
-        refresh,
-      });
-      res.json(snapshot);
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
   app.all('/api/integrations/vela/api-proxy/*splat', proxyAmrApiRequest);
 
   app.post('/api/integrations/vela/login', async (req, res) => {
@@ -343,7 +323,6 @@ export function registerVelaRoutes(app: Express, deps: RegisterVelaRoutesDeps): 
       const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
       const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
       forgetVelaLogin(mergeVelaEnv(env, configuredEnv));
-      clearVelaWalletSnapshotCache();
       delete env.VELA_RUNTIME_KEY;
       delete env.VELA_LINK_URL;
       const agentCliEnv = { ...(appConfig.agentCliEnv ?? {}) };
