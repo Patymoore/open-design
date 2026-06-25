@@ -15,7 +15,7 @@
   <a href="https://open-design.ai/">下载</a> ·
   <a href="https://open-design.ai/amr/">Model Router</a> ·
   <a href="https://discord.gg/9ptkbbqRu">Discord</a> ·
-  <a href="https://x.com/nexudotio">关注 @nexudotio</a>
+  <a href="https://x.com/OpenDesignHQ">关注 @OpenDesignHQ</a>
 </p>
 
 <p align="center">
@@ -302,7 +302,7 @@ Open Design (OD) 是开源替代品。同样的循环，同样的工件优先心
 
 ```bash
 # 一行命令安装到你正在使用的 Agent：
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 # <agent> = claude | codex | cursor | copilot | openclaw | antigravity | gemini
 #         | pi | vibe | hermes | cline | kimi | trae | opencode
 ```
@@ -361,7 +361,7 @@ Open Design 提供 **stdio MCP 服务器**和逐 Agent 的**安装脚本**。任
 
 ```bash
 # 一行命令安装（支持 16+ CLI）：
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 
 # 然后，Agent 可以：
 od search-files "primary button"      # 跨项目文件搜索
@@ -594,7 +594,7 @@ pnpm guard && pnpm --filter @open-design/plugin-runtime typecheck
 每个渠道背后都是真实的人。
 
 - 💬 **Discord**——日常聊天、插件分享、提问 → [**discord.gg/9ptkbbqRu**](https://discord.gg/9ptkbbqRu)
-- 🐦 **X / Twitter**——发版说明、里程碑、幕后 → [**@nexudotio**](https://x.com/nexudotio)
+- 🐦 **X / Twitter**——发版说明、里程碑、幕后 → [**@OpenDesignHQ**](https://x.com/OpenDesignHQ)
 - 🗣️ **GitHub Discussions**——深度问答、RFC、"展示你的作品" → [**Discussions**](https://github.com/nexu-io/open-design/discussions)
 - 🐛 **GitHub Issues**——Bug 报告、功能请求 → [**Issues**](https://github.com/nexu-io/open-design/issues)
 

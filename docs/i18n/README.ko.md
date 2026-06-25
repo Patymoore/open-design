@@ -15,7 +15,7 @@
   <a href="https://open-design.ai/">다운로드</a> ·
   <a href="https://open-design.ai/amr/">Model Router</a> ·
   <a href="https://discord.gg/9ptkbbqRu">Discord</a> ·
-  <a href="https://x.com/nexudotio">@nexudotio 팔로우</a>
+  <a href="https://x.com/OpenDesignHQ">@OpenDesignHQ 팔로우</a>
 </p>
 
 <p align="center">
@@ -302,7 +302,7 @@ GUI를 한 번도 열지 않고도 Open Design를 사용할 수 있습니다 —
 
 ```bash
 # One-line install into the agent you're using:
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 # <agent> = claude | codex | cursor | copilot | openclaw | antigravity | gemini
 #         | pi | vibe | hermes | cline | kimi | trae | opencode
 ```
@@ -361,7 +361,7 @@ Open Design는 **stdio MCP 서버**와 에이전트별 **설치 스크립트**�
 
 ```bash
 # One-line install (16+ CLIs supported):
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 
 # Then the agent can:
 od search-files "primary button"      # search files across projects
@@ -595,7 +595,7 @@ pnpm guard && pnpm --filter @open-design/plugin-runtime typecheck
 모든 채널 뒤에는 실제 사람이 있습니다.
 
 - 💬 **Discord** — 매일의 대화, 플러그인 공유, 질문 → [**discord.gg/9ptkbbqRu**](https://discord.gg/9ptkbbqRu)
-- 🐦 **X / Twitter** — 릴리스 노트, 마일스톤, 비하인드 → [**@nexudotio**](https://x.com/nexudotio)
+- 🐦 **X / Twitter** — 릴리스 노트, 마일스톤, 비하인드 → [**@OpenDesignHQ**](https://x.com/OpenDesignHQ)
 - 🗣️ **GitHub Discussions** — 깊이 있는 Q&A, RFC, "당신의 작업을 보여주세요" → [**Discussions**](https://github.com/nexu-io/open-design/discussions)
 - 🐛 **GitHub Issues** — 버그 리포트, 기능 요청 → [**Issues**](https://github.com/nexu-io/open-design/issues)
 

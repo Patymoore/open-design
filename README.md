@@ -15,7 +15,7 @@
   <a href="https://open-design.ai/">Download</a> ·
   <a href="https://open-design.ai/amr/">Model Router</a> ·
   <a href="https://discord.gg/9ptkbbqRu">Discord</a> ·
-  <a href="https://x.com/nexudotio">Follow @nexudotio</a>
+  <a href="https://x.com/OpenDesignHQ">Follow @OpenDesignHQ</a>
 </p>
 
 <p align="center">
@@ -302,7 +302,7 @@ You can use Open Design without ever opening the GUI — call it as a skill, plu
 
 ```bash
 # One-line install into the agent you're using:
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 # <agent> = claude | codex | cursor | copilot | openclaw | antigravity | gemini
 #         | pi | vibe | hermes | cline | kimi | trae | opencode
 ```
@@ -363,7 +363,7 @@ Open Design ships a **stdio MCP server** and per-agent **install scripts**. Any 
 
 ```bash
 # One-line install (16+ CLIs supported):
-curl -fsSL https://open-design.ai/install.sh | sh -s <agent>
+od mcp install <agent>
 
 # Then the agent can:
 od search-files "primary button"      # search files across projects
@@ -597,7 +597,7 @@ Phased delivery → [`docs/roadmap.md`](docs/roadmap.md).
 Real people behind every channel.
 
 - 💬 **Discord** — daily chat, plugin sharing, questions → [**discord.gg/9ptkbbqRu**](https://discord.gg/9ptkbbqRu)
-- 🐦 **X / Twitter** — release notes, milestones, behind the scenes → [**@nexudotio**](https://x.com/nexudotio)
+- 🐦 **X / Twitter** — release notes, milestones, behind the scenes → [**@OpenDesignHQ**](https://x.com/OpenDesignHQ)
 - 🗣️ **GitHub Discussions** — deep Q&A, RFCs, "show your work" → [**Discussions**](https://github.com/nexu-io/open-design/discussions)
 - 🐛 **GitHub Issues** — bug reports, feature requests → [**Issues**](https://github.com/nexu-io/open-design/issues)
 
