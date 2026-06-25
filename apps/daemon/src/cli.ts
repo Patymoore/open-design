@@ -403,7 +403,10 @@ async function runExport(args) {
     process.exit(2);
   }
   const base = await cliDaemonBaseUrl(flags);
-  const exportPath = format === 'pptx' ? 'export/pptx' : 'export';
+  const exportPath =
+    format === 'pptx' ? 'export/pptx'
+    : format === 'image' ? 'export/image'
+    : 'export';
   const resp = await fetch(`${base}/api/projects/${encodeURIComponent(projectId)}/${exportPath}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -414,6 +417,13 @@ async function runExport(args) {
             deck: true,
             ...(flags.title ? { title: flags.title } : {}),
           }
+        : format === 'image'
+          ? {
+              fileName: file,
+              deck: flags.deck === true,
+              ...(flags['image-format'] ? { imageFormat: flags['image-format'] } : {}),
+              ...(flags.title ? { title: flags.title } : {}),
+            }
         : {
             fileName: file,
             format,

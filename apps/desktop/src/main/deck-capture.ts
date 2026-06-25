@@ -173,10 +173,10 @@ export async function renderDeckSlides(
     // Pin the stage to the measured slide size.
     await window.webContents.executeJavaScript(`(${pinDeckStage.toString()})(${stage.w}, ${stage.h})`, true);
 
-    // Deck slides always encode as PNG (crisp text, no JPEG artifacts) — JPEG is
-    // a full-document `page`-mode optimization only, per the render-slides
-    // contract. So `pageImageFormat` is intentionally ignored in the deck branch.
-    const jpeg = false;
+    // Deck slides default to PNG (crisp text, no JPEG artifacts). The CLI image
+    // route can explicitly request JPEG via pageImageFormat; PPTX/PDF leave it
+    // unset and keep PNG.
+    const jpeg = input.pageImageFormat === "jpeg";
 
     // Capture each slide via CDP `Page.captureScreenshot` when the debugger can
     // attach. Unlike `capturePage()` (which grabs the last COMPOSITED frame and

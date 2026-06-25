@@ -22,6 +22,10 @@ const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
   'base64',
 );
+const JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AfwD/2Q==',
+  'base64',
+);
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<boolean> {
   const start = Date.now();
@@ -45,8 +49,9 @@ describe('screenshot export desktop renderer file handoff', () => {
     if (!input.outputDir) return { ok: false, error: 'expected an outputDir handoff' };
     seenDirs.push(input.outputDir);
     await mkdir(input.outputDir, { recursive: true });
-    const file = path.join(input.outputDir, 'slide-0.png');
-    await writeFile(file, PNG);
+    const jpeg = input.pageImageFormat === 'jpeg';
+    const file = path.join(input.outputDir, jpeg ? 'slide-0.jpeg' : 'slide-0.png');
+    await writeFile(file, jpeg ? JPEG : PNG);
     return { ok: true, slideFiles: [file], width: 1920, height: 1080, mode: input.stitch ? 'deck' : 'page' };
   };
 
@@ -88,6 +93,29 @@ describe('screenshot export desktop renderer file handoff', () => {
     const used = seenDirs.at(-1)!;
     expect(used).toBeTruthy();
     expect(used.startsWith(exportRenderRoot + path.sep)).toBe(true);
+  });
+
+  it('forwards jpeg image exports to the screenshot renderer', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/export/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: 'index.html', imageFormat: 'jpeg' }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('image/jpeg');
+    const bytes = Buffer.from(await res.arrayBuffer());
+    expect(bytes.subarray(0, 2).toString('hex')).toBe('ffd8');
+  });
+
+  it('rejects unsupported image export formats before rendering', async () => {
+    const before = seenDirs.length;
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/export/image`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: 'index.html', imageFormat: 'webp' }),
+    });
+    expect(res.status).toBe(400);
+    expect(seenDirs.length).toBe(before);
   });
 
   it('deletes the scratch render dir after the export completes', async () => {

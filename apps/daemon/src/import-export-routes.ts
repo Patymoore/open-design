@@ -446,9 +446,12 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
     // the finally below. Derived from RUNTIME_DATA_DIR per the data-dir contract.
     const renderOutputDir = path.join(RUNTIME_DATA_DIR_CANONICAL, 'export-render', randomId());
     try {
-      const { fileName, title, index } = body || {};
+      const { fileName, title, index, imageFormat } = body || {};
       if (typeof fileName !== 'string' || fileName.length === 0) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
+      }
+      if (format === 'image' && imageFormat != null && imageFormat !== 'png' && imageFormat !== 'jpeg') {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'imageFormat must be png or jpeg');
       }
       const renderOptions: BuildDeckRenderInputOptions = {
         daemonUrl: daemonUrlRef.current,
@@ -480,9 +483,10 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
           renderOptions.stitch = true;
         }
       }
-      // Full pages render as JPEG for PDF (small files); image export keeps PNG
-      // (lossless source the client re-encodes to the user's chosen format).
-      if (format === 'pdf') renderOptions.pageImageFormat = 'jpeg';
+      // Full pages render as JPEG for PDF (small files). Image export defaults
+      // to PNG unless the caller explicitly asks for JPEG (CLI --image-format).
+      if (format === 'pdf' && body?.deck !== true) renderOptions.pageImageFormat = 'jpeg';
+      if (format === 'image' && imageFormat === 'jpeg') renderOptions.pageImageFormat = 'jpeg';
       const tStart = Date.now();
       const { input, title: resolvedTitle, defaultFilename } =
         await buildDeckRenderInput(renderOptions);
