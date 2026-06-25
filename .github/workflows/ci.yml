@@ -906,7 +906,7 @@ jobs:
     name: Playwright critical (${{ matrix.group }})
     needs: [scopes]
     if: ${{ needs.scopes.outputs.run_playwright_critical == 'true' }}
-    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]') }}
+    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -927,14 +927,14 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Setup Playwright
         uses: ./.github/actions/setup-playwright
         with:
           package-json-path: e2e/package.json
           install-command: pnpm -C e2e exec playwright install --with-deps chromium
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Prebuild workspace type declarations
         run: |
@@ -954,7 +954,7 @@ jobs:
     name: UI P0 smoke
     needs: [scopes]
     if: ${{ needs.scopes.outputs.run_ui_p0 == 'true' }}
-    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]') }}
+    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]') }}
     timeout-minutes: 30
 
     steps:
@@ -967,14 +967,14 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Setup Playwright
         uses: ./.github/actions/setup-playwright
         with:
           package-json-path: e2e/package.json
           install-command: pnpm -C e2e exec playwright install --with-deps chromium
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Prebuild workspace type declarations
         run: |
@@ -1005,7 +1005,7 @@ jobs:
     name: UI P0 (${{ matrix.name }})
     needs: [scopes]
     if: ${{ needs.scopes.outputs.run_ui_p0 == 'true' }}
-    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]') }}
+    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1022,14 +1022,14 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Setup Playwright
         uses: ./.github/actions/setup-playwright
         with:
           package-json-path: e2e/package.json
           install-command: pnpm -C e2e exec playwright install --with-deps chromium
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Prebuild workspace type declarations
         run: |
@@ -1060,7 +1060,7 @@ jobs:
     name: Playwright visual (${{ matrix.name }})
     needs: [scopes]
     if: ${{ needs.scopes.outputs.run_playwright_visual == 'true' }}
-    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]') }}
+    runs-on: ${{ fromJSON(vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -1077,14 +1077,14 @@ jobs:
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
         with:
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Setup Playwright
         uses: ./.github/actions/setup-playwright
         with:
           package-json-path: e2e/package.json
           install-command: pnpm -C e2e exec playwright install --with-deps chromium
-          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-8vcpu-ubuntu-2404"]' }}
+          runner-labels: ${{ vars.OD_CI_RUNNER_MODE == 'economic' && '["ubuntu-24.04"]' || '["blacksmith-4vcpu-ubuntu-2404"]' }}
 
       - name: Prebuild workspace type declarations
         run: |
