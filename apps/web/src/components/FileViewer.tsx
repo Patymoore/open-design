@@ -70,6 +70,7 @@ import {
   exportAsPdf,
   exportProjectAsHtml,
   exportProjectAsPdf,
+  exportProjectAsPptx,
   exportProjectAsZip,
   exportProjectImageDataUrl,
   exportProjectScreenshotPdf,
@@ -84,6 +85,7 @@ import {
   planDeckImageCapture,
   requestPreviewSnapshot,
   sourceLooksLikeExportableDeck,
+  type ExportProgress,
   type ImageExportFormat,
 } from '../runtime/exports';
 import { copyToClipboard } from '../lib/copy-to-clipboard';
@@ -948,7 +950,6 @@ interface Props {
   liveHtml?: string;
   filesRefreshKey?: number;
   isDeck?: boolean;
-  onExportAsPptx?: ((fileName: string) => void | Promise<void>) | undefined;
   streaming?: boolean;
   commentQueueOnSend?: boolean;
   commentSendDisabled?: boolean;
@@ -981,7 +982,6 @@ export function FileViewer({
   liveHtml,
   filesRefreshKey = 0,
   isDeck,
-  onExportAsPptx,
   streaming,
   commentQueueOnSend = false,
   commentSendDisabled = false,
@@ -1026,7 +1026,6 @@ export function FileViewer({
         liveHtml={liveHtml}
         filesRefreshKey={filesRefreshKey}
         isDeck={rendererMatch.renderer.id === 'deck-html'}
-        onExportAsPptx={onExportAsPptx}
         streaming={Boolean(streaming)}
         commentQueueOnSend={commentQueueOnSend}
         commentSendDisabled={commentSendDisabled}
@@ -4424,7 +4423,6 @@ function HtmlViewer({
   liveHtml,
   filesRefreshKey = 0,
   isDeck,
-  onExportAsPptx,
   streaming,
   commentQueueOnSend = false,
   commentSendDisabled = false,
@@ -4445,7 +4443,6 @@ function HtmlViewer({
   liveHtml?: string;
   filesRefreshKey?: number;
   isDeck: boolean;
-  onExportAsPptx?: ((fileName: string) => void | Promise<void>) | undefined;
   streaming: boolean;
   commentQueueOnSend?: boolean;
   commentSendDisabled?: boolean;
@@ -4462,6 +4459,9 @@ function HtmlViewer({
 }) {
   const { locale, t } = useI18n();
   const analytics = useAnalytics();
+  // Latest per-slide capture progress for the programmatic exporters, read by
+  // the loading-toast ticker in fireShareExport to render elapsed time + ETA.
+  const exportProgressRef = useRef<{ done: number; total: number } | null>(null);
   // Shared helper for the share menu: emit studio_click share_option on
   // entry and artifact_export_result on resolution. Sync exports report
   // success immediately after the call returns; async exports get .then
@@ -4517,39 +4517,87 @@ function HtmlViewer({
       );
     };
     const toastFormats = new Set(['pdf', 'pptx', 'zip', 'html', 'image', 'markdown']);
-    const showToast = toastFormats.has(format);
-    // Show the loading toast IMMEDIATELY (before the work runs) so a multi-second
-    // screenshot export doesn't look frozen. Cleared on success, replaced with an
-    // error toast on failure. (For an instant sync export, React batches the
-    // loading→clear so no toast flashes.)
-    if (showToast) setExportToast({ message: t('fileViewer.exportStarted'), tone: 'loading' });
-    const onOk = (result: unknown) => {
-      if (result === 'cancelled') {
-        finish('cancelled');
-        if (showToast) setExportToast(null);
-        return;
+    // Programmatic exports compute in-browser and can take a while (one render
+    // per deck slide), so the loading toast ticks every second with elapsed time
+    // and — once at least one slide is captured — a live ETA derived from the
+    // average time per completed slide. onExportProgress (passed into the export
+    // call by the menu item) feeds slide progress into exportProgressRef.
+    exportProgressRef.current = null;
+    const startedAt = performance.now();
+    let ticker: ReturnType<typeof setInterval> | null = null;
+    const renderLoadingToast = () => {
+      if (!toastFormats.has(format)) return;
+      const elapsedS = Math.max(0, Math.round((performance.now() - startedAt) / 1000));
+      const p = exportProgressRef.current;
+      let message: string;
+      if (p && p.total > 1 && p.done > 0) {
+        const remainingS = Math.max(
+          1,
+          Math.round(((performance.now() - startedAt) / p.done) * (p.total - p.done) / 1000),
+        );
+        message = t('fileViewer.exportSlideEta', { current: p.done, total: p.total, seconds: remainingS });
+      } else if (p && p.total > 1) {
+        message = t('fileViewer.exportSlideProgress', { current: p.done, total: p.total });
+      } else {
+        message = elapsedS > 0
+          ? t('fileViewer.exportingElapsed', { seconds: elapsedS })
+          : t('fileViewer.exportingProgress');
       }
-      finish('success');
-      if (showToast) setExportToast(null);
+      setExportToast({ message, tone: 'loading' });
     };
-    const onErr = (err: unknown) => {
-      finish('failed', err instanceof Error ? err.name : 'UNKNOWN');
-      // Prefer the export's own (user-facing) message — e.g. a semantic
-      // screenshot-PDF failure like "page is too tall — export as PDF" — so a
-      // surfaced failure is actionable instead of a generic "export failed".
+    const stopTicker = () => {
+      if (ticker != null) {
+        clearInterval(ticker);
+        ticker = null;
+      }
+    };
+    if (toastFormats.has(format)) {
+      renderLoadingToast();
+      ticker = setInterval(renderLoadingToast, 1000);
+    }
+    const failToast = (err?: unknown) => {
+      stopTicker();
       const message = err instanceof Error && err.message ? err.message : t('fileViewer.exportFailed');
-      if (showToast) setExportToast({ message, tone: 'error' });
+      if (toastFormats.has(format)) setExportToast({ message, tone: 'error' });
     };
     try {
       const out = fn();
       if (out && typeof (out as Promise<unknown>).then === 'function') {
-        (out as Promise<unknown>).then(onOk, onErr);
+        (out as Promise<unknown>).then(
+          (result) => {
+            stopTicker();
+            if (result === 'cancelled') {
+              finish('cancelled');
+              if (toastFormats.has(format)) setExportToast(null);
+              return;
+            }
+            finish('success');
+            if (toastFormats.has(format)) setExportToast({ message: t('fileViewer.exportDone'), tone: 'success' });
+          },
+          (err) => {
+            finish('failed', err instanceof Error ? err.name : 'UNKNOWN');
+            failToast(err);
+          },
+        );
       } else {
-        onOk(out);
+        stopTicker();
+        if (out === 'cancelled') {
+          finish('cancelled');
+          if (toastFormats.has(format)) setExportToast(null);
+          return;
+        }
+        finish('success');
+        if (toastFormats.has(format)) setExportToast({ message: t('fileViewer.exportDone'), tone: 'success' });
       }
     } catch (err) {
-      onErr(err);
+      finish('failed', err instanceof Error ? err.name : 'UNKNOWN');
+      failToast(err);
     }
+  };
+  // Feeds per-slide capture progress into the ref the loading-toast ticker reads
+  // (apps/web/src/runtime/exports.ts drives this for the PDF exporter).
+  const onExportProgress: ExportProgress = (done, total) => {
+    exportProgressRef.current = { done, total };
   };
   // P0 helpers — keep the artifact_id + artifact_kind derivation in one place
   // so each per-button onClick stays a one-liner. We compute lazily inside the
@@ -4885,7 +4933,9 @@ function HtmlViewer({
   const [manualEditHoverTarget, setManualEditHoverTarget] = useState<ManualEditTarget | null>(null);
   const [manualEditPageStylesOpen, setManualEditPageStylesOpen] = useState(false);
   const [manualEditPanelPosition, setManualEditPanelPosition] = useState<{ left: number; top: number } | null>(null);
+  const [manualEditDraftDirty, setManualEditDraftDirty] = useState(false);
   const selectedManualEditTargetIdRef = useRef<string | null>(null);
+  const manualEditSelectionDraftRef = useRef<{ id: string; draft: ManualEditDraft } | null>(null);
   // Tracks the iframe's in-flight inline text edit. `finishManualEditTextSession`
   // posts the explicit finish and resolves only after the iframe acks AND the
   // resulting commit has been applied, so exit/dismiss/cancel never tear down
@@ -5303,7 +5353,7 @@ function HtmlViewer({
       : livePreviewSource;
   const manualEditPageStylesEnabled = typeof source === 'string' && isManualEditFullHtmlDocument(source);
   const urlModeBridge = hasUrlModeBridge(source);
-  const manualEditRequiresSrcDoc = manualEditSrcDocActive && !urlModeBridge;
+  const manualEditRequiresSrcDoc = manualEditMode || manualEditSrcDocActive;
   // When we URL-load the iframe directly, skip every in-host inlining /
   // srcDoc-rebuilding step. The browser does the asset resolution itself,
   // which is the whole point of the URL-load path.
@@ -5854,6 +5904,7 @@ function HtmlViewer({
     setManualEditPanelPosition(null);
     selectedManualEditTargetIdRef.current = null;
     setManualEditDraft(emptyManualEditDraft());
+    setManualEditDraftDirty(false);
     setManualEditHistory([]);
     setManualEditUndone([]);
     setManualEditError(null);
@@ -6104,7 +6155,9 @@ function HtmlViewer({
       setManualEditHoverTarget(null);
       setManualEditPageStylesOpen(false);
       setManualEditPanelPosition(null);
+      setManualEditDraftDirty(false);
       selectedManualEditTargetIdRef.current = null;
+      manualEditSelectionDraftRef.current = null;
       manualEditTextSessionIdRef.current = null;
       manualEditTextFinishRef.current = null;
       manualEditTextCommitInFlightRef.current = null;
@@ -6407,10 +6460,18 @@ function HtmlViewer({
     setManualEditPageStylesOpen(false);
     if (manualEditPendingStyleRef.current?.id !== target.id) cancelManualEditStyleDraft();
     const base = sourceRef.current ?? '';
-    const fields = readManualEditFields(base, target.id);
+    const nextDraft = manualEditDraftForTarget(target, base);
     selectedManualEditTargetIdRef.current = target.id;
+    manualEditSelectionDraftRef.current = { id: target.id, draft: nextDraft };
     setSelectedManualEditTarget(target);
-    setManualEditDraft({
+    setManualEditDraft(nextDraft);
+    setManualEditDraftDirty(false);
+    setManualEditError(null);
+  }
+
+  function manualEditDraftForTarget(target: ManualEditTarget, base: string): ManualEditDraft {
+    const fields = readManualEditFields(base, target.id);
+    return {
       text: fields.text ?? target.fields.text ?? target.text,
       href: fields.href ?? target.fields.href ?? '',
       src: fields.src ?? target.fields.src ?? '',
@@ -6419,8 +6480,7 @@ function HtmlViewer({
       attributesText: JSON.stringify(readManualEditAttributes(base, target.id), null, 2),
       outerHtml: readManualEditOuterHtml(base, target.id) || target.outerHtml,
       fullSource: base,
-    });
-    setManualEditError(null);
+    };
   }
 
   async function clearManualEditTargetSelection() {
@@ -6432,10 +6492,12 @@ function HtmlViewer({
     }
     cancelManualEditStyleDraft();
     selectedManualEditTargetIdRef.current = null;
+    manualEditSelectionDraftRef.current = null;
     manualEditTextSessionIdRef.current = null;
     setSelectedManualEditTarget(null);
     setManualEditPanelPosition(null);
     setManualEditDraft(emptyManualEditDraft(sourceRef.current ?? ''));
+    setManualEditDraftDirty(false);
     setManualEditError(null);
   }
 
@@ -6453,6 +6515,87 @@ function HtmlViewer({
     if (!ok) return;
     if (selectedManualEditTarget) void clearManualEditTargetSelection();
     else setManualEditPageStylesOpen(false);
+  }
+
+  function manualEditContentPatchForDraft(
+    target: ManualEditTarget,
+    draft: ManualEditDraft,
+    base: string,
+  ): { patch: ManualEditPatch; label: string } | null {
+    const fields = readManualEditFields(base, target.id);
+    if (target.kind === 'text' || target.kind === 'token') {
+      const currentText = fields.text ?? target.fields.text ?? target.text;
+      if (draft.text !== currentText) {
+        return { patch: { id: target.id, kind: 'set-text', value: draft.text }, label: t('manualEdit.applyContent') };
+      }
+      return null;
+    }
+    if (target.kind === 'link') {
+      const currentText = fields.text ?? target.fields.text ?? target.text;
+      const currentHref = fields.href ?? target.fields.href ?? '';
+      if (draft.text !== currentText || draft.href !== currentHref) {
+        return { patch: { id: target.id, kind: 'set-link', text: draft.text, href: draft.href }, label: t('manualEdit.applyContent') };
+      }
+      return null;
+    }
+    if (target.kind === 'image') {
+      const currentSrc = fields.src ?? target.fields.src ?? '';
+      const currentAlt = fields.alt ?? target.fields.alt ?? '';
+      if (draft.src !== currentSrc || draft.alt !== currentAlt) {
+        return { patch: { id: target.id, kind: 'set-image', src: draft.src, alt: draft.alt }, label: t('manualEdit.applyContent') };
+      }
+      return null;
+    }
+    const currentOuterHtml = readManualEditOuterHtml(base, target.id) || target.outerHtml;
+    if (draft.outerHtml !== currentOuterHtml) {
+      return { patch: { id: target.id, kind: 'set-outer-html', html: draft.outerHtml }, label: t('manualEdit.applyHtml') };
+    }
+    return null;
+  }
+
+  async function saveManualEditPanelDraft() {
+    const hadTextSession = Boolean(manualEditTextSessionIdRef.current || manualEditTextCommitInFlightRef.current);
+    if (!(await settlePendingManualEditCommit())) return;
+    if (selectedManualEditTarget && !hadTextSession) {
+      const base = sourceRef.current ?? '';
+      const contentPatch = manualEditContentPatchForDraft(selectedManualEditTarget, manualEditDraft, base);
+      if (contentPatch && !(await applyManualEdit(contentPatch.patch, contentPatch.label))) return;
+    }
+    const ok = await flushManualEditStyleSave();
+    if (!ok) return;
+    if (selectedManualEditTarget) void clearManualEditTargetSelection();
+    else setManualEditPageStylesOpen(false);
+  }
+
+  async function resetManualEditPanelDraft() {
+    if (manualEditTextSessionIdRef.current) await finishManualEditTextSession(false);
+    cancelManualEditStyleDraft();
+    if (!selectedManualEditTarget) {
+      setManualEditDraft(emptyManualEditDraft(sourceRef.current ?? ''));
+      setManualEditError(null);
+      return;
+    }
+    const snapshot = manualEditSelectionDraftRef.current?.id === selectedManualEditTarget.id
+      ? manualEditSelectionDraftRef.current.draft
+      : manualEditDraftForTarget(selectedManualEditTarget, sourceRef.current ?? '');
+    const base = sourceRef.current ?? '';
+    const currentOuterHtml = readManualEditOuterHtml(base, selectedManualEditTarget.id);
+    if (snapshot.outerHtml && currentOuterHtml && snapshot.outerHtml !== currentOuterHtml) {
+      const ok = await applyManualEdit(
+        { id: selectedManualEditTarget.id, kind: 'set-outer-html', html: snapshot.outerHtml },
+        'Reset element',
+      );
+      if (!ok) return;
+    }
+    const refreshedBase = sourceRef.current ?? base;
+    setManualEditDraft({
+      ...snapshot,
+      fullSource: refreshedBase,
+      styles: inspectorManualEditStyles(selectedManualEditTarget, refreshedBase),
+    });
+    setManualEditDraftDirty(false);
+    setManualEditError(null);
+    postSelectedManualEditTargetToIframe(selectedManualEditTarget.id);
   }
 
   async function cancelManualEditPanel() {
@@ -6515,18 +6658,39 @@ function HtmlViewer({
         setSelectedManualEditTarget((current) => current?.id === patch.id
           ? { ...current, text: patch.value, fields: { ...current.fields, text: patch.value } }
           : current);
+        setManualEditDraft((current) => ({ ...current, text: patch.value, fullSource: result.source }));
+      } else if (patch.kind === 'set-link') {
+        setSelectedManualEditTarget((current) => current?.id === patch.id
+          ? { ...current, text: patch.text, fields: { ...current.fields, text: patch.text, href: patch.href } }
+          : current);
+        setManualEditDraft((current) => ({ ...current, text: patch.text, href: patch.href, fullSource: result.source }));
+      } else if (patch.kind === 'set-image') {
+        setSelectedManualEditTarget((current) => current?.id === patch.id
+          ? { ...current, fields: { ...current.fields, src: patch.src, alt: patch.alt } }
+          : current);
+        setManualEditDraft((current) => ({ ...current, src: patch.src, alt: patch.alt, fullSource: result.source }));
       } else if (patch.kind === 'remove-element') {
         if (manualEditPendingStyleRef.current?.id === patch.id) {
           manualEditPendingStyleRef.current = null;
           clearManualEditStyleTimer();
         }
         selectedManualEditTargetIdRef.current = null;
+        manualEditSelectionDraftRef.current = null;
         setSelectedManualEditTarget(null);
         setManualEditTargets((current) => current.filter((target) => target.id !== patch.id));
         setManualEditDraft(emptyManualEditDraft(result.source));
+        setManualEditDraftDirty(false);
         postSelectedManualEditTargetToIframe(null);
       } else {
         setManualEditDraft((current) => ({ ...current, fullSource: result.source }));
+      }
+      if (
+        patch.kind !== 'remove-element' &&
+        patch.kind !== 'set-token' &&
+        patch.kind !== 'set-full-source' &&
+        selectedManualEditTargetIdRef.current === patch.id
+      ) {
+        setManualEditDraftDirty(true);
       }
       if (patch.kind === 'set-style') {
         reconcileManualEditStyleSave(patch.id, patch.styles, result.source);
@@ -7593,12 +7757,12 @@ function HtmlViewer({
   // (`isDeckArtifact`: deck renderer/kind/presentation) — NOT the `.slide` regex
   // (`effectiveDeck`/`looksLikeDeck`), which false-positives on ordinary pages
   // that contain carousel/testimonial `.slide` markup and would force those down
-  // the deck renderer via the hardcoded `deck: true`. It also requires a host
-  // runtime (the screenshot renderer; no web-only fallback → would 501).
+  // the deck renderer via the hardcoded `deck: true`. It requires the desktop
+  // host screenshot renderer; there is no web-only PPTX fallback.
   // (Image/PDF stay on the broader signal — they handle pages too.)
-  const canPptx =
-    canShare && isDeckArtifact && Boolean(onExportAsPptx) && !streaming && isOpenDesignHostAvailable();
-  const showPptxExport = canShare && isDeckArtifact && isOpenDesignHostAvailable();
+  const hostExportAvailable = isOpenDesignHostAvailable();
+  const showPptxExport = canShare && isDeckArtifact;
+  const canPptx = showPptxExport && !streaming && hostExportAvailable;
   const showMarkdownExport = source !== null && isMarkdownArtifact;
   const showImageExport = canShare;
 
@@ -8242,6 +8406,7 @@ function HtmlViewer({
     manualEditMode && !selectedManualEditTarget && manualEditPageStylesOpen;
   const manualEditPanelActive =
     manualEditMode && (!!selectedManualEditTarget || manualEditPageCardActive);
+  const manualEditResetAvailable = selectedManualEditTarget ? manualEditDraftDirty : false;
   const manualEditPanel = manualEditPanelActive ? (
     <ManualEditPanel
       targets={manualEditTargets}
@@ -8252,11 +8417,15 @@ function HtmlViewer({
       canUndo={manualEditHistory.length > 0}
       canRedo={manualEditUndone.length > 0}
       busy={manualEditSaving}
+      resetAvailable={manualEditResetAvailable}
       pageStylesEnabled={manualEditPageStylesEnabled}
       onSelectTarget={(target) => {
         void selectManualEditTarget(target);
       }}
-      onDraftChange={setManualEditDraft}
+      onDraftChange={(draft) => {
+        setManualEditDraft(draft);
+        setManualEditDraftDirty(Boolean(selectedManualEditTarget));
+      }}
       onStyleChange={(id, styles, label) => {
         void handleManualEditStyleChange(id, styles, label);
       }}
@@ -8275,7 +8444,10 @@ function HtmlViewer({
         void cancelManualEditPanel();
       }}
       onSaveDraft={() => {
-        void dismissManualEditPanel();
+        void saveManualEditPanelDraft();
+      }}
+      onResetDraft={() => {
+        void resetManualEditPanelDraft();
       }}
       onUndo={() => {
         void undoManualEdit();
@@ -8952,7 +9124,7 @@ function HtmlViewer({
                         }
                         await exportProjectAsPdf({
                           deck: deckExportSignal,
-                          fallbackPdf: () => exportAsPdf(source ?? '', exportTitle, { deck: deckExportSignal }),
+                          fallbackPdf: () => exportAsPdf(source ?? '', exportTitle, { deck: deckExportSignal, onProgress: onExportProgress }),
                           filePath: file.name,
                           projectId,
                           title: exportTitle,
@@ -8970,17 +9142,25 @@ function HtmlViewer({
                       role="menuitem"
                       disabled={!canPptx}
                       title={
-                        onExportAsPptx
-                          ? streaming
-                            ? t('fileViewer.exportPptxBusy')
-                            : t('fileViewer.exportPptxHint')
-                          : t('fileViewer.exportPptxNa')
+                        streaming
+                          ? t('fileViewer.exportPptxBusy')
+                          : hostExportAvailable
+                            ? t('fileViewer.exportPptxHint')
+                            : t('fileViewer.exportPptxNa')
                       }
                       onClick={() => {
                         setDownloadMenuOpen(false);
                         // Return the promise so the loading toast lasts until the
                         // real export finishes (not just until it's kicked off).
-                        fireShareExport('pptx', () => onExportAsPptx?.(file.name));
+                        fireShareExport('pptx', async () => {
+                          const res = await exportProjectAsPptx({
+                            projectId,
+                            fileName: file.name,
+                            title: exportTitle,
+                            deck: true,
+                          });
+                          if (!res.ok) throw new Error('error' in res ? res.error : t('fileViewer.exportPptxNa'));
+                        });
                       }}
                     >
                       <span className="share-menu-icon"><RemixIcon name="file-ppt-line" size={15} /></span>

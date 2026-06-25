@@ -11,6 +11,8 @@ import {
   DESKTOP_UPDATE_CHANNELS,
   DESKTOP_UPDATE_MODES,
   DESKTOP_UPDATE_STATES,
+  type DesktopExportArtifactInput,
+  type DesktopExportArtifactResult,
   type DesktopExportPdfInput,
   type DesktopExportPdfResult,
   type DesktopRenderSlidesInput,
@@ -21,6 +23,7 @@ import type { OpenDesignHostActionResult, OpenDesignHostCaptureResult, OpenDesig
 
 import { renderDeckSlides } from "./deck-capture.js";
 import { openValidatedDirectory } from "./open-path.js";
+import { exportArtifact as exportArtifactFromHtml } from "./artifact-export.js";
 import { createElectronPdfTarget, exportPdfFromHtml, savePrintReadyDocumentAsPdf } from "./pdf-export.js";
 import { SPLASH_VIDEO_DATA_URL } from "./splash-video.js";
 import type { PrintReadyPdfOptions } from "./pdf-export.js";
@@ -319,6 +322,7 @@ export type DesktopRuntime = {
   click(input: DesktopClickInput): Promise<DesktopClickResult>;
   console(): DesktopConsoleResult;
   eval(input: DesktopEvalInput): Promise<DesktopEvalResult>;
+  exportArtifact(input: DesktopExportArtifactInput): Promise<DesktopExportArtifactResult>;
   exportPdf(input: DesktopExportPdfInput): Promise<DesktopExportPdfResult>;
   renderSlides(input: DesktopRenderSlidesInput): Promise<DesktopRenderSlidesResult>;
   screenshot(input: DesktopScreenshotInput): Promise<DesktopScreenshotResult>;
@@ -1394,11 +1398,10 @@ export function hideWindowExitingFullscreen(window: WindowFullscreenSurface): vo
   window.hide();
 }
 
-// Some exports reach the renderer through a normal `<a download>` link
-// (server-written PPTX, browser-generated image blobs). Without this hook
-// Electron writes the bytes straight to the OS Downloads folder, so the user
-// never gets to pick a destination. setSaveDialogOptions makes Electron show
-// the native Save As panel before the download starts.
+// Some image exports reach the renderer through a normal `<a download>` link.
+// Without this hook Electron writes the bytes straight to the OS Downloads
+// folder, so the user never gets to pick a destination. setSaveDialogOptions
+// makes Electron show the native Save As panel before the download starts.
 const IMAGE_SAVE_AS_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 // Every programmatic export that streams a download must prompt Save As, incl.
 // the screenshot PDF (the default Export PDF flow) — otherwise it silently lands
@@ -2329,6 +2332,9 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
         });
         return { error: error instanceof Error ? error.message : String(error), ok: false };
       }
+    },
+    exportArtifact(input) {
+      return exportArtifactFromHtml(input);
     },
     exportPdf(input) {
       return exportPdfFromHtml(input);

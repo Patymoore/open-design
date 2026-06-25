@@ -1,6 +1,7 @@
 import type { Express, Response } from 'express';
-import { PROJECT_EXPORT_MANIFEST_SCHEMA } from '@open-design/contracts';
+import { PROJECT_EXPORT_MANIFEST_SCHEMA, isExportFormat } from '@open-design/contracts';
 import nodePath from 'node:path';
+import { readFile, rm } from 'node:fs/promises';
 import type { RouteDeps } from './server-context.js';
 import {
   InlineAssetsLimitError,
@@ -412,8 +413,10 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
     buildProjectArchive,
     buildBatchArchive,
     buildDesktopPdfExportInput,
+    buildDesktopArtifactExportInput,
     desktopPdfExporter,
     desktopSlideRenderer,
+    desktopArtifactExporter,
     daemonUrlRef,
     sanitizeArchiveFilename,
   } = ctx.exports;
@@ -774,6 +777,77 @@ export function registerProjectExportRoutes(app: Express, ctx: RegisterProjectEx
   // host-compositor snapshot, the size never depends on the preview pane.
   app.post('/api/projects/:id/export/image', async (req, res) => {
     await handleScreenshotExport(res, 'image', req.params.id, req.body);
+  });
+
+  // Generic programmatic export (PDF / image) for the `od export` CLI.
+  // The web Download menu rasterizes client-side; this is the daemon → desktop
+  // Electron path. The desktop renderer writes the result to a temp file and
+  // returns its path; we stream those bytes back and remove the temp file.
+  app.post('/api/projects/:id/export', async (req, res) => {
+    if (typeof desktopArtifactExporter !== 'function') {
+      return sendApiError(
+        res,
+        501,
+        'UPSTREAM_UNAVAILABLE',
+        'programmatic export is only available when a desktop runtime is reachable',
+      );
+    }
+    try {
+      const { fileName, title, deck, format, imageFormat, width, height } = req.body || {};
+      if (typeof fileName !== 'string' || fileName.length === 0) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'fileName required');
+      }
+      if (!isExportFormat(format)) {
+        return sendApiError(res, 400, 'BAD_REQUEST', 'invalid export format');
+      }
+      const input = await buildDesktopArtifactExportInput({
+        daemonUrl: daemonUrlRef.current,
+        deck: deck === true,
+        fileName,
+        format,
+        // Imported-folder projects keep their workspace under metadata.baseDir;
+        // without it readProjectFile falls back to <data>/projects/:id and 404s.
+        metadata: getProject(db, req.params.id)?.metadata ?? null,
+        projectId: req.params.id,
+        projectsRoot: PROJECTS_DIR,
+        ...(typeof imageFormat === 'string' ? { imageFormat } : {}),
+        ...(typeof title === 'string' ? { title } : {}),
+        ...(Number.isFinite(width) ? { width } : {}),
+        ...(Number.isFinite(height) ? { height } : {}),
+      });
+      const result = await desktopArtifactExporter(input);
+      if (!result || result.ok !== true || typeof result.path !== 'string') {
+        return sendApiError(res, 502, 'UPSTREAM_UNAVAILABLE', (result && result.error) || 'export failed');
+      }
+      try {
+        const buffer = await readFile(result.path);
+        const mime = result.mime || 'application/octet-stream';
+        const ext =
+          mime === 'image/jpeg' ? 'jpg'
+          : mime === 'image/png' ? 'png'
+          : mime === 'application/pdf' ? 'pdf'
+          : 'bin';
+        const slug = sanitizeArchiveFilename(input.title) || 'artifact';
+        const filename = `${slug}.${ext}`;
+        const asciiFallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '_') || `artifact.${ext}`;
+        res.setHeader('Content-Type', mime);
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        );
+        res.send(buffer);
+      } finally {
+        void rm(nodePath.dirname(result.path), { force: true, recursive: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      const status = err && err.code === 'ENOENT' ? 404 : 400;
+      sendApiError(
+        res,
+        status,
+        status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
+        String(err?.message || err),
+      );
+    }
   });
 
   // Export endpoint: serves an HTML body with every same-project
