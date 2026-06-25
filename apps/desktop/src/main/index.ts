@@ -13,6 +13,7 @@ import {
   normalizeDesktopSidecarMessage,
   type DesktopClickInput,
   type DesktopEvalInput,
+  type DesktopExportArtifactInput,
   type DesktopExportPdfInput,
   type DesktopScreenshotInput,
   type DesktopUpdateInput,
@@ -667,6 +668,7 @@ export async function runDesktopMain(
     void shutdown().finally(() => process.exit(0));
   }
 
+  console.info("[open-design desktop] creating desktop runtime");
   desktop = await createDesktopRuntime({
     desktopAuthSecret,
     discoverUrl: options.discoverWebUrl ?? createWebDiscovery(runtime),
@@ -730,6 +732,8 @@ export async function runDesktopMain(
           return await activeDesktop.click(request.input as DesktopClickInput);
         case SIDECAR_MESSAGES.EXPORT_PDF:
           return await activeDesktop.exportPdf(request.input as DesktopExportPdfInput);
+        case SIDECAR_MESSAGES.EXPORT_ARTIFACT:
+          return await activeDesktop.exportArtifact(request.input as DesktopExportArtifactInput);
         case SIDECAR_MESSAGES.UPDATE:
           return await updater.handle((request.input as DesktopUpdateInput).action);
         case SIDECAR_MESSAGES.SHUTDOWN:
@@ -739,12 +743,6 @@ export async function runDesktopMain(
           return { accepted: true };
       }
     },
-  });
-
-  app.on("before-quit", (event) => {
-    if (shuttingDown) return;
-    event.preventDefault();
-    shutdownAndExit();
   });
 
   app.on("window-all-closed", () => {

@@ -94,6 +94,11 @@ const residualAllowedExactPaths = new Set([
   // runtime deps (puppeteer-core + a headless Chrome + ffmpeg) are provided by
   // the CI environment and never pulled into the daemon/web TS build or bundle.
   "scripts/bake-plugin-previews.mjs",
+  // CI workflow helper invoked directly by GitHub Actions before any TS
+  // transform step; the companion node:test file covers the manifest diff edge
+  // cases without adding a package script.
+  "scripts/plugin-previews-diff.mjs",
+  "scripts/plugin-previews-diff.test.mjs",
   "scripts/scaffold-html-ppt-skills.mjs",
   "scripts/sync-hyperframes-skill.mjs",
   "scripts/verify-media-models.mjs",
@@ -146,6 +151,16 @@ const residualAllowedPathPrefixes = [
   "mocks/lib/",
   "mocks/mock-agent.mjs",
   "mocks/scripts/",
+  // OD Clipper - a standalone Chrome MV3 extension subproject (not a pnpm
+  // workspace package, no build step). It ships hand-written browser-loadable
+  // JavaScript (service worker, content script, popup) the same way as the
+  // web notifications service worker; it must not be retypecast to TypeScript.
+  "clipper/",
+  // OD Figma Import - a standalone Figma plugin subproject (no build step,
+  // not a pnpm workspace package). Figma plugins load hand-written
+  // browser-loadable JavaScript (`code.js` sandbox + `ui.html`); same
+  // precedent as the clipper, and it must not be retypecast to TypeScript.
+  "figma-plugin/",
   "test-results/",
   "vendor/",
 ];
