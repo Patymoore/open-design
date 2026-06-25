@@ -11,9 +11,11 @@
 // guide the user there.
 //
 // We poll `/api/brands` while the backing project is a brand-extraction project
-// and stop the moment it reaches a terminal state. The prompt stays visible
-// until the user dismisses or acts on it; that manual action sets a
-// sessionStorage flag so a later visit does not nag again.
+// and stop when it reaches `ready` or the bounded polling window expires. A
+// failed extraction may be retried against the same brand id, so `failed` keeps
+// watching for a later ready transition. The prompt stays visible until the user
+// dismisses or acts on it; that manual action sets a sessionStorage flag so a
+// later visit does not nag again.
 
 import { useCallback, useEffect, useState } from 'react';
 import type { BrandStatus, ProjectMetadata } from '@open-design/contracts';
@@ -173,8 +175,6 @@ export function useBrandReadyPrompt(
             (blocked || failedWithAntiBotSignal ? 'Cloudflare' : 'timeout'),
         });
       }
-      if (status === 'failed') return; // terminal after surfacing recovery.
-
       if (polls >= MAX_POLLS) return;
       timer = window.setTimeout(() => void check(), POLL_INTERVAL_MS);
     };

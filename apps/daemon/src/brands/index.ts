@@ -611,21 +611,14 @@ export async function continueBrandExtraction(
   const designMd = readDesignMdInput(opts.brandsRoot, opts.id);
   const hasDesignMdSource = Boolean(designMd) || sourceUrl.startsWith('designmd://');
   const host = hostnameOf(sourceUrl);
-  let conversationId = meta.conversationId
-    ?? listConversations(opts.db, projectId)[0]?.id
-    ?? '';
   const now = Date.now();
-  if (!conversationId) {
-    conversationId = randomId();
-    insertConversation(opts.db, {
-      id: conversationId,
-      projectId,
-      title: null,
-      sessionMode: 'design',
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+  const conversationId = resolveBrandRetryConversationId({
+    db: opts.db,
+    projectId,
+    preferredConversationId: meta.conversationId ?? null,
+    randomId,
+    now,
+  });
 
   let nextMeta = patchMeta(opts.brandsRoot, opts.id, {
     status: 'extracting',
@@ -722,6 +715,34 @@ export async function continueBrandExtraction(
     ...(nextMeta.designSystemId ? { designSystemId: nextMeta.designSystemId } : {}),
     ...(detail.brand?.name ? { brandName: detail.brand.name } : {}),
   };
+}
+
+function resolveBrandRetryConversationId(input: {
+  db: Parameters<typeof insertProject>[0];
+  projectId: string;
+  preferredConversationId?: string | null;
+  randomId: () => string;
+  now: number;
+}): string {
+  const conversations = listConversations(input.db, input.projectId);
+  const preferredStillExists = input.preferredConversationId
+    ? conversations.some((conversation) => conversation.id === input.preferredConversationId)
+    : false;
+  const existingConversationId = preferredStillExists
+    ? input.preferredConversationId
+    : conversations[0]?.id;
+  if (existingConversationId) return existingConversationId;
+
+  const conversationId = input.randomId();
+  insertConversation(input.db, {
+    id: conversationId,
+    projectId: input.projectId,
+    title: null,
+    sessionMode: 'design',
+    createdAt: input.now,
+    updatedAt: input.now,
+  });
+  return conversationId;
 }
 
 export async function backfillBrandExtractionTranscriptForProject(input: {

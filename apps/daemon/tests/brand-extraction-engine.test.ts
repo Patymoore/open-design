@@ -7,7 +7,9 @@ import type { Brand } from '@open-design/contracts';
 
 import {
   closeDatabase,
+  deleteConversation,
   getProject,
+  listConversations,
   listMessages,
   listTabs,
   openDatabase,
@@ -711,6 +713,70 @@ describe('agent-driven brand extraction engine', () => {
     expect(systems.filter((system) => system.id === draftDesignSystemId)).toHaveLength(1);
     const messages = listMessages(db, result.conversationId);
     expect(messages[3]?.runStatus).toBe('succeeded');
+  });
+
+  it('continues a brand extraction with a fresh conversation when the recorded one was deleted', async () => {
+    const db = openDatabase(tempDir, { dataDir: tempDir });
+    let firstBackground: Promise<unknown> | null = null;
+    const result = await startOfflineBrandExtraction({
+      url: 'blocked.example',
+      brandsRoot,
+      projectsRoot,
+      userDesignSystemsRoot,
+      skillsRoot: SKILLS_ROOT,
+      db,
+      logoFallback: NO_LOGO_FALLBACK,
+      prefetch: async () => null,
+      onBackgroundExtraction: (settled) => {
+        firstBackground = settled;
+      },
+      transcriptAgent: { agentId: 'claude', agentName: 'Claude' },
+    });
+    if (!firstBackground) throw new Error('expected background extraction promise');
+    await firstBackground;
+
+    const draftDesignSystemId = readBrandDetail(brandsRoot, result.id)?.meta.designSystemId;
+    deleteConversation(db, result.conversationId);
+    expect(listConversations(db, result.projectId).some((conversation) => (
+      conversation.id === result.conversationId
+    ))).toBe(false);
+
+    const ids = ['retry-conversation', 'retry-user-message', 'retry-assistant-message'];
+    let idIndex = 0;
+    let retryBackground: Promise<unknown> | null = null;
+    const retry = await continueBrandExtraction({
+      id: result.id,
+      brandsRoot,
+      projectsRoot,
+      userDesignSystemsRoot,
+      skillsRoot: SKILLS_ROOT,
+      db,
+      randomId: () => ids[idIndex++] ?? `retry-extra-${idIndex}`,
+      logoFallback: NO_LOGO_FALLBACK,
+      imageryFallback: NO_IMAGERY_FALLBACK,
+      prefetch: async (url) => programmaticPrefetchResult(url),
+      onBackgroundExtraction: (settled) => {
+        retryBackground = settled;
+      },
+      transcriptAgent: { agentId: 'claude', agentName: 'Claude' },
+    });
+
+    expect(retry.projectId).toBe(result.projectId);
+    expect(retry.conversationId).toBe('retry-conversation');
+    expect(retry.conversationId).not.toBe(result.conversationId);
+    expect(retry.designSystemId).toBe(draftDesignSystemId);
+    expect(readBrandDetail(brandsRoot, result.id)?.meta.conversationId).toBe('retry-conversation');
+    const retryStartedMessages = listMessages(db, retry.conversationId);
+    expect(retryStartedMessages.map((message) => message.role)).toEqual(['user', 'assistant']);
+    expect(retryStartedMessages[1]?.runStatus).toBe('running');
+
+    if (!retryBackground) throw new Error('expected retry background extraction promise');
+    await retryBackground;
+
+    const completed = readBrandDetail(brandsRoot, result.id);
+    expect(completed?.meta.status).toBe('ready');
+    expect(completed?.meta.designSystemId).toBe(draftDesignSystemId);
+    expect(listMessages(db, retry.conversationId)[1]?.runStatus).toBe('succeeded');
   });
 
   // Regression for the "Whole Foods" P1: a brand that finalizes AFTER the stall

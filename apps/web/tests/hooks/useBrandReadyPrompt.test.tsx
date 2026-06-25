@@ -24,14 +24,24 @@ function mockBrandsResponse(brands: unknown[] = [
     },
   },
 ]): void {
-  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-    new Response(JSON.stringify({
-      brands,
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }),
-  );
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(brandResponse(brands));
+}
+
+function mockBrandsResponses(...responses: unknown[][]): void {
+  const fetchMock = vi.spyOn(globalThis, 'fetch');
+  responses.forEach((brands) => {
+    fetchMock.mockResolvedValueOnce(brandResponse(brands));
+  });
+  fetchMock.mockResolvedValue(brandResponse(responses.at(-1) ?? []));
+}
+
+function brandResponse(brands: unknown[]): Response {
+  return new Response(JSON.stringify({
+    brands,
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 afterEach(() => {
@@ -75,6 +85,56 @@ describe('useBrandReadyPrompt', () => {
       expect(result.current.status).toBe('failed');
     });
     expect(result.current.browserAssist).toBeNull();
+  });
+
+  it('keeps polling after a failed status so a same-brand retry can surface ready', async () => {
+    const realSetTimeout = window.setTimeout.bind(window);
+    vi.spyOn(window, 'setTimeout').mockImplementation(((handler: TimerHandler, timeout?: number) => {
+      if (timeout === 5000 && typeof handler === 'function') {
+        void Promise.resolve().then(() => handler());
+        return 1;
+      }
+      return realSetTimeout(handler, timeout);
+    }) as typeof window.setTimeout);
+    mockBrandsResponses(
+      [
+        {
+          meta: {
+            id: 'brand-1',
+            status: 'failed',
+            sourceUrl: 'https://www.economist.com/',
+            error: 'Brand extraction failed in the backing project.',
+          },
+          brand: null,
+        },
+      ],
+      [
+        {
+          meta: {
+            id: 'brand-1',
+            status: 'ready',
+            designSystemId: 'user:brand-1',
+          },
+          brand: {
+            name: 'Nexu',
+          },
+        },
+      ],
+    );
+
+    const { result } = renderHook(() => useBrandReadyPrompt(BRAND_METADATA));
+
+    await waitFor(() => {
+      expect(result.current.ready).toEqual({
+        designSystemId: 'user:brand-1',
+        brandName: 'Nexu',
+      });
+    });
+    expect(result.current.status).toBe('ready');
+    expect(result.current.prompt).toEqual({
+      designSystemId: 'user:brand-1',
+      brandName: 'Nexu',
+    });
   });
 
   it('surfaces browser assist for an anti-bot failed extraction', async () => {
