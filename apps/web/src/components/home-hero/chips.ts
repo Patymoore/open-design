@@ -215,6 +215,8 @@ export const HOME_HERO_CHIPS: ReadonlyArray<HomeHeroChip> = [
       projectKind: 'image',
       projectMetadata: {
         kind: 'image',
+        intent: 'social-card',
+        artifactType: 'social-card',
       },
     },
   },
@@ -231,6 +233,8 @@ export const HOME_HERO_CHIPS: ReadonlyArray<HomeHeroChip> = [
       projectKind: 'image',
       projectMetadata: {
         kind: 'image',
+        intent: 'diagram',
+        artifactType: 'diagram',
       },
     },
   },

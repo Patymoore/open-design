@@ -2314,6 +2314,272 @@
   line-height: 1.2;
 }
 
+.home-hero__local-preset .home-hero__plugin-preset-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  white-space: normal;
+}
+
+.home-hero__local-preset .home-hero__plugin-preset-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-hero__local-preset .home-hero__plugin-preset-title span:first-child {
+  color: var(--text-strong);
+}
+
+.home-hero__local-preset .home-hero__plugin-preset-title span:last-child {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.home-hero__local-preset-preview {
+  background:
+    radial-gradient(circle at 12% 18%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 34%),
+    linear-gradient(180deg, var(--bg-panel), var(--bg-subtle));
+}
+
+.home-hero__local-preview {
+  position: absolute;
+  inset: 0;
+  display: block;
+  color: var(--text-muted);
+}
+
+.local-preview__carousel {
+  position: absolute;
+  inset: 16px 14px 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.local-preview__carousel > span {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 7px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--bg-panel) 90%, var(--accent) 10%), var(--bg-panel) 54%),
+    var(--bg-panel);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--shadow-color, #000) 8%, transparent);
+}
+
+.local-preview__carousel strong,
+.local-preview__linkedin strong,
+.local-preview__story strong,
+.local-preview__wechat-wide strong,
+.local-preview__wechat-square strong {
+  color: var(--text-strong);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.local-preview__carousel i,
+.local-preview__linkedin span,
+.local-preview__story span,
+.local-preview__wechat-wide span,
+.local-preview__wechat-square span {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.34;
+}
+
+.local-preview__carousel i:first-of-type {
+  width: 74%;
+  background: var(--accent);
+  opacity: 0.86;
+}
+
+.local-preview__carousel i:last-of-type {
+  width: 48%;
+}
+
+.local-preview__carousel.is-swiss > span {
+  border-radius: 2px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 82%, black), color-mix(in srgb, var(--accent) 82%, white) 34%, transparent 34%),
+    var(--bg-panel);
+}
+
+.local-preview__wechat-wide,
+.local-preview__wechat-square,
+.local-preview__linkedin,
+.local-preview__story {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: var(--bg-panel);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow-color, #000) 10%, transparent);
+}
+
+.local-preview__wechat-wide {
+  left: 18px;
+  right: 18px;
+  top: 22px;
+  height: 58px;
+  border-radius: 8px;
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--accent) 20%, transparent) 0 46%, transparent 46%),
+    var(--bg-panel);
+}
+
+.local-preview__wechat-wide span {
+  width: 64%;
+  background: var(--accent);
+  opacity: 0.82;
+}
+
+.local-preview__wechat-square {
+  left: 84px;
+  bottom: 14px;
+  width: 76px;
+  height: 76px;
+  border-radius: 9px;
+}
+
+.local-preview__wechat-square span {
+  width: 46%;
+}
+
+.local-preview__thread {
+  position: absolute;
+  inset: 20px 18px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.local-preview__thread span {
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 38%),
+    var(--bg-panel);
+}
+
+.local-preview__linkedin {
+  inset: 24px 30px 20px;
+  border-radius: 8px;
+}
+
+.local-preview__linkedin strong {
+  font-size: 34px;
+  color: var(--accent);
+}
+
+.local-preview__linkedin span {
+  width: 76%;
+}
+
+.local-preview__linkedin span:last-child {
+  width: 48%;
+}
+
+.local-preview__story {
+  top: 14px;
+  bottom: 14px;
+  left: 86px;
+  width: 76px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 18%, transparent), transparent 40%),
+    var(--bg-panel);
+}
+
+.local-preview__story strong {
+  color: var(--accent);
+  font-size: 24px;
+}
+
+.local-preview__story span {
+  width: 78%;
+}
+
+.local-preview__story span:last-child {
+  width: 46%;
+}
+
+.local-preview__diagram {
+  width: 100%;
+  height: 100%;
+  display: block;
+  color: var(--text-muted);
+}
+
+.local-preview__diagram .diagram-bg {
+  fill: color-mix(in srgb, var(--bg-panel) 92%, var(--accent) 8%);
+}
+
+.local-preview__diagram .diagram-node {
+  fill: var(--bg-panel);
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+
+.local-preview__diagram .diagram-node-accent {
+  stroke: var(--accent);
+}
+
+.local-preview__diagram .diagram-arrow,
+.local-preview__diagram .diagram-loop,
+.local-preview__diagram .diagram-lane {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.local-preview__diagram .diagram-lane {
+  stroke-dasharray: 4 5;
+  opacity: 0.46;
+}
+
+.local-preview__diagram .diagram-accent {
+  fill: var(--accent);
+}
+
+.local-preview__diagram.is-dark .diagram-bg {
+  fill: #111317;
+}
+
+.local-preview__diagram.is-dark {
+  color: #8ee6c2;
+}
+
+.local-preview__diagram.is-dark .diagram-node {
+  fill: #171b22;
+}
+
+.local-preview__diagram.is-blueprint .diagram-bg {
+  fill: #102746;
+}
+
+.local-preview__diagram.is-blueprint {
+  color: #8bd7ff;
+}
+
+.local-preview__diagram.is-blueprint .diagram-node {
+  fill: #123257;
+}
+
 /* ------------------------------------------------------------
    Stage B of plugin-driven-flow-plan: Home intent rail.
    Two flex sub-groups ("create" outputs vs. lower starter shortcuts)

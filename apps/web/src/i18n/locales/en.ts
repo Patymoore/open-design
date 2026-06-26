@@ -565,6 +565,7 @@ export const en: Dict = {
   'homeHero.run': 'Run',
   'homeHero.typeSomethingToRun': 'Type something to run',
   'homeHero.promptExamples': 'Example prompts',
+  'homeHero.templateExamples': 'Template examples',
   'homeHero.footer.designSystem': 'Style',
   'homeHero.footer.autoDesignSystem': 'Auto',
   'homeHero.footer.autoDesignSystemSummary': 'Automatically matches the best design system and visual style for the current prompt.',

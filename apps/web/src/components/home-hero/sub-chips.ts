@@ -12,6 +12,7 @@
 // scene; it does NOT bind a plugin or stamp an active badge.
 
 import type { InstalledPluginRecord } from '@open-design/contracts';
+import type { Locale } from '../../i18n/types';
 import type { IconName } from '../Icon';
 import {
   buildSubcategoryCatalog,
@@ -90,6 +91,29 @@ const LOCAL_SUBCHIPS: Record<'social-card' | 'diagram', HomeHeroSubChip[]> = {
   ],
 };
 
+const LOCAL_SUBCHIP_LABELS_ZH: Record<string, string> = {
+  'x-twitter-card': 'Twitter / X',
+  'threads-card': 'Threads',
+  'xiaohongshu-carousel': '小红书图文',
+  'wechat-cover': '公众号封面',
+  'linkedin-card': 'LinkedIn',
+  'instagram-story': 'Instagram Story',
+  'architecture-diagram': '架构图',
+  'workflow-diagram': '流程图',
+  'rag-agent-diagram': 'RAG / Agent',
+  'uml-diagram': 'UML',
+  'data-flow-diagram': '数据流',
+  'comparison-diagram': '对比图',
+};
+
+function localizeLocalSubChip(sub: HomeHeroSubChip, locale: Locale | undefined): HomeHeroSubChip {
+  if (locale !== 'zh-CN' && locale !== 'zh-TW') return sub;
+  return {
+    ...sub,
+    label: LOCAL_SUBCHIP_LABELS_ZH[sub.slug] ?? sub.label,
+  };
+}
+
 // Sub-types for a first-level chip, drawn from the Community facet catalog so
 // the labels, set, AND order match the Community section exactly. The display
 // order is whatever `SUBCATEGORIES` (in `plugins-home/facets.ts`) declares for
@@ -99,9 +123,12 @@ const LOCAL_SUBCHIPS: Record<'social-card' | 'diagram', HomeHeroSubChip[]> = {
 export function subChipsForChip(
   chipId: string | null,
   plugins: InstalledPluginRecord[],
+  locale?: Locale,
 ): HomeHeroSubChip[] {
   if (!isSubChipParent(chipId)) return [];
-  if (chipId === 'social-card' || chipId === 'diagram') return LOCAL_SUBCHIPS[chipId];
+  if (chipId === 'social-card' || chipId === 'diagram') {
+    return LOCAL_SUBCHIPS[chipId].map((sub) => localizeLocalSubChip(sub, locale));
+  }
   const catalog = buildSubcategoryCatalog(plugins);
   const options: FacetOption[] = catalog[chipId] ?? [];
   return options

@@ -565,6 +565,7 @@ export const zhTW: Dict = {
   'homeHero.run': '執行',
   'homeHero.typeSomethingToRun': '輸入內容以執行',
   'homeHero.promptExamples': '範例提示詞',
+  'homeHero.templateExamples': '模板範例',
   'homeHero.footer.designSystem': '風格',
   'homeHero.footer.autoDesignSystem': '自動',
   'homeHero.footer.autoDesignSystemSummary': '根據目前 Prompt 自動匹配合適的設計系統與視覺風格。',

@@ -565,6 +565,7 @@ export const zhCN: Dict = {
   'homeHero.run': '运行',
   'homeHero.typeSomethingToRun': '输入内容后运行',
   'homeHero.promptExamples': '示例提示词',
+  'homeHero.templateExamples': '模板示例',
   'homeHero.footer.designSystem': '风格',
   'homeHero.footer.autoDesignSystem': '自动',
   'homeHero.footer.autoDesignSystemSummary': '根据当前 Prompt 自动匹配合适的设计体系和视觉风格。',

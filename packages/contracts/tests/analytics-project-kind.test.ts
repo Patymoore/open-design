@@ -72,6 +72,15 @@ describe('projectKindToTracking', () => {
     expect(projectKindToTracking('deck', null, { intent: 'document' })).toBe('slide_deck');
   });
 
+  it('splits social cards and diagrams out of generic image via intent', () => {
+    expect(projectKindToTracking('image', null, { intent: 'social-card' })).toBe('social_card');
+    expect(projectKindToTracking('image', null, { intent: 'diagram' })).toBe('diagram');
+    expect(projectKindToTracking('image', null, {})).toBe('image');
+    // The discriminators are scoped to image projects.
+    expect(projectKindToTracking('other', null, { intent: 'social-card' })).toBe('other');
+    expect(projectKindToTracking('deck', null, { intent: 'diagram' })).toBe('slide_deck');
+  });
+
   it('derives the fine kind straight from a metadata object', () => {
     expect(
       projectKindFromMetadataToTracking({ kind: 'prototype', fidelity: 'wireframe' }),
@@ -86,6 +95,10 @@ describe('projectKindToTracking', () => {
       projectKindFromMetadataToTracking({ kind: 'prototype', intent: 'live-artifact' }),
     ).toBe('live_artifact');
     expect(projectKindFromMetadataToTracking({ kind: 'other', intent: 'document' })).toBe('document');
+    expect(projectKindFromMetadataToTracking({ kind: 'image', intent: 'social-card' })).toBe(
+      'social_card',
+    );
+    expect(projectKindFromMetadataToTracking({ kind: 'image', intent: 'diagram' })).toBe('diagram');
     expect(projectKindFromMetadataToTracking({ kind: 'video', videoModel: 'hyperframes-html' })).toBe(
       'hyperframes',
     );

@@ -962,6 +962,7 @@ export interface Dict {
   'homeHero.run': string;
   'homeHero.typeSomethingToRun': string;
   'homeHero.promptExamples': string;
+  'homeHero.templateExamples': string;
   'homeHero.footer.designSystem': string;
   'homeHero.footer.autoDesignSystem': string;
   'homeHero.footer.autoDesignSystemSummary': string;
