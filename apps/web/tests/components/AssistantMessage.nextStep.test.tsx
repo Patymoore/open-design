@@ -2,10 +2,9 @@
 
 /**
  * Gate coverage for the "next step" affordance under the last assistant
- * message. The card anchors on a deliverable: it appears only once the turn
- * (or the project) has a previewable HTML artifact to take a next step on. A
- * pure clarifying-questions / summary turn that produced no HTML must not
- * surface the card.
+ * message. The card appears after the latest settled assistant turn whenever
+ * at least one follow-up action is wired, even if the turn was a simple answer
+ * with no previewable artifact.
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -116,7 +115,33 @@ describe('AssistantMessage next-step affordance', () => {
     expect(onShareToOpenDesign).toHaveBeenCalledTimes(1);
   });
 
-  it('does not render the card when the turn produced no previewable HTML artifact', () => {
+  it('renders the card after a simple answer with no previewable artifact', () => {
+    render(
+      <AssistantMessage
+        message={baseMessage({ producedFiles: [] })}
+        streaming={false}
+        projectId="proj-1"
+        isLast
+        {...handlers()}
+      />,
+    );
+    expect(screen.getByTestId('next-step-actions')).toBeTruthy();
+    expect(screen.getByText(AUTO_MATCH_TITLE)).toBeTruthy();
+  });
+
+  it('renders the card for a simple answer even without a project id', () => {
+    render(
+      <AssistantMessage
+        message={baseMessage({ producedFiles: [] })}
+        streaming={false}
+        isLast
+        {...handlers()}
+      />,
+    );
+    expect(screen.getByTestId('next-step-actions')).toBeTruthy();
+  });
+
+  it('shows generated non-HTML files in the per-turn file list', () => {
     render(
       <AssistantMessage
         message={baseMessage({ producedFiles: [producedFile('notes.md', 'text')] })}
@@ -126,7 +151,8 @@ describe('AssistantMessage next-step affordance', () => {
         {...handlers()}
       />,
     );
-    expect(screen.queryByTestId('next-step-actions')).toBeNull();
+    expect(screen.getByTestId('file-ops-summary')).toBeTruthy();
+    expect(screen.getByTestId('file-ops-row-notes.md')).toBeTruthy();
   });
 
   it('renders once the project has a previewable HTML artifact from an earlier turn', () => {
@@ -154,5 +180,31 @@ describe('AssistantMessage next-step affordance', () => {
       />,
     );
     expect(screen.queryByTestId('next-step-actions')).toBeNull();
+  });
+
+  it('renders after a failed turn when a follow-up action is available', () => {
+    render(
+      <AssistantMessage
+        message={baseMessage({ producedFiles: [], runStatus: 'failed' })}
+        streaming={false}
+        projectId="proj-1"
+        isLast
+        {...handlers()}
+      />,
+    );
+    expect(screen.getByTestId('next-step-actions')).toBeTruthy();
+  });
+
+  it('renders after a canceled turn when a follow-up action is available', () => {
+    render(
+      <AssistantMessage
+        message={baseMessage({ producedFiles: [], runStatus: 'canceled' })}
+        streaming={false}
+        projectId="proj-1"
+        isLast
+        {...handlers()}
+      />,
+    );
+    expect(screen.getByTestId('next-step-actions')).toBeTruthy();
   });
 });

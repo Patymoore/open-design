@@ -59,6 +59,28 @@ vi.mock('../../src/components/workspace/TerminalViewer', () => ({
   ),
 }));
 
+vi.mock('@excalidraw/excalidraw', async () => {
+  const React = await import('react');
+  return {
+    Excalidraw: (props: Record<string, any>) => {
+      React.useEffect(() => {
+        props.excalidrawAPI?.({
+          getSceneElementsIncludingDeleted: () => [{ id: 'workspace-element', type: 'freedraw', isDeleted: false }],
+          getAppState: () => ({ viewBackgroundColor: '#ffffff' }),
+          getFiles: () => ({}),
+        });
+      }, [props]);
+      return React.createElement(
+        'div',
+        { 'data-testid': 'excalidraw' },
+        React.createElement('canvas'),
+        props.renderTopRightUI?.(false, {}),
+      );
+    },
+    convertToExcalidrawElements: vi.fn((elements: unknown[]) => elements),
+  };
+});
+
 // Records the `folders` prop DesignFilesPanel receives on EVERY render (still
 // renders the real component). Lets a test observe the first render after a
 // project switch — the pre-paint frame RTL's post-rerender DOM assertion can't

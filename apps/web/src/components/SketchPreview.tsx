@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types';
+import type { ExcalidrawElement, NonDeleted } from '@excalidraw/excalidraw/element/types';
 import { fetchProjectFileText } from '../providers/registry';
 import type { ProjectFile } from '../types';
 import {
@@ -7,13 +9,20 @@ import {
   computeSketchBounds,
   isSketchJsonFileName,
   normalizeSketchText,
-  parseSketchDocument,
+  parseSketchWorkspaceDocument,
+  sketchSceneHasContent,
+  type ExcalidrawSketchScene,
   type SketchItem,
 } from './sketch-model';
 
 const DEFAULT_WIDTH = 320;
 const DEFAULT_HEIGHT = 200;
 const VIEWBOX_PADDING = 24;
+
+interface SketchPreviewState {
+  items: SketchItem[];
+  svgMarkup: string | null;
+}
 
 export function computeSketchPreviewGeometry(items: SketchItem[]) {
   const { minX, minY, maxX, maxY } = computeSketchBounds(items);
@@ -41,15 +50,22 @@ export function SketchPreview({
   file: Pick<ProjectFile, 'kind' | 'name' | 'mtime'>;
   className?: string;
 }) {
-  const [items, setItems] = useState<SketchItem[] | null>(null);
+  const [preview, setPreview] = useState<SketchPreviewState | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setItems(null);
+    setPreview(null);
     if (!isRenderableSketchJson(file)) return;
-    void fetchProjectFileText(projectId, file.name, { cache: 'no-store' }).then((text) => {
+    void fetchProjectFileText(projectId, file.name, { cache: 'no-store' }).then(async (text) => {
       if (cancelled) return;
-      setItems(parseSketchDocument(text));
+      const parsed = parseSketchWorkspaceDocument(text);
+      if (sketchSceneHasContent(parsed.scene)) {
+        const svgMarkup = await renderExcalidrawScenePreview(parsed.scene);
+        if (cancelled) return;
+        setPreview({ items: [], svgMarkup });
+        return;
+      }
+      setPreview({ items: parsed.items, svgMarkup: null });
     });
     return () => {
       cancelled = true;
@@ -57,57 +73,89 @@ export function SketchPreview({
   }, [file, projectId]);
 
   const geometry = useMemo(() => {
-    const resolvedItems = items ?? [];
+    const resolvedItems = preview?.items ?? [];
     return computeSketchPreviewGeometry(resolvedItems);
-  }, [items]);
+  }, [preview]);
 
   if (!isRenderableSketchJson(file)) return null;
   return (
     <div
-      className={`sketch-preview${items === null ? ' loading' : ''}${className ? ` ${className}` : ''}`}
+      className={`sketch-preview${preview === null ? ' loading' : ''}${className ? ` ${className}` : ''}`}
       data-testid="sketch-preview-svg"
     >
-      <svg
-        viewBox={`${geometry.viewBoxX} ${geometry.viewBoxY} ${geometry.viewBoxWidth} ${geometry.viewBoxHeight}`}
-        preserveAspectRatio="xMidYMid meet"
-        width={DEFAULT_WIDTH}
-        height={DEFAULT_HEIGHT}
-        role="img"
-        aria-label="Sketch preview"
-      >
-        <defs>
-          <pattern id="sketch-preview-grid" width="16" height="16" patternUnits="userSpaceOnUse">
-            <circle cx="8" cy="8" r="1" fill="#d7d4ce" />
-          </pattern>
-        </defs>
-        <rect
-          x={geometry.viewBoxX}
-          y={geometry.viewBoxY}
-          width={geometry.viewBoxWidth}
-          height={geometry.viewBoxHeight}
-          fill="#f7f5f1"
+      {preview?.svgMarkup ? (
+        <div
+          className="sketch-preview-svg-inner"
+          role="img"
+          aria-label="Sketch preview"
+          dangerouslySetInnerHTML={{ __html: preview.svgMarkup }}
         />
-        <rect
-          x={geometry.viewBoxX}
-          y={geometry.viewBoxY}
-          width={geometry.viewBoxWidth}
-          height={geometry.viewBoxHeight}
-          fill="url(#sketch-preview-grid)"
-        />
-        {geometry.items.length > 0 ? (
-          geometry.items.map((item, index) => (
-            <Fragment key={`${item.kind}-${index}`}>
-              {renderSketchSvgItem(item, index)}
-            </Fragment>
-          ))
-        ) : (
-          <g className="sketch-preview-empty-mark">
-            <path d="M80 80h160M80 120h120" />
-          </g>
-        )}
-      </svg>
+      ) : (
+        <svg
+          viewBox={`${geometry.viewBoxX} ${geometry.viewBoxY} ${geometry.viewBoxWidth} ${geometry.viewBoxHeight}`}
+          preserveAspectRatio="xMidYMid meet"
+          width={DEFAULT_WIDTH}
+          height={DEFAULT_HEIGHT}
+          role="img"
+          aria-label="Sketch preview"
+        >
+          <defs>
+            <pattern id="sketch-preview-grid" width="16" height="16" patternUnits="userSpaceOnUse">
+              <circle cx="8" cy="8" r="1" fill="#d7d4ce" />
+            </pattern>
+          </defs>
+          <rect
+            x={geometry.viewBoxX}
+            y={geometry.viewBoxY}
+            width={geometry.viewBoxWidth}
+            height={geometry.viewBoxHeight}
+            fill="#f7f5f1"
+          />
+          <rect
+            x={geometry.viewBoxX}
+            y={geometry.viewBoxY}
+            width={geometry.viewBoxWidth}
+            height={geometry.viewBoxHeight}
+            fill="url(#sketch-preview-grid)"
+          />
+          {geometry.items.length > 0 ? (
+            geometry.items.map((item, index) => (
+              <Fragment key={`${item.kind}-${index}`}>
+                {renderSketchSvgItem(item, index)}
+              </Fragment>
+            ))
+          ) : (
+            <g className="sketch-preview-empty-mark">
+              <path d="M80 80h160M80 120h120" />
+            </g>
+          )}
+        </svg>
+      )}
     </div>
   );
+}
+
+async function renderExcalidrawScenePreview(scene: ExcalidrawSketchScene): Promise<string | null> {
+  try {
+    const { exportToSvg, restore } = await import('@excalidraw/excalidraw');
+    const restored = restore({
+      elements: scene.elements as readonly ExcalidrawElement[],
+      appState: scene.appState as Partial<AppState> | null,
+      files: scene.files as BinaryFiles,
+    }, null, null);
+    const elements = restored.elements.filter((element) => !element.isDeleted) as NonDeleted<ExcalidrawElement>[];
+    if (elements.length === 0) return null;
+    const svg = await exportToSvg({
+      elements,
+      appState: restored.appState,
+      files: restored.files,
+      exportPadding: 16,
+      skipInliningFonts: true,
+    });
+    return svg.outerHTML;
+  } catch {
+    return null;
+  }
 }
 
 function renderSketchSvgItem(item: SketchItem, index: number) {

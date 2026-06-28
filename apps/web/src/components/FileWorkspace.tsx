@@ -108,9 +108,11 @@ import { QuestionsPanel } from './QuestionsPanel';
 import { QuickSwitcher } from './QuickSwitcher';
 import { SketchEditor } from './SketchEditor';
 import {
-  buildSketchDocument,
+  emptySketchScene,
   isSketchJsonFileName,
   parseSketchWorkspaceDocument,
+  serializeExcalidrawSketchScene,
+  type ExcalidrawSketchScene,
   type SketchItem,
 } from './sketch-model';
 import { AnimatePresence } from 'motion/react';
@@ -257,6 +259,7 @@ interface SketchState {
   rawItems: unknown[];
   discardRawItemsOnSave: boolean;
   items: SketchItem[];
+  scene: ExcalidrawSketchScene;
   dirty: boolean;
   persisted: boolean;
   loaded: boolean;
@@ -1369,6 +1372,7 @@ export function FileWorkspace({
         rawItems: [],
         discardRawItemsOnSave: false,
         items: [],
+        scene: emptySketchScene(name),
         dirty: false,
         persisted: false,
         loaded: true,
@@ -1380,7 +1384,7 @@ export function FileWorkspace({
 
   async function createMarkdownDocument() {
     const target = nextMarkdownDocumentPath(files, uploadDir);
-    const file = await writeProjectTextFile(projectId, target, initialMarkdownDocument(target));
+    const file = await writeProjectTextFile(projectId, target, initialMarkdownDocument(target, projectKind, t));
     if (!file) return;
     await onRefreshFiles();
     await refreshProjectFolders();
@@ -1404,6 +1408,7 @@ export function FileWorkspace({
           rawItems: doc.rawItems,
           discardRawItemsOnSave: false,
           items: doc.items,
+          scene: doc.scene,
           dirty: false,
           persisted: true,
           loaded: true,
@@ -1416,7 +1421,11 @@ export function FileWorkspace({
     };
   }, [activeTab, projectId, sketches]);
 
-  function setSketchItems(name: string, items: SketchItem[]) {
+  function setSketchScene(
+    name: string,
+    scene: ExcalidrawSketchScene,
+    options: { markDirty?: boolean; discardLegacyItems?: boolean } = {},
+  ) {
     setSketches((curr) => ({
       ...curr,
       [name]: {
@@ -1424,12 +1433,16 @@ export function FileWorkspace({
           version: 1,
           rawItems: [],
           discardRawItemsOnSave: false,
+          items: [],
+          scene: emptySketchScene(name),
           persisted: false,
           loaded: true,
           saving: false,
         }),
-        items,
-        dirty: true,
+        scene,
+        items: options.discardLegacyItems ? [] : (curr[name]?.items ?? []),
+        dirty: options.markDirty === false ? (curr[name]?.dirty ?? false) : true,
+        discardRawItemsOnSave: options.discardLegacyItems ?? curr[name]?.discardRawItemsOnSave ?? false,
       } as SketchState,
     }));
   }
@@ -1442,28 +1455,28 @@ export function FileWorkspace({
           version: 1,
           rawItems: [],
           discardRawItemsOnSave: false,
+          items: [],
+          scene: emptySketchScene(name),
           persisted: false,
           loaded: true,
           saving: false,
         }),
         items: [],
+        scene: emptySketchScene(name),
         dirty: true,
         discardRawItemsOnSave: true,
       } as SketchState,
     }));
   }
 
-  async function saveSketch(name: string) {
+  async function saveSketch(name: string, sceneOverride?: ExcalidrawSketchScene) {
     const entry = sketches[name];
     if (!entry) return;
     setSketches((curr) => ({ ...curr, [name]: { ...curr[name]!, saving: true } }));
-    const doc = buildSketchDocument(
-      entry.version,
-      entry.discardRawItemsOnSave ? [] : entry.rawItems,
-      entry.items,
-    );
+    const scene = sceneOverride ?? entry.scene;
+    const text = serializeExcalidrawSketchScene(scene, name);
     const startedAt = Date.now();
-    const file = await writeProjectTextFile(projectId, name, JSON.stringify(doc, null, 2));
+    const file = await writeProjectTextFile(projectId, name, text);
     const elapsed = Date.now() - startedAt;
     // Ensures saving UI shows so the button does not flicker
     if (elapsed < 500) await new Promise((resolve) => setTimeout(resolve, 500 - elapsed));
@@ -1472,8 +1485,10 @@ export function FileWorkspace({
         ...curr,
         [name]: {
           ...curr[name]!,
-          version: doc.version,
-          rawItems: doc.items.slice(),
+          version: 2,
+          rawItems: [],
+          items: [],
+          scene,
           discardRawItemsOnSave: false,
           dirty: false,
           persisted: true,
@@ -1822,6 +1837,9 @@ export function FileWorkspace({
     // Browser is owned by this branch's DesignBrowserPanel: spin up a browser
     // tab synchronously (no daemon round-trip) and let the launcher close.
     createBrowser: () => openBrowserTab(),
+    createSketch: () => startNewSketch(),
+    createDocument: () => void createMarkdownDocument(),
+    uploadDesignFiles: () => fileInputRef.current?.click(),
     // Terminal needs only the project id — spawn the PTY here and hand the
     // resulting session id back so the launcher opens a terminal:<id> tab.
     // Surface a toast when the daemon can't start one (e.g. node-pty not
@@ -2275,13 +2293,14 @@ export function FileWorkspace({
           activeSketch.loaded ? (
             <SketchEditor
               fileName={activeFile.name}
-              items={activeSketch.items}
+              scene={activeSketch.scene}
+              legacyItems={activeSketch.items}
               hasPreservedRawItems={
                 !activeSketch.discardRawItemsOnSave && activeSketch.rawItems.length > activeSketch.items.length
               }
-              onItemsChange={(items) => setSketchItems(activeFile.name, items)}
+              onSceneChange={(scene, options) => setSketchScene(activeFile.name, scene, options)}
               onClear={() => clearSketch(activeFile.name)}
-              onSave={() => saveSketch(activeFile.name)}
+              onSave={(scene) => saveSketch(activeFile.name, scene)}
               saving={activeSketch.saving}
               dirty={activeSketch.dirty || !activeSketch.persisted}
               onCancel={() => closeTab(activeFile.name)}
@@ -2327,6 +2346,7 @@ export function FileWorkspace({
             projectId={projectId}
             projectKind={projectKind}
             file={activeFile}
+            projectFiles={visibleFiles}
             filesRefreshKey={filesRefreshKey}
             isDeck={isDeck}
             streaming={streaming}
@@ -4313,28 +4333,69 @@ function nextMarkdownDocumentPath(files: ProjectFile[], dir: string): string {
   return joinProjectFilePath(dir, `document-${Date.now()}.md`);
 }
 
-function initialMarkdownDocument(path: string): string {
+function initialMarkdownDocument(
+  path: string,
+  projectKind: TrackingProjectKind,
+  t: TranslateFn,
+): string {
   const title = normalizeProjectFilePath(path)
     .split('/')
     .pop()
     ?.replace(/\.mdx?$/i, '')
     .replace(/[-_]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Document';
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || t('designFiles.documentTemplate.titleFallback');
   return `# ${title}
 
-## Goal
+## ${t('designFiles.documentTemplate.goalHeading')}
 
-Describe what this document should help Open Design generate next.
+${t('designFiles.documentTemplate.goalBody')}
 
-## Notes
+## ${t('designFiles.documentTemplate.capabilitiesHeading')}
 
-- Add requirements, outline, references, or open questions here.
-- Use images with Markdown syntax such as \`![caption](image.png)\`; pasted images are saved into Design Files.
+- ${t('designFiles.documentTemplate.capabilityMarkdown')}
+- ${t('designFiles.documentTemplate.capabilityAgent')}
+- ${t('designFiles.documentTemplate.capabilityImages')}
+- ${t('designFiles.documentTemplate.capabilityReferences')}
 
-## Next step
+## ${t('designFiles.documentTemplate.scenarioHeading')}
 
-Review and edit this document, then ask Open Design to generate from it.
+${t(documentTemplateScenarioKey(projectKind))}
+
+## ${t('designFiles.documentTemplate.nextHeading')}
+
+${t('designFiles.documentTemplate.nextBody')}
 `;
+}
+
+function documentTemplateScenarioKey(projectKind: TrackingProjectKind): keyof Dict {
+  switch (projectKind) {
+    case 'prototype':
+      return 'designFiles.documentTemplate.scenario.prototype';
+    case 'wireframe':
+      return 'designFiles.documentTemplate.scenario.wireframe';
+    case 'mobile':
+      return 'designFiles.documentTemplate.scenario.mobile';
+    case 'slide_deck':
+      return 'designFiles.documentTemplate.scenario.slideDeck';
+    case 'document':
+      return 'designFiles.documentTemplate.scenario.document';
+    case 'image':
+      return 'designFiles.documentTemplate.scenario.image';
+    case 'video':
+      return 'designFiles.documentTemplate.scenario.video';
+    case 'hyperframes':
+      return 'designFiles.documentTemplate.scenario.hyperframes';
+    case 'audio':
+      return 'designFiles.documentTemplate.scenario.audio';
+    case 'live_artifact':
+      return 'designFiles.documentTemplate.scenario.liveArtifact';
+    case 'brand':
+    case 'design_system':
+      return 'designFiles.documentTemplate.scenario.designSystem';
+    case 'template':
+    default:
+      return 'designFiles.documentTemplate.scenario.default';
+  }
 }
 
 function designSystemBasename(path: string): string {

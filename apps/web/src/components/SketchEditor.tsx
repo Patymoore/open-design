@@ -1,31 +1,41 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Button,
-  Dialog,
-  DialogBody,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  Input,
-} from '@open-design/components';
-import { useT } from '../i18n';
+  Excalidraw,
+  convertToExcalidrawElements,
+} from '@excalidraw/excalidraw';
+import type {
+  AppState,
+  BinaryFiles,
+  ExcalidrawInitialDataState,
+  ExcalidrawImperativeAPI,
+  ExcalidrawProps,
+} from '@excalidraw/excalidraw/types';
+import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types';
+import { Button } from '@open-design/components';
+import { useI18n, type Locale } from '../i18n';
 import { Icon } from './Icon';
 import { readDefaultSketchToolColor } from './sketch-colors';
-import type { SketchItem } from './sketch-model';
+import {
+  emptySketchScene,
+  sketchSceneHasContent,
+  type ExcalidrawSketchScene,
+  type SketchItem,
+} from './sketch-model';
 
 const SAVED_VISIBLE_MS = 2000;
 
-export type Tool = 'select' | 'pen' | 'text' | 'rect' | 'arrow' | 'eraser';
+interface SketchSceneChangeOptions {
+  markDirty?: boolean;
+  discardLegacyItems?: boolean;
+}
 
 interface Props {
-  // Controlled items — the parent owns the strokes so switching to a different
-  // tab and back doesn't lose the in-progress sketch. The editor only reports
-  // changes via onItemsChange.
-  items: SketchItem[];
+  scene: ExcalidrawSketchScene;
+  legacyItems?: SketchItem[];
   hasPreservedRawItems?: boolean;
-  onItemsChange: (items: SketchItem[]) => void;
+  onSceneChange: (scene: ExcalidrawSketchScene, options?: SketchSceneChangeOptions) => void;
   onClear?: () => void;
-  onSave: () => Promise<boolean | void> | boolean | void;
+  onSave: (scene?: ExcalidrawSketchScene) => Promise<boolean | void> | boolean | void;
   onCancel?: () => void;
   saving?: boolean;
   dirty?: boolean;
@@ -33,9 +43,10 @@ interface Props {
 }
 
 export function SketchEditor({
-  items,
+  scene,
+  legacyItems = [],
   hasPreservedRawItems = false,
-  onItemsChange,
+  onSceneChange,
   onClear,
   onSave,
   onCancel,
@@ -43,17 +54,28 @@ export function SketchEditor({
   dirty = false,
   fileName,
 }: Props) {
-  const t = useT();
-  const textModalTitleId = useId();
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [tool, setTool] = useState<Tool>('pen');
-  const [color, setColor] = useState(() => readDefaultSketchToolColor());
-  const [size, setSize] = useState(2);
-  const drawingRef = useRef<SketchItem | null>(null);
-  const [, force] = useState(0);
+  const { t, locale } = useI18n();
+  const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const firstProgrammaticChangeRef = useRef(true);
+  const [resetNonce, setResetNonce] = useState(0);
   const [showSaved, setShowSaved] = useState(false);
+  const [theme, setTheme] = useState(readExcalidrawTheme);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    firstProgrammaticChangeRef.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      firstProgrammaticChangeRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [fileName, resetNonce]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => setTheme(readExcalidrawTheme()));
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     return () => clearTimeout(savedTimerRef.current);
@@ -66,158 +88,59 @@ export function SketchEditor({
     }
   }, [dirty]);
 
-  // Text-tool modal. Replaces window.prompt() because Electron 28+
-  // disables that API by default and silently returns null, making
-  // the text tool a no-op in the desktop app. Same root cause as
-  // issue #723 (FileViewer's Save-as-template flow).
-  const [textModalOpen, setTextModalOpen] = useState(false);
-  const [textModalValue, setTextModalValue] = useState('');
-  const textAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const initialData = useMemo<ExcalidrawInitialDataState>(() => {
+    const convertedLegacyElements = legacyItems.length > 0
+      ? convertLegacySketchItemsToExcalidrawElements(legacyItems)
+      : null;
+    const initialElements = convertedLegacyElements ?? scene.elements;
+    return {
+      elements: initialElements as ExcalidrawInitialDataState['elements'],
+      appState: {
+        ...(scene.appState ?? {}),
+        name: fileName,
+        currentItemStrokeColor: readDefaultSketchToolColor(),
+        viewBackgroundColor: typeof scene.appState?.viewBackgroundColor === 'string'
+          ? scene.appState.viewBackgroundColor
+          : '#ffffff',
+      } as ExcalidrawInitialDataState['appState'],
+      files: scene.files as ExcalidrawInitialDataState['files'],
+      scrollToContent: initialElements.length > 0,
+    };
+  }, [fileName, legacyItems, scene]);
 
-  // Resize canvas to its container while keeping a high DPR for crisp lines.
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const cvs = canvasRef.current;
-    if (!wrap || !cvs) return;
-    const dpr = window.devicePixelRatio || 1;
-    const ro = new ResizeObserver(() => {
-      const rect = wrap.getBoundingClientRect();
-      cvs.width = Math.max(1, Math.round(rect.width * dpr));
-      cvs.height = Math.max(1, Math.round(rect.height * dpr));
-      cvs.style.width = `${rect.width}px`;
-      cvs.style.height = `${rect.height}px`;
-      const ctx = cvs.getContext('2d');
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      redraw();
+  const handleChange = useCallback<NonNullable<ExcalidrawProps['onChange']>>((elements, appState, files) => {
+    const nextScene = sceneFromExcalidraw(elements, appState, files);
+    const isProgrammatic = firstProgrammaticChangeRef.current;
+    onSceneChange(nextScene, {
+      markDirty: !isProgrammatic,
+      discardLegacyItems: !isProgrammatic,
     });
-    ro.observe(wrap);
-    return () => ro.disconnect();
-    // redraw is closure-fresh each render via the items dep below
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [onSceneChange]);
 
-  const redraw = useCallback(() => {
-    const cvs = canvasRef.current;
-    if (!cvs) return;
-    const ctx = cvs.getContext('2d');
-    if (!ctx) return;
-    const w = cvs.clientWidth;
-    const h = cvs.clientHeight;
-    ctx.clearRect(0, 0, w, h);
-    drawGrid(ctx, w, h);
-    const all = drawingRef.current ? [...items, drawingRef.current] : items;
-    for (const it of all) drawItem(ctx, it);
-  }, [items]);
+  const currentScene = useCallback((): ExcalidrawSketchScene => {
+    const api = apiRef.current;
+    if (!api) return scene;
+    return sceneFromExcalidraw(
+      api.getSceneElementsIncludingDeleted(),
+      api.getAppState(),
+      api.getFiles(),
+    );
+  }, [scene]);
 
-  useEffect(() => {
-    redraw();
-  }, [redraw]);
-
-  function pointerPos(e: React.PointerEvent<HTMLCanvasElement>) {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }
-
-  function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (tool === 'select') return;
-    const cvs = canvasRef.current;
-    if (!cvs) return;
-    cvs.setPointerCapture(e.pointerId);
-    const pos = pointerPos(e);
-
-    if (tool === 'text') {
-      // Stash the click position and open the modal. The actual TextItem is
-      // appended in submitTextModal, once the user confirms.
-      textAnchorRef.current = pos;
-      setTextModalValue('');
-      setTextModalOpen(true);
-      return;
-    }
-
-    if (tool === 'pen' || tool === 'eraser') {
-      drawingRef.current = {
-        kind: 'pen',
-        points: [pos],
-        color: tool === 'eraser' ? '#fafaf9' : color,
-        size: tool === 'eraser' ? size * 6 : size,
-      };
-    } else if (tool === 'rect') {
-      drawingRef.current = { kind: 'rect', x: pos.x, y: pos.y, w: 0, h: 0, color, size };
-    } else if (tool === 'arrow') {
-      drawingRef.current = {
-        kind: 'arrow',
-        x1: pos.x,
-        y1: pos.y,
-        x2: pos.x,
-        y2: pos.y,
-        color,
-        size,
-      };
-    }
-    force((n) => n + 1);
-  }
-
-  function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    const cur = drawingRef.current;
-    if (!cur) return;
-    const pos = pointerPos(e);
-    if (cur.kind === 'pen') {
-      cur.points.push(pos);
-    } else if (cur.kind === 'rect') {
-      cur.w = pos.x - cur.x;
-      cur.h = pos.y - cur.y;
-    } else if (cur.kind === 'arrow') {
-      cur.x2 = pos.x;
-      cur.y2 = pos.y;
-    }
-    redraw();
-  }
-
-  function handlePointerUp() {
-    const cur = drawingRef.current;
-    drawingRef.current = null;
-    if (!cur) return;
-    onItemsChange([...items, cur]);
-  }
-
-  function handleUndo() {
-    onItemsChange(items.slice(0, -1));
-  }
-  function handleClear() {
+  const handleClear = useCallback(() => {
     if (onClear) {
       onClear();
-      return;
+    } else {
+      onSceneChange(emptySketchScene(fileName), {
+        markDirty: true,
+        discardLegacyItems: true,
+      });
     }
-    onItemsChange([]);
-  }
-
-  const canClear = items.length > 0 || hasPreservedRawItems;
-  const canSave = dirty || items.length > 0 || hasPreservedRawItems;
-
-  function submitTextModal() {
-    const text = textModalValue.trim();
-    const anchor = textAnchorRef.current;
-    if (!text || !anchor) {
-      cancelTextModal();
-      return;
-    }
-    onItemsChange([
-      ...items,
-      { kind: 'text', x: anchor.x, y: anchor.y, text, color, size: 16 + size * 4 },
-    ]);
-    setTextModalOpen(false);
-    setTextModalValue('');
-    textAnchorRef.current = null;
-  }
-
-  function cancelTextModal() {
-    setTextModalOpen(false);
-    setTextModalValue('');
-    textAnchorRef.current = null;
-  }
+    setResetNonce((value) => value + 1);
+  }, [fileName, onClear, onSceneChange]);
 
   const handleSave = useCallback(async () => {
-    const ok = await onSave();
+    const ok = await onSave(currentScene());
     if (ok === false) {
       clearTimeout(savedTimerRef.current);
       setShowSaved(false);
@@ -226,184 +149,185 @@ export function SketchEditor({
     setShowSaved(true);
     clearTimeout(savedTimerRef.current);
     savedTimerRef.current = setTimeout(() => setShowSaved(false), SAVED_VISIBLE_MS);
-  }, [onSave]);
+  }, [currentScene, onSave]);
+
+  const canClear = sketchSceneHasContent(scene) || legacyItems.length > 0 || hasPreservedRawItems;
+  const canSave = dirty || sketchSceneHasContent(scene) || legacyItems.length > 0 || hasPreservedRawItems;
+
+  const renderTopRightUI = useCallback(() => (
+    <div
+      className="sketch-excalidraw-actions"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <span className="sketch-name" title={fileName}>
+        {fileName}
+        {dirty ? ' *' : ''}
+      </span>
+      <Button variant="ghost" onClick={handleClear} disabled={!canClear}>
+        {t('sketch.clear')}
+      </Button>
+      {onCancel ? (
+        <Button variant="ghost" onClick={onCancel}>
+          {t('sketch.close')}
+        </Button>
+      ) : null}
+      <Button
+        variant="primary"
+        onClick={handleSave}
+        disabled={saving || !canSave}
+        aria-label={saving ? t('sketch.saving') : showSaved ? t('sketch.saved') : t('common.save')}
+      >
+        {saving ? t('sketch.saving') : showSaved ? <Icon name="check" size={14} /> : t('common.save')}
+      </Button>
+    </div>
+  ), [canClear, canSave, dirty, fileName, handleClear, handleSave, onCancel, saving, showSaved, t]);
 
   return (
     <div className="sketch-editor">
-      <div className="sketch-toolbar">
-        <ToolBtn cur={tool} v="select" onClick={setTool} title={t('sketch.toolSelect')} label="↖" />
-        <ToolBtn cur={tool} v="pen" onClick={setTool} title={t('sketch.toolPen')} label="✎" />
-        <ToolBtn cur={tool} v="text" onClick={setTool} title={t('sketch.toolText')} label="T" />
-        <ToolBtn cur={tool} v="rect" onClick={setTool} title={t('sketch.toolRect')} label="▭" />
-        <ToolBtn cur={tool} v="arrow" onClick={setTool} title={t('sketch.toolArrow')} label="↗" />
-        <ToolBtn cur={tool} v="eraser" onClick={setTool} title={t('sketch.toolEraser')} label="◌" />
-        <span className="sketch-divider" />
-        <input
-          type="color"
-          className="sketch-color"
-          value={color}
-          onChange={(e) => setColor(e.target.value)}
-          title={t('sketch.color')}
-        />
-        <input
-          type="range"
-          min={1}
-          max={8}
-          value={size}
-          onChange={(e) => setSize(Number(e.target.value))}
-          title={t('sketch.strokeSize')}
-          className="sketch-size"
-        />
-        <span className="sketch-divider" />
-        <Button variant="ghost" onClick={handleUndo} disabled={items.length === 0}>
-          {t('sketch.undo')}
-        </Button>
-        <Button variant="ghost" onClick={handleClear} disabled={!canClear}>
-          {t('sketch.clear')}
-        </Button>
-        <span className="sketch-spacer" />
-        <span className="sketch-name" title={fileName}>
-          {fileName}
-          {dirty ? ' •' : ''}
-        </span>
-        {onCancel ? (
-          <Button variant="ghost" onClick={onCancel}>
-            {t('sketch.close')}
-          </Button>
-        ) : null}
-        <Button
-          variant="primary"
-          onClick={handleSave}
-          disabled={saving || !canSave}
-          aria-label={saving ? t('sketch.saving') : showSaved ? t('sketch.saved') : t('common.save')}
-        >
-          {saving ? t('sketch.saving') : showSaved ? <Icon name="check" size={14} /> : t('common.save')}
-        </Button>
-      </div>
-      <div className="sketch-canvas-wrap" ref={wrapRef}>
-        <canvas
-          ref={canvasRef}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          style={{ touchAction: 'none' }}
+      <div className="sketch-canvas-wrap sketch-excalidraw-wrap" data-testid="sketch-excalidraw-editor">
+        <Excalidraw
+          key={`${fileName}:${resetNonce}`}
+          initialData={initialData}
+          excalidrawAPI={(api) => {
+            apiRef.current = api;
+          }}
+          onChange={handleChange}
+          renderTopRightUI={renderTopRightUI}
+          langCode={excalidrawLangCode(locale)}
+          theme={theme}
+          detectScroll={false}
+          handleKeyboardGlobally={false}
+          autoFocus
+          name={fileName}
+          UIOptions={{
+            canvasActions: {
+              saveToActiveFile: false,
+              loadScene: false,
+              toggleTheme: false,
+              export: { saveFileToDisk: false },
+            },
+            tools: {
+              image: true,
+            },
+          }}
         />
       </div>
-      {textModalOpen ? (
-        <Dialog
-          onClose={cancelTextModal}
-          closeOnBackdrop={false}
-          closeOnEscape
-          layout="sectioned"
-          ariaLabelledBy={textModalTitleId}
-        >
-          <DialogHeader>
-            <DialogTitle id={textModalTitleId}>{t('sketch.textModalTitle')}</DialogTitle>
-          </DialogHeader>
-          <DialogBody>
-            <label>
-              <span>{t('sketch.textPrompt')}</span>
-              <Input
-                type="text"
-                value={textModalValue}
-                autoFocus
-                onChange={(e) => setTextModalValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && textModalValue.trim()) {
-                    e.preventDefault();
-                    submitTextModal();
-                  }
-                }}
-              />
-            </label>
-          </DialogBody>
-          <DialogFooter>
-            <Button variant="ghost" onClick={cancelTextModal}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!textModalValue.trim()}
-              onClick={submitTextModal}
-            >
-              {t('common.save')}
-            </Button>
-          </DialogFooter>
-        </Dialog>
-      ) : null}
     </div>
   );
 }
 
-function ToolBtn({
-  cur,
-  v,
-  onClick,
-  label,
-  title,
-}: {
-  cur: Tool;
-  v: Tool;
-  onClick: (v: Tool) => void;
-  label: string;
-  title: string;
-}) {
-  return (
-    <button
-      className={`sketch-tool ${cur === v ? 'active' : ''}`}
-      onClick={() => onClick(v)}
-      title={title}
-    >
-      {label}
-    </button>
-  );
+function sceneFromExcalidraw(
+  elements: readonly OrderedExcalidrawElement[],
+  appState: AppState,
+  files: BinaryFiles,
+): ExcalidrawSketchScene {
+  return {
+    elements: cloneJson<unknown[]>(elements, []),
+    appState: cloneJson<Record<string, unknown> | null>(appState as unknown, null),
+    files: cloneJson<Record<string, unknown>>(files, {}),
+  };
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  ctx.save();
-  ctx.fillStyle = '#bfbcb6';
-  for (let y = 12; y < h; y += 16) {
-    for (let x = 12; x < w; x += 16) {
-      ctx.fillRect(x, y, 1, 1);
+function convertLegacySketchItemsToExcalidrawElements(items: SketchItem[]): unknown[] {
+  const skeletons: unknown[] = [];
+  for (const item of items) {
+    if (item.kind === 'rect') {
+      const x = Math.min(item.x, item.x + item.w);
+      const y = Math.min(item.y, item.y + item.h);
+      skeletons.push({
+        type: 'rectangle',
+        x,
+        y,
+        width: Math.abs(item.w),
+        height: Math.abs(item.h),
+        strokeColor: item.color,
+        backgroundColor: 'transparent',
+        strokeWidth: item.size,
+        roughness: 1,
+      });
+      continue;
     }
+    if (item.kind === 'arrow') {
+      skeletons.push({
+        type: 'arrow',
+        x: item.x1,
+        y: item.y1,
+        points: [[0, 0], [item.x2 - item.x1, item.y2 - item.y1]],
+        strokeColor: item.color,
+        backgroundColor: 'transparent',
+        strokeWidth: item.size,
+        endArrowhead: 'arrow',
+        roughness: 1,
+      });
+      continue;
+    }
+    if (item.kind === 'text') {
+      skeletons.push({
+        type: 'text',
+        x: item.x,
+        y: item.y - item.size,
+        text: item.text,
+        fontSize: Math.max(12, item.size),
+        strokeColor: item.color,
+        backgroundColor: 'transparent',
+      });
+      continue;
+    }
+    if (item.points.length === 0) continue;
+    const origin = item.points[0]!;
+    skeletons.push({
+      type: 'line',
+      x: origin.x,
+      y: origin.y,
+      points: item.points.map((point) => [point.x - origin.x, point.y - origin.y]),
+      strokeColor: item.color,
+      backgroundColor: 'transparent',
+      strokeWidth: item.size,
+      roughness: 1,
+    });
   }
-  ctx.restore();
+
+  try {
+    return convertToExcalidrawElements(skeletons as never[], { regenerateIds: true }) as unknown[];
+  } catch {
+    return [];
+  }
 }
 
-function drawItem(ctx: CanvasRenderingContext2D, it: SketchItem) {
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = it.color;
-  ctx.fillStyle = it.color;
-  ctx.lineWidth = it.size;
-  if (it.kind === 'pen') {
-    if (it.points.length < 2) return ctx.restore();
-    ctx.beginPath();
-    ctx.moveTo(it.points[0]!.x, it.points[0]!.y);
-    for (let i = 1; i < it.points.length; i++) {
-      ctx.lineTo(it.points[i]!.x, it.points[i]!.y);
-    }
-    ctx.stroke();
-  } else if (it.kind === 'rect') {
-    ctx.strokeRect(it.x, it.y, it.w, it.h);
-  } else if (it.kind === 'arrow') {
-    ctx.beginPath();
-    ctx.moveTo(it.x1, it.y1);
-    ctx.lineTo(it.x2, it.y2);
-    ctx.stroke();
-    const ang = Math.atan2(it.y2 - it.y1, it.x2 - it.x1);
-    const len = 10 + it.size * 2;
-    ctx.beginPath();
-    ctx.moveTo(it.x2, it.y2);
-    ctx.lineTo(it.x2 - len * Math.cos(ang - Math.PI / 6), it.y2 - len * Math.sin(ang - Math.PI / 6));
-    ctx.moveTo(it.x2, it.y2);
-    ctx.lineTo(it.x2 - len * Math.cos(ang + Math.PI / 6), it.y2 - len * Math.sin(ang + Math.PI / 6));
-    ctx.stroke();
-  } else if (it.kind === 'text') {
-    ctx.font = `${it.size}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-    ctx.fillText(it.text, it.x, it.y);
+function excalidrawLangCode(locale: Locale): string {
+  const map: Record<Locale, string> = {
+    'en': 'en',
+    'id': 'id-ID',
+    'de': 'de-DE',
+    'zh-CN': 'zh-CN',
+    'zh-TW': 'zh-TW',
+    'pt-BR': 'pt-BR',
+    'es-ES': 'es-ES',
+    'ru': 'ru-RU',
+    'fa': 'fa-IR',
+    'ar': 'ar-SA',
+    'ja': 'ja-JP',
+    'ko': 'ko-KR',
+    'pl': 'pl-PL',
+    'hu': 'hu-HU',
+    'fr': 'fr-FR',
+    'uk': 'uk-UA',
+    'tr': 'tr-TR',
+    'th': 'en',
+    'it': 'it-IT',
+  };
+  return map[locale] ?? 'en';
+}
+
+function readExcalidrawTheme(): 'light' | 'dark' {
+  if (typeof document === 'undefined') return 'light';
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+
+function cloneJson<T>(value: unknown, fallback: T): T {
+  try {
+    return JSON.parse(JSON.stringify(value)) as T;
+  } catch {
+    return fallback;
   }
-  ctx.restore();
 }

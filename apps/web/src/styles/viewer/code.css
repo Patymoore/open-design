@@ -284,13 +284,19 @@
   height: 100%;
   min-height: 0;
 }
-.sketch-preview svg {
+.sketch-preview svg,
+.sketch-preview-svg-inner,
+.sketch-preview-svg-inner svg {
   width: 100%;
   height: 100%;
   display: block;
+}
+.sketch-preview svg,
+.sketch-preview-svg-inner {
   background: white;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 .sketch-preview.loading {
   background:
@@ -341,6 +347,35 @@
 .sketch-spacer { flex: 1; }
 .sketch-canvas-wrap { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .sketch-canvas-wrap canvas { display: block; cursor: crosshair; }
+.sketch-excalidraw-wrap {
+  overflow: hidden;
+  background: #fff;
+}
+.sketch-excalidraw-wrap .excalidraw {
+  width: 100%;
+  height: 100%;
+  --color-primary: var(--accent);
+  --color-primary-darker: var(--accent-strong);
+}
+.sketch-excalidraw-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: min(520px, 48vw);
+  min-width: 0;
+  pointer-events: auto;
+}
+.sketch-name {
+  min-width: 0;
+  max-width: min(220px, 24vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
 
 /* ===========================================================
    Streaming chat: assistant message header, prose, thinking,

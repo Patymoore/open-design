@@ -129,7 +129,7 @@ function SkillPluginCandidateCard({
   onRequestOpenFile,
 }: {
   block: SkillPluginCandidateBlock;
-  projectId: string | null;
+  projectId?: string | null;
   onRequestOpenFile?: (name: string) => void;
 }) {
   const t = useT();
@@ -268,7 +268,7 @@ interface Props {
   // duplicate per-message card.
   showConversationTodoCard?: boolean;
   conversationTodoInput?: unknown | null;
-  projectId: string | null;
+  projectId?: string | null;
   // Analytics context for the assistant_feedback_* events. Defaults
   // applied at the call site keep AssistantMessage usable in tests
   // that don't care about telemetry.
@@ -312,7 +312,7 @@ interface Props {
   onFeedback?: (change: ChatMessageFeedbackChange) => void;
   suppressDirectionForms?: boolean;
   hasDesignSystemContext?: boolean;
-  // "Next step" affordance handlers, surfaced under the last successful
+  // "Next step" affordance handlers, surfaced under the latest settled
   // assistant message. Omitting them hides the affordance entirely (e.g. in
   // tests that don't wire chat send).
   onArtifactShare?: (fileName: string) => void;
@@ -405,7 +405,7 @@ function AssistantMessageImpl({
   liveToolInput,
   showConversationTodoCard = false,
   conversationTodoInput = null,
-  projectId,
+  projectId = null,
   projectKind = null,
   conversationId = null,
   projectFiles = [],
@@ -487,6 +487,10 @@ function AssistantMessageImpl({
           }),
     [blocks, fileOps, message, produced, projectFiles, streaming],
   );
+  const turnFileOps = useMemo(
+    () => mergeProducedFilesIntoFileOps(fileOps, displayedProduced),
+    [displayedProduced, fileOps],
+  );
   // The single artifact the "next step" affordance anchors to: prefer the HTML
   // produced by THIS turn; if the final turn emitted none (a summary / continue
   // message) fall back to the most recently modified HTML in the project so
@@ -506,10 +510,10 @@ function AssistantMessageImpl({
   const pluginActionFolders = useMemo(
     () =>
       !streaming && isLast && projectId
-        ? pluginFoldersTouchedThisTurn(projectFiles, fileOps, displayedProduced, message.content)
+        ? pluginFoldersTouchedThisTurn(projectFiles, turnFileOps, displayedProduced, message.content)
             .filter((folder) => !hiddenPluginActionPaths.has(folder.path))
         : [],
-    [displayedProduced, fileOps, hiddenPluginActionPaths, isLast, message.content, projectFiles, projectId, streaming],
+    [displayedProduced, hiddenPluginActionPaths, isLast, message.content, projectFiles, projectId, streaming, turnFileOps],
   );
   // Plugin action state lives at the AssistantMessage level (not inside
   // PluginActionPanel) so the success notice survives the unmount/remount
@@ -581,6 +585,9 @@ function AssistantMessageImpl({
   const runSucceeded =
     !streaming &&
     (message.runStatus === "succeeded" || (!message.runStatus && !!message.endedAt));
+  const runSettled =
+    !streaming &&
+    (message.runStatus ? isTerminalRunStatus(message.runStatus) : !!message.endedAt);
   const canContinueTodos =
     !streaming &&
     !!isLast &&
@@ -609,22 +616,23 @@ function AssistantMessageImpl({
   const canShowOpenDesignSubmission = !!onShareToOpenDesign && showFeedback && runSucceeded;
   const showOpenDesignSubmission =
     canShowOpenDesignSubmission && (!!isLast || shareToOpenDesignBusy);
-  // "Next step" only makes sense once there is a deliverable to act on. Anchor
-  // the whole card (toolbox cascade + Share + Contribute) on a previewable HTML
-  // artifact — produced this turn or earlier in the project. A pure
-  // clarifying-questions / summary turn that emitted no HTML must not surface
-  // the card (issue: card appeared after a question-only turn with no artifact).
+  const hasNextStepAction =
+    !!onToolboxAction ||
+    !!onNextStepPromptAction ||
+    !!onNextStepAiOptimize ||
+    !!onNextStepCreateDesign ||
+    (!!nextStepFileName && (!!onArtifactShare || !!onArtifactDownload)) ||
+    showOpenDesignSubmission;
   const showNextStepActions =
     !streaming &&
-    !!projectId &&
-    runSucceeded &&
-    !!nextStepFileName &&
-    ((!!isLast && (!!onToolboxAction || !!onNextStepPromptAction)) || showOpenDesignSubmission);
+    runSettled &&
+    !!isLast &&
+    hasNextStepAction;
   // Pre-output vs working: before any real content (text / thinking / tools /
   // files) the footer shimmers "Preparing…"; the moment content lands it
   // flips to "Working". The elapsed clock stays anchored to the persisted run
   // start so switching project tabs or remounting the message cannot restart it.
-  const hasContent = blocks.some((b) => b.kind !== "status") || fileOps.length > 0;
+  const hasContent = blocks.some((b) => b.kind !== "status") || turnFileOps.length > 0;
   const preparing = streaming && !hasContent;
   const preparingStatus = preparing && events.some((e) => e.kind === "status" && e.label === "thinking")
     ? "thinking"
@@ -719,15 +727,15 @@ function AssistantMessageImpl({
           }
           return null;
         })}
-        {fileOps.length > 0 ? (
+        {turnFileOps.length > 0 ? (
           <FileOpsSummary
-            entries={fileOps}
+            entries={turnFileOps}
             streaming={streaming}
             projectFileNames={projectFileNames}
             onRequestOpenFile={onRequestOpenFile}
           />
         ) : null}
-        {!streaming && displayedProduced.length > 0 && projectId ? (
+        {!streaming && turnFileOps.length === 0 && displayedProduced.length > 0 && projectId ? (
           <ProducedFiles
             files={displayedProduced}
             projectId={projectId}
@@ -924,6 +932,42 @@ function inferProducedFilesFromTurn({
       return file.mtime >= start && file.mtime <= end;
     }),
   ).sort((a, b) => b.mtime - a.mtime);
+}
+
+function mergeProducedFilesIntoFileOps(
+  fileOps: FileOpEntry[],
+  produced: ProjectFile[],
+): FileOpEntry[] {
+  if (produced.length === 0) return fileOps;
+  const seen = new Set<string>();
+  for (const entry of fileOps) {
+    seen.add(normalizeTouchedPath(entry.path));
+    seen.add(normalizeTouchedPath(entry.fullPath));
+  }
+
+  const merged = [...fileOps];
+  for (const file of produced) {
+    const fullPath = file.path || file.name;
+    const path = file.name || fullPath;
+    if (!path || seen.has(normalizeTouchedPath(path)) || seen.has(normalizeTouchedPath(fullPath))) {
+      continue;
+    }
+    seen.add(normalizeTouchedPath(path));
+    seen.add(normalizeTouchedPath(fullPath));
+    merged.push({
+      path,
+      fullPath,
+      ops: ["write"],
+      opCounts: { read: 0, write: 1, edit: 0, delete: 0 },
+      total: 1,
+      status: "done",
+    });
+  }
+  return merged;
+}
+
+function normalizeTouchedPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 // A run that reached a terminal state — succeeded, failed, or canceled — has a

@@ -1,36 +1,82 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SketchEditor } from '../../src/components/SketchEditor';
+import { emptySketchScene, type ExcalidrawSketchScene } from '../../src/components/sketch-model';
+
+const mockData = vi.hoisted(() => ({
+  excalidrawScene: {
+    elements: [{ id: 'api-element', type: 'rectangle', isDeleted: false }],
+    appState: { viewBackgroundColor: '#ffffff' },
+    files: {},
+  },
+  lastProps: null as Record<string, any> | null,
+}));
+
+vi.mock('@excalidraw/excalidraw', async () => {
+  const React = await import('react');
+  return {
+    Excalidraw: (props: Record<string, any>) => {
+      mockData.lastProps = props;
+      React.useEffect(() => {
+        props.excalidrawAPI?.({
+          getSceneElementsIncludingDeleted: () => mockData.excalidrawScene.elements,
+          getAppState: () => mockData.excalidrawScene.appState,
+          getFiles: () => mockData.excalidrawScene.files,
+        });
+      }, [props.excalidrawAPI]);
+      return React.createElement(
+        'div',
+        {
+          'data-testid': 'excalidraw',
+          'data-lang': props.langCode,
+          'data-theme': props.theme,
+        },
+        props.renderTopRightUI?.(false, {}),
+      );
+    },
+    convertToExcalidrawElements: vi.fn((elements: unknown[]) => elements),
+  };
+});
 
 vi.mock('../../src/i18n', () => ({
-  useT: () => (key: string) => key,
+  useI18n: () => ({
+    locale: 'zh-CN',
+    t: (key: string) => key,
+  }),
 }));
 
 beforeAll(() => {
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {}
-    disconnect() {}
-    unobserve() {}
-  });
-  HTMLCanvasElement.prototype.setPointerCapture = vi.fn();
+  if (!window.requestAnimationFrame) {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => window.setTimeout(callback, 0));
+    vi.stubGlobal('cancelAnimationFrame', (handle: number) => window.clearTimeout(handle));
+  }
 });
 
 afterEach(() => {
   cleanup();
+  mockData.lastProps = null;
   vi.clearAllMocks();
   vi.useRealTimers();
 });
 
 const noop = () => {};
 
+function sceneWithElement(): ExcalidrawSketchScene {
+  return {
+    elements: [{ id: 'scene-element', type: 'rectangle', isDeleted: false }],
+    appState: { viewBackgroundColor: '#ffffff' },
+    files: {},
+  };
+}
+
 function renderEditor(overrides: Partial<Parameters<typeof SketchEditor>[0]> = {}) {
   return render(
     <SketchEditor
-      items={[]}
-      onItemsChange={noop}
+      scene={emptySketchScene('test.sketch.json')}
+      onSceneChange={noop}
       onSave={noop}
       fileName="test.sketch.json"
       {...overrides}
@@ -43,6 +89,11 @@ function saveButton(): HTMLButtonElement {
 }
 
 describe('SketchEditor save', () => {
+  it('renders Excalidraw with the current Open Design locale', () => {
+    renderEditor({ dirty: true });
+    expect(document.querySelector('[data-testid="excalidraw"]')?.getAttribute('data-lang')).toBe('zh-CN');
+  });
+
   it('shows the Save label by default', () => {
     renderEditor({ dirty: true });
     expect(saveButton().textContent).toBe('common.save');
@@ -59,14 +110,12 @@ describe('SketchEditor save', () => {
   });
 
   it('disables the button when nothing is editable', () => {
-    renderEditor({ items: [], dirty: false, hasPreservedRawItems: false });
+    renderEditor({ scene: emptySketchScene(), dirty: false, hasPreservedRawItems: false });
     expect(saveButton().disabled).toBe(true);
   });
 
-  it('enables the button when there are items', () => {
-    renderEditor({
-      items: [{ kind: 'pen', points: [{ x: 10, y: 20 }], color: '#000', size: 2 }],
-    });
+  it('enables the button when the scene has elements', () => {
+    renderEditor({ scene: sceneWithElement() });
     expect(saveButton().disabled).toBe(false);
   });
 
@@ -80,11 +129,56 @@ describe('SketchEditor save', () => {
     expect(saveButton().disabled).toBe(false);
   });
 
-  it('calls onSave when clicked', () => {
+  it('enables the button when legacy items need migration', () => {
+    renderEditor({
+      legacyItems: [{ kind: 'pen', points: [{ x: 10, y: 20 }], color: '#000', size: 2 }],
+    });
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it('calls onSave with the latest Excalidraw scene when clicked', () => {
     const onSave = vi.fn();
     renderEditor({ dirty: true, onSave });
     fireEvent.click(saveButton());
     expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject(mockData.excalidrawScene);
+  });
+
+  it('does not echo Excalidraw hydration changes back to the parent scene', () => {
+    const onSceneChange = vi.fn();
+    renderEditor({ onSceneChange });
+
+    act(() => {
+      mockData.lastProps?.onChange?.([], { viewBackgroundColor: '#ffffff' }, {});
+    });
+
+    expect(onSceneChange).not.toHaveBeenCalled();
+  });
+
+  it('reports user scene changes once and ignores duplicate Excalidraw updates', () => {
+    const onSceneChange = vi.fn();
+    renderEditor({ onSceneChange });
+
+    act(() => {
+      mockData.lastProps?.onChange?.([], { viewBackgroundColor: '#ffffff' }, {});
+    });
+
+    const elements = [{ id: 'drawn', type: 'rectangle', version: 1, versionNonce: 1, isDeleted: false }];
+    act(() => {
+      mockData.lastProps?.onChange?.(elements, { viewBackgroundColor: '#ffffff' }, {});
+    });
+
+    expect(onSceneChange).toHaveBeenCalledTimes(1);
+    expect(onSceneChange.mock.calls[0]?.[1]).toEqual({
+      markDirty: true,
+      discardLegacyItems: true,
+    });
+
+    act(() => {
+      mockData.lastProps?.onChange?.(elements, { viewBackgroundColor: '#ffffff' }, {});
+    });
+
+    expect(onSceneChange).toHaveBeenCalledTimes(1);
   });
 
   it('shows the checkmark icon after save completes', async () => {
@@ -138,11 +232,10 @@ describe('SketchEditor save', () => {
     });
     expect(saveButton().querySelector('svg')).not.toBeNull();
 
-    // Parent updates dirty=false after successful save, then dirty=true when user draws again
     rerender(
       <SketchEditor
-        items={[]}
-        onItemsChange={noop}
+        scene={emptySketchScene('test.sketch.json')}
+        onSceneChange={noop}
         onSave={onSave}
         fileName="test.sketch.json"
         dirty={false}
@@ -151,8 +244,8 @@ describe('SketchEditor save', () => {
 
     rerender(
       <SketchEditor
-        items={[]}
-        onItemsChange={noop}
+        scene={emptySketchScene('test.sketch.json')}
+        onSceneChange={noop}
         onSave={onSave}
         fileName="test.sketch.json"
         dirty={true}
@@ -241,8 +334,8 @@ describe('SketchEditor save', () => {
     expect(saveButton().getAttribute('aria-label')).toBe('sketch.saved');
     rerender(
       <SketchEditor
-        items={[]}
-        onItemsChange={noop}
+        scene={emptySketchScene('test.sketch.json')}
+        onSceneChange={noop}
         onSave={onSave}
         fileName="test.sketch.json"
         dirty={false}
@@ -250,8 +343,8 @@ describe('SketchEditor save', () => {
     );
     rerender(
       <SketchEditor
-        items={[]}
-        onItemsChange={noop}
+        scene={emptySketchScene('test.sketch.json')}
+        onSceneChange={noop}
         onSave={onSave}
         fileName="test.sketch.json"
         dirty={true}
@@ -259,23 +352,5 @@ describe('SketchEditor save', () => {
     );
     expect(saveButton().getAttribute('aria-label')).toBe('common.save');
     expect(saveButton().querySelector('svg')).toBeNull();
-  });
-
-  it('keeps the text modal open on backdrop click so draft text is preserved', () => {
-    const { container } = renderEditor();
-
-    fireEvent.click(screen.getByTitle('sketch.toolText'));
-    fireEvent.pointerDown(container.querySelector('canvas') as HTMLCanvasElement, {
-      pointerId: 1,
-      clientX: 40,
-      clientY: 60,
-    });
-
-    const input = screen.getByRole('textbox') as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'Draft note' } });
-    fireEvent.click(container.querySelector('.modal-backdrop') as HTMLElement);
-
-    expect(screen.getByDisplayValue('Draft note')).toBeTruthy();
-    expect(screen.getByRole('dialog', { name: 'sketch.textModalTitle' })).toBeTruthy();
   });
 });

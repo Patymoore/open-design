@@ -1,21 +1,42 @@
 // @vitest-environment jsdom
 
 import { cleanup, render } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SketchEditor } from '../../src/components/SketchEditor';
+import { emptySketchScene } from '../../src/components/sketch-model';
 import { I18nProvider } from '../../src/i18n';
 
-class ResizeObserverMock {
-  observe() {}
-  disconnect() {}
-}
+vi.mock('@excalidraw/excalidraw', async () => {
+  const React = await import('react');
+  return {
+    Excalidraw: (props: Record<string, any>) => {
+      const initialData = props.initialData;
+      return React.createElement(
+        'div',
+        {
+          'data-testid': 'excalidraw',
+          'data-stroke': initialData?.appState?.currentItemStrokeColor,
+        },
+        props.renderTopRightUI?.(false, {}),
+      );
+    },
+    convertToExcalidrawElements: vi.fn((elements: unknown[]) => elements),
+  };
+});
+
+beforeAll(() => {
+  if (!window.requestAnimationFrame) {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => window.setTimeout(callback, 0));
+    vi.stubGlobal('cancelAnimationFrame', (handle: number) => window.clearTimeout(handle));
+  }
+});
 
 function renderEditor() {
   return render(
     <I18nProvider initial="en">
       <SketchEditor
-        items={[]}
-        onItemsChange={vi.fn()}
+        scene={emptySketchScene('scratch.sketch.json')}
+        onSceneChange={vi.fn()}
         onSave={vi.fn()}
         fileName="scratch.sketch.json"
       />
@@ -24,45 +45,25 @@ function renderEditor() {
 }
 
 describe('SketchEditor default color', () => {
-  beforeEach(() => {
-    vi.stubGlobal('ResizeObserver', ResizeObserverMock);
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
-      setTransform: vi.fn(),
-      clearRect: vi.fn(),
-      save: vi.fn(),
-      fillRect: vi.fn(),
-      restore: vi.fn(),
-      beginPath: vi.fn(),
-      moveTo: vi.fn(),
-      lineTo: vi.fn(),
-      stroke: vi.fn(),
-      strokeRect: vi.fn(),
-      fillText: vi.fn(),
-    } as unknown as CanvasRenderingContext2D);
-  });
-
   afterEach(() => {
     cleanup();
     document.documentElement.removeAttribute('data-theme');
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it('starts with a light pen color under the dark theme', () => {
     document.documentElement.setAttribute('data-theme', 'dark');
 
-    const { container } = renderEditor();
+    renderEditor();
 
-    const colorInput = container.querySelector<HTMLInputElement>('input[type="color"]');
-    expect(colorInput?.value).toBe('#ffffff');
+    expect(document.querySelector('[data-testid="excalidraw"]')?.getAttribute('data-stroke')).toBe('#ffffff');
   });
 
   it('keeps the existing default pen color under the light theme', () => {
     document.documentElement.setAttribute('data-theme', 'light');
 
-    const { container } = renderEditor();
+    renderEditor();
 
-    const colorInput = container.querySelector<HTMLInputElement>('input[type="color"]');
-    expect(colorInput?.value).toBe('#1c1b1a');
+    expect(document.querySelector('[data-testid="excalidraw"]')?.getAttribute('data-stroke')).toBe('#1c1b1a');
   });
 });
