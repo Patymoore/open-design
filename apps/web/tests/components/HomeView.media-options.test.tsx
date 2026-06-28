@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe('HomeView media composer options', () => {
-  it('hides the Home composer session-mode switcher and submits in Design mode', async () => {
+  it('hides the Home composer session-mode switcher and still defaults to Design mode', async () => {
     stubFetch();
     const onSubmit = vi.fn();
     renderHome({ onSubmit });
@@ -68,7 +68,7 @@ describe('HomeView media composer options', () => {
     expect(screen.queryByTestId('session-mode-trigger')).toBeNull();
 
     await setHomePrompt('Create a clean loading animation');
-    fireEvent.click(screen.getByTestId('home-hero-submit'));
+    await submitHome();
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({

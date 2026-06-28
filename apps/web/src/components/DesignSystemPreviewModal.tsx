@@ -20,6 +20,7 @@ import { PreviewModal } from './PreviewModal';
 interface Props {
   system: DesignSystemSummary;
   onClose: () => void;
+  initialViewId?: 'showcase' | 'kit' | 'tokens';
 }
 
 function isDesignSystemDetail(system: DesignSystemSummary): system is DesignSystemDetail {
@@ -29,7 +30,7 @@ function isDesignSystemDetail(system: DesignSystemSummary): system is DesignSyst
 // Full DS preview: keep the brand-kit-style module stack as the default view,
 // while retaining the lazy showcase/tokens tabs and DESIGN.md side panel from
 // the richer modal flow.
-export function DesignSystemPreviewModal({ system, onClose }: Props) {
+export function DesignSystemPreviewModal({ system, onClose, initialViewId = 'kit' }: Props) {
   const t = useT();
   const analytics = useAnalytics();
   const surfaceViewFiredRef = useRef<string | null>(null);
@@ -71,11 +72,11 @@ export function DesignSystemPreviewModal({ system, onClose }: Props) {
         initialViewIdRef.current = viewId;
       } else if (initialViewIdRef.current !== viewId) {
         initialViewIdRef.current = viewId;
-        if (viewId === 'showcase' || viewId === 'tokens') {
+        if (viewId === 'showcase' || viewId === 'kit' || viewId === 'tokens') {
           trackDesignSystemsTemplatesModalClick(analytics.track, {
             page_name: 'design_systems',
             area: 'templates_modal',
-            element: viewId,
+            element: viewId === 'kit' ? 'open_design_set' : viewId,
             templates_id: system.id,
             templates_type: system.source ?? 'library',
           });
@@ -119,21 +120,21 @@ export function DesignSystemPreviewModal({ system, onClose }: Props) {
       views={[
         {
           id: 'kit',
-          label: t('brandDetail.designSystem'),
+          label: t('ds.kitVisualize'),
           custom: (
             <DesignSystemKitPreview
               system={system}
               variant="panel"
               showCover={false}
               className="ds-modal-kit-preview"
-              dataTestId={`design-system-modal-kit-${system.id}`}
+              dataTestId="design-system-modal-kit"
             />
           ),
         },
         { id: 'showcase', label: t('ds.showcase'), html: showcaseHtml },
         { id: 'tokens', label: t('ds.tokens'), html: tokensHtml },
       ]}
-      initialViewId="kit"
+      initialViewId={initialViewId}
       onView={handleView}
       exportTitleFor={(viewId) => (viewId === 'kit' ? system.title : `${system.title} - ${viewId}`)}
       onClose={onClose}

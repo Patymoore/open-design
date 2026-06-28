@@ -11,7 +11,7 @@ import { setPendingDesignSystemCreateEntry } from './analytics/ds-create-entry';
 import { detectClientType } from './analytics/identity';
 import {
   deriveConfigureGlobals,
-  projectKindToTracking,
+  projectKindFromMetadataToTracking,
   fidelityToTracking,
 } from '@open-design/contracts/analytics';
 import type { AmrModelsResponse, ChatSessionMode } from '@open-design/contracts';
@@ -351,6 +351,7 @@ function AppInner() {
   useEffect(() => {
     if (typeof document !== 'undefined') {
       document.documentElement.setAttribute('data-od-app-mounted', '1');
+      document.querySelectorAll('.od-loading-shell').forEach((node) => node.remove());
     }
   }, []);
   const [config, setConfig] = useState<AppConfig>(() => loadConfig());
@@ -1395,7 +1396,7 @@ function AppInner() {
             area: 'new_project',
             project_source: 'create_button',
             project_id: null,
-            project_kind: projectKindToTracking(kind),
+            project_kind: projectKindFromMetadataToTracking(input.metadata),
             fidelity,
             result: 'failed',
             error_code: errorCode,
@@ -1412,7 +1413,7 @@ function AppInner() {
             area: 'new_project',
             project_source: 'create_button',
             project_id: null,
-            project_kind: projectKindToTracking(kind, input.metadata?.videoModel),
+            project_kind: projectKindFromMetadataToTracking(input.metadata),
             fidelity,
             ...(input.pluginId ? { plugin_id: input.pluginId } : {}),
             ...(input.pluginType ? { plugin_type: input.pluginType } : {}),
@@ -1492,7 +1493,7 @@ function AppInner() {
           area: 'new_project',
           project_source: 'create_button',
           project_id: result.project.id,
-          project_kind: projectKindToTracking(kind, input.metadata?.videoModel),
+          project_kind: projectKindFromMetadataToTracking(input.metadata),
           fidelity,
           ...(input.pluginId ? { plugin_id: input.pluginId } : {}),
           ...(input.pluginType ? { plugin_type: input.pluginType } : {}),
