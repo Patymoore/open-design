@@ -6,13 +6,16 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SketchEditor } from '../../src/components/SketchEditor';
 import { emptySketchScene, type ExcalidrawSketchScene } from '../../src/components/sketch-model';
 
-const mockData = vi.hoisted(() => ({
+const mockData = vi.hoisted<{
+  excalidrawScene: ExcalidrawSketchScene;
+  lastProps: Record<string, any> | null;
+}>(() => ({
   excalidrawScene: {
     elements: [{ id: 'api-element', type: 'rectangle', isDeleted: false }],
-    appState: { viewBackgroundColor: '#ffffff' } as Record<string, unknown>,
+    appState: { viewBackgroundColor: '#ffffff' },
     files: {},
   },
-  lastProps: null as Record<string, any> | null,
+  lastProps: null,
 }));
 
 vi.mock('@excalidraw/excalidraw', async () => {
