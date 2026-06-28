@@ -111,7 +111,7 @@ afterEach(() => {
 });
 
 describe('HomeView media composer options', () => {
-  it('keeps the Home composer mode switcher hidden and submits free-form prompts through Design mode', async () => {
+  it('hides the Home composer session-mode switcher and still defaults to Design mode', async () => {
     stubFetch();
     const onSubmit = vi.fn();
     renderHome({ onSubmit });

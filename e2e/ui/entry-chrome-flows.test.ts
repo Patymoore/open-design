@@ -1167,7 +1167,7 @@ test('[P0] @critical required home plugin prompt parameters gate submit and bind
   expect(applyBodies.at(-1)?.inputs).toMatchObject(body.pluginInputs ?? {});
 });
 
-test('[P0] @critical home composer hides mode switching and routes free-form prompts through the design router', async ({ page }) => {
+test('[P0] @critical home composer routes free-form prompts through the design router by default', async ({ page }) => {
   await gotoEntryHome(page);
 
   await expect(page.getByTestId('session-mode-trigger')).toHaveCount(0);
