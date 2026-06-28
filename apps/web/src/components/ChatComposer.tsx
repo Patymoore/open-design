@@ -1014,6 +1014,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     );
 
     function reset() {
+      const linkedWorkspaceContexts = stagedWorkspaceContexts.filter((item) => (
+        Boolean(item.absolutePath?.trim()) && Boolean(workspaceLinkedDirAdds[item.id])
+      ));
+      const linkedWorkspaceContextIds = new Set(linkedWorkspaceContexts.map((item) => item.id));
+      const nextWorkspaceLinkedDirAdds = Object.fromEntries(
+        Object.entries(workspaceLinkedDirAdds).filter(([id]) => linkedWorkspaceContextIds.has(id)),
+      );
       setDraft("");
       setStaged([]);
       nextAttachmentOrderRef.current = 0;
@@ -1021,7 +1028,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       setStagedSkills([]);
       setStagedMcpServers([]);
       setStagedConnectors([]);
-      setStagedWorkspaceContexts([]);
+      setStagedWorkspaceContexts(linkedWorkspaceContexts);
+      setWorkspaceLinkedDirAdds(nextWorkspaceLinkedDirAdds);
+      if (
+        promotedWorkspaceContextDir &&
+        !linkedWorkspaceContexts.some((item) => item.absolutePath?.trim() === promotedWorkspaceContextDir)
+      ) {
+        setPromotedWorkspaceContextDir(null);
+      }
       pluginsSectionRef.current?.clear();
       inlineBackedPluginRef.current = null;
       setActiveAppliedPlugin(null);
@@ -1984,8 +1998,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // kind:id). We prune the staged skill/mcp/connector chips to whatever the
     // text still references — generalizing the old skill-only regex prune so a
     // hand-deleted token also drops its chip and never leaks into the run
-    // context. `staged` (files) is intentionally NOT pruned: users attach
-    // files via the upload button without leaving an `@<path>` token.
+    // context. Workspace contexts that added linked dirs are kept visible until
+    // the chip remove button clears the matching metadata access. `staged`
+    // (files) is intentionally NOT pruned: users attach files via the upload
+    // button without leaving an `@<path>` token.
     function handleEditorChange(text: string, present: InlineMentionEntity[]) {
       draftRef.current = text;
       setDraft(text);
@@ -2005,7 +2021,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         prev.filter((c) => set.has(`connector:${c.id}`)),
       );
       setStagedWorkspaceContexts((prev) =>
-        prev.filter((item) => set.has(`workspace:${item.id}`)),
+        prev.filter((item) => set.has(`workspace:${item.id}`) || Boolean(workspaceLinkedDirAdds[item.id])),
       );
     }
 

@@ -475,6 +475,63 @@ describe('ChatComposer context pickers', () => {
     );
   });
 
+  it('keeps sent linked-dir workspace context visible and removable after reset', async () => {
+    const onProjectMetadataChange = vi.fn();
+    const onSend = vi.fn();
+
+    function ControlledComposer() {
+      const [metadata, setMetadata] = useState<ProjectMetadata>({ kind: 'prototype' });
+      return composerElement({
+        projectMetadata: metadata,
+        onProjectMetadataChange: (next) => {
+          onProjectMetadataChange(next);
+          setMetadata(next);
+        },
+        onSend,
+      });
+    }
+
+    render(<ControlledComposer />);
+    await flushMounts();
+
+    fireEvent.click(screen.getByTestId('chat-plus-trigger'));
+    fireEvent.click(await screen.findByText('Link local code'));
+
+    await waitFor(() => {
+      expect(projectPatchBodies()).toHaveLength(1);
+    });
+    expect(projectPatchBodies()[0]?.metadata?.linkedDirs).toEqual(['/Users/me/reference-dir']);
+    await waitFor(() => {
+      expect(screen.getByTestId('staged-contexts').textContent).toContain('reference-dir');
+    });
+
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0]?.[3]?.context?.workspaceItems).toEqual([
+      expect.objectContaining({
+        id: 'local-code:/Users/me/reference-dir',
+        absolutePath: '/Users/me/reference-dir',
+      }),
+    ]);
+    await waitFor(() => {
+      expect(composerText().trim()).toBe('');
+      expect(screen.getByTestId('staged-contexts').textContent).toContain('reference-dir');
+    });
+    expect(screen.getByTestId('working-dir-trigger').textContent).not.toContain('reference-dir');
+
+    fireEvent.click(screen.getByLabelText('Remove reference-dir'));
+
+    await waitFor(() => {
+      expect(projectPatchBodies()).toHaveLength(2);
+    });
+    expect(projectPatchBodies()[1]?.metadata?.linkedDirs).toEqual([]);
+    expect(screen.queryByTestId('staged-contexts')?.textContent ?? '').not.toContain('reference-dir');
+    expect(onProjectMetadataChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ linkedDirs: [] }),
+    );
+  });
+
   it('keeps draft text typed while linked-dir removal is pending', async () => {
     renderComposer({ projectMetadata: { kind: 'prototype' } });
     await flushMounts();
