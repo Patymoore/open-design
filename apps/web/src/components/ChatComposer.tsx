@@ -437,6 +437,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     const [stagedConnectors, setStagedConnectors] = useState<ConnectorDetail[]>([]);
     const [stagedWorkspaceContexts, setStagedWorkspaceContexts] = useState<WorkspaceContextItem[]>([]);
     const [workspaceLinkedDirAdds, setWorkspaceLinkedDirAdds] = useState<Record<string, TrackedWorkspaceLinkedDir>>({});
+    const [promotedWorkspaceContextDir, setPromotedWorkspaceContextDir] = useState<string | null>(null);
     const [dismissedWorkspaceContextId, setDismissedWorkspaceContextId] = useState<string | null>(null);
     const activeWorkspaceContextId = activeWorkspaceContext?.id ?? null;
     const previousWorkspaceContextIdRef = useRef<string | null>(activeWorkspaceContextId);
@@ -508,20 +509,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     const pendingEntryFromRef = useRef<ChatAnalyticsEntryFrom | null>(null);
     const petEnabled = Boolean(onAdoptPet && onTogglePet);
     const linkedDirs = projectMetadata?.linkedDirs ?? [];
-    const workspaceContextLinkedDirList = useMemo(
-      () =>
-        Array.from(new Set(Object.values(workspaceLinkedDirAdds).map((tracked) => tracked.dir))),
-      [workspaceLinkedDirAdds],
-    );
-    const workspaceContextLinkedDirs = useMemo(
-      () => new Set(workspaceContextLinkedDirList),
-      [workspaceContextLinkedDirList],
-    );
-    // The project's working directory: the local folder the agent can read
-    // (via `linkedDirs` → `--add-dir`). Shown in the WorkingDirPicker below
-    // the input, mirroring Home. Context-only folders are still linked for
-    // agent read access, but they should not become the displayed primary dir.
-    const workingDir = linkedDirs.find((dir) => !workspaceContextLinkedDirs.has(dir)) ?? null;
     const [recentDirs, setRecentDirs] = useState<string[]>([]);
     useEffect(() => {
       let cancelled = false;
@@ -537,6 +524,48 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       const persisted = await pushRecentLinkedDir(dir);
       setRecentDirs(persisted);
     }, []);
+    const visibleWorkspaceContext =
+      activeWorkspaceContext && activeWorkspaceContext.id !== dismissedWorkspaceContextId
+        ? activeWorkspaceContext
+        : null;
+    const selectedWorkspaceContexts = useMemo(() => {
+      const out: WorkspaceContextItem[] = [];
+      const seen = new Set<string>();
+      const push = (item: WorkspaceContextItem | null | undefined) => {
+        if (!item) return;
+        const key = `${item.kind}:${item.id}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(item);
+      };
+      push(visibleWorkspaceContext);
+      for (const item of stagedWorkspaceContexts) push(item);
+      return out;
+    }, [stagedWorkspaceContexts, visibleWorkspaceContext]);
+    const selectedWorkspaceContextDirs = useMemo(
+      () =>
+        selectedWorkspaceContexts
+          .map((item) => item.absolutePath?.trim() ?? '')
+          .filter((dir) => dir.length > 0),
+      [selectedWorkspaceContexts],
+    );
+    const workspaceContextLinkedDirList = useMemo(
+      () =>
+        Array.from(new Set([
+          ...Object.values(workspaceLinkedDirAdds).map((tracked) => tracked.dir),
+          ...selectedWorkspaceContextDirs.filter((dir) => dir !== promotedWorkspaceContextDir),
+        ])),
+      [promotedWorkspaceContextDir, selectedWorkspaceContextDirs, workspaceLinkedDirAdds],
+    );
+    const workspaceContextLinkedDirs = useMemo(
+      () => new Set(workspaceContextLinkedDirList),
+      [workspaceContextLinkedDirList],
+    );
+    // The project's working directory: the local folder the agent can read
+    // (via `linkedDirs` → `--add-dir`). Shown in the WorkingDirPicker below
+    // the input, mirroring Home. Context-only folders are still linked for
+    // agent read access, but they should not become the displayed primary dir.
+    const workingDir = linkedDirs.find((dir) => !workspaceContextLinkedDirs.has(dir)) ?? null;
     // Live-check whether the selected working directory still exists, so a
     // folder deleted from disk turns the picker red without a page reload.
     // Re-checked when the dir changes, when the window/tab regains focus
@@ -563,24 +592,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         document.removeEventListener('visibilitychange', onVisible);
       };
     }, [checkWorkingDir]);
-    const visibleWorkspaceContext =
-      activeWorkspaceContext && activeWorkspaceContext.id !== dismissedWorkspaceContextId
-        ? activeWorkspaceContext
-        : null;
-    const selectedWorkspaceContexts = useMemo(() => {
-      const out: WorkspaceContextItem[] = [];
-      const seen = new Set<string>();
-      const push = (item: WorkspaceContextItem | null | undefined) => {
-        if (!item) return;
-        const key = `${item.kind}:${item.id}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        out.push(item);
-      };
-      push(visibleWorkspaceContext);
-      for (const item of stagedWorkspaceContexts) push(item);
-      return out;
-    }, [stagedWorkspaceContexts, visibleWorkspaceContext]);
     // initialDraft is only honored on the first non-empty value the parent
     // hands us. After we seed once, the composer is fully under user control
     // — re-renders that pass the same prompt back must not reseed. If the
@@ -608,6 +619,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       if (previousWorkspaceContextIdRef.current === activeWorkspaceContextId) return;
       previousWorkspaceContextIdRef.current = activeWorkspaceContextId;
       setDismissedWorkspaceContextId(null);
+      setPromotedWorkspaceContextDir(null);
     }, [activeWorkspaceContextId]);
 
     // Latch `composerEngaged` true on the first real interaction so the
@@ -1412,17 +1424,37 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       ]));
     }
 
+    function workspaceContextDirStillReferenced(id: string, dir: string): boolean {
+      return Object.entries(workspaceLinkedDirAdds).some(
+        ([candidateId, candidate]) => candidateId !== id && candidate.dir === dir,
+      ) || selectedWorkspaceContexts.some((item) => (
+        item.id !== id && item.absolutePath?.trim() === dir
+      )) || workingDir === dir;
+    }
+
+    async function removeWorkspaceContextLinkedDir(id: string, dir: string): Promise<boolean> {
+      if (!projectId) return true;
+      if (workspaceContextDirStillReferenced(id, dir)) return true;
+      const base = projectMetadata ?? { kind: 'prototype' as const };
+      const currentLinkedDirs = base.linkedDirs ?? [];
+      if (!currentLinkedDirs.includes(dir)) return true;
+      const nextLinkedDirs = currentLinkedDirs.filter((linkedDir) => linkedDir !== dir);
+      const metadata: ProjectMetadata = { ...base, linkedDirs: nextLinkedDirs };
+      const result = await patchProject(projectId, { metadata });
+      if (!result?.metadata) {
+        onShowToast?.(t('homeWorkingDir.applyFailed'));
+        return false;
+      }
+      onProjectMetadataChange?.(result.metadata);
+      return true;
+    }
+
     async function removeTrackedWorkspaceLinkedDir(
       id: string,
       tracked: TrackedWorkspaceLinkedDir,
     ): Promise<boolean> {
       if (!projectId) return true;
-      const stillReferenced = Object.entries(workspaceLinkedDirAdds).some(
-        ([candidateId, candidate]) => candidateId !== id && candidate.dir === tracked.dir,
-      ) || selectedWorkspaceContexts.some((item) => (
-        item.id !== id && item.absolutePath?.trim() === tracked.dir
-      )) || workingDir === tracked.dir;
-      if (stillReferenced) {
+      if (workspaceContextDirStillReferenced(id, tracked.dir)) {
         setWorkspaceLinkedDirAdds((current) => {
           const { [id]: _removed, ...rest } = current;
           return rest;
@@ -1451,6 +1483,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       const workspaceItem = selectedWorkspaceContexts.find((item) => item.id === id) ?? null;
       const trackedLinkedDir = workspaceLinkedDirAdds[id] ?? null;
       if (trackedLinkedDir && !(await removeTrackedWorkspaceLinkedDir(id, trackedLinkedDir))) {
+        return;
+      }
+      const workspaceItemDir = workspaceItem?.absolutePath?.trim() ?? '';
+      if (
+        !trackedLinkedDir &&
+        workspaceItemDir &&
+        workspaceContextLinkedDirs.has(workspaceItemDir) &&
+        !(await removeWorkspaceContextLinkedDir(id, workspaceItemDir))
+      ) {
         return;
       }
       if (visibleWorkspaceContext?.id === id) setDismissedWorkspaceContextId(id);
@@ -1877,6 +1918,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       }
       onProjectMetadataChange?.(result.metadata);
       const promotedDir = dir.trim();
+      setPromotedWorkspaceContextDir(
+        selectedWorkspaceContextDirs.includes(promotedDir) ? promotedDir : null,
+      );
       setWorkspaceLinkedDirAdds((current) => {
         const nextEntries = Object.entries(current).filter(([, tracked]) => (
           tracked.dir !== promotedDir
@@ -1899,7 +1943,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         linkedDirs: linkedDirsWithWorkspaceContext(null),
       };
       const result = await patchProject(projectId, { metadata });
-      if (result?.metadata) onProjectMetadataChange?.(result.metadata);
+      if (result?.metadata) {
+        setPromotedWorkspaceContextDir(null);
+        onProjectMetadataChange?.(result.metadata);
+      }
     }
 
     async function handleSwitchDesignSystem(

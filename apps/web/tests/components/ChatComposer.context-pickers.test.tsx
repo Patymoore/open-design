@@ -545,6 +545,70 @@ describe('ChatComposer context pickers', () => {
     expect(screen.getByTestId('staged-contexts').textContent).toContain('reference-dir');
   });
 
+  it('treats Home-carried workspace dirs as context-only after project creation', async () => {
+    openFolderPaths = ['/Users/me/other-work-dir'];
+    const onProjectMetadataChange = vi.fn();
+
+    function ControlledComposer() {
+      const [metadata, setMetadata] = useState<ProjectMetadata>({
+        kind: 'prototype',
+        linkedDirs: ['/Users/me/reference-dir'],
+      });
+      return composerElement({
+        activeWorkspaceContext: {
+          id: 'local-code:/Users/me/reference-dir',
+          kind: 'local-code',
+          label: 'reference-dir',
+          title: 'reference-dir',
+          absolutePath: '/Users/me/reference-dir',
+        },
+        projectMetadata: metadata,
+        onProjectMetadataChange: (next) => {
+          onProjectMetadataChange(next);
+          setMetadata(next);
+        },
+      });
+    }
+
+    render(<ControlledComposer />);
+    await flushMounts();
+
+    expect(screen.getByTestId('working-dir-trigger').textContent).not.toContain('reference-dir');
+
+    fireEvent.click(screen.getByTestId('working-dir-trigger'));
+    expect(screen.queryByTestId('working-dir-clear')).toBeNull();
+    fireEvent.click(await screen.findByTestId('working-dir-pick'));
+
+    await waitFor(() => {
+      expect(projectPatchBodies()).toHaveLength(1);
+    });
+    expect(projectPatchBodies()[0]?.metadata?.linkedDirs).toEqual([
+      '/Users/me/other-work-dir',
+      '/Users/me/reference-dir',
+    ]);
+    await waitFor(() => {
+      expect(screen.getByTestId('working-dir-trigger').textContent).toContain('other-work-dir');
+    });
+
+    fireEvent.click(screen.getByTestId('working-dir-trigger'));
+    fireEvent.click(await screen.findByTestId('working-dir-clear'));
+
+    await waitFor(() => {
+      expect(projectPatchBodies()).toHaveLength(2);
+    });
+    expect(projectPatchBodies()[1]?.metadata?.linkedDirs).toEqual(['/Users/me/reference-dir']);
+    expect(screen.getByTestId('staged-contexts').textContent).toContain('reference-dir');
+
+    fireEvent.click(screen.getByLabelText('Remove reference-dir'));
+
+    await waitFor(() => {
+      expect(projectPatchBodies()).toHaveLength(3);
+    });
+    expect(projectPatchBodies()[2]?.metadata?.linkedDirs).toEqual([]);
+    expect(screen.queryByTestId('staged-contexts')?.textContent ?? '').not.toContain('reference-dir');
+    expect(screen.getByTestId('working-dir-trigger').textContent).not.toContain('reference-dir');
+  });
+
   it('keeps a promoted context dir as the working dir when its chip is removed', async () => {
     openFolderPaths = ['/Users/me/shared', '/Users/me/shared'];
     const onProjectMetadataChange = vi.fn();
