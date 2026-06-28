@@ -66,6 +66,7 @@ import {
   findDesignToolboxSkill,
   getDesignToolboxAction,
   skillMatchesQuery,
+  skillUsePriority,
   type DesignToolboxAction,
   type DesignToolboxActionId,
 } from '../runtime/design-toolbox';
@@ -159,6 +160,8 @@ type DesignToolboxResource =
   | (DesignToolboxResourceBase & { kind: 'mcp-template'; template: McpTemplate })
   | (DesignToolboxResourceBase & { kind: 'connector'; connector: ConnectorDetail })
   | (DesignToolboxResourceBase & { kind: 'file'; file: ProjectFile });
+
+const DESIGN_TOOLBOX_DEFAULT_RESOURCE_LIMIT = 14;
 
 interface Props {
   projectId: string | null;
@@ -383,6 +386,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     ref
   ) {
     const t = useT();
+    const { locale } = useI18n();
     const analytics = useAnalytics();
     const activeFileContext =
       projectMetadata?.importedFrom === 'folder' && activeProjectFileName
@@ -2170,9 +2174,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       const stagedSkillIds = new Set(stagedSkills.map((s) => s.id));
       return skills
         .filter((s) => !stagedSkillIds.has(s.id))
-        .filter((s) => skillMatchesQuery(s, mentionQuery))
-        .sort((a, b) => skillMentionRank(a, mentionQuery) - skillMentionRank(b, mentionQuery));
-    }, [mention, mentionQuery, skills, stagedSkills]);
+        .filter((s) =>
+          skillMatchesQuery(s, mentionQuery, [
+            localizeSkillName(locale, s),
+            localizeSkillDescription(locale, s),
+          ]),
+        )
+        .sort((a, b) => compareSkillsForUse(a, b, mentionQuery, locale));
+    }, [mention, mentionQuery, skills, stagedSkills, locale]);
     const liveCommentAttachments = currentCommentAttachments();
     const placeholderCarouselActive =
       !streaming
@@ -3577,9 +3586,11 @@ function DesignToolboxPanel({
   const visibleResources = useMemo(
     () => {
       const source = query
-        ? resources.filter((resource) => designToolboxResourceMatchesQuery(resource, query))
+        ? resources
+            .filter((resource) => designToolboxResourceMatchesQuery(resource, query))
+            .sort((a, b) => compareDesignToolboxResources(a, b))
         : designToolboxDefaultResources(actions, resources);
-      return source.slice(0, query ? 14 : 8);
+      return source.slice(0, query ? 14 : DESIGN_TOOLBOX_DEFAULT_RESOURCE_LIMIT);
     },
     [actions, query, resources],
   );
@@ -3820,8 +3831,17 @@ function ToolsSkillsPanel({
   const [query, setQuery] = useState('');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const visibleSkills = useMemo(
-    () => skills.filter((s) => skillMatchesQuery(s, query)).slice(0, 24),
-    [skills, query],
+    () =>
+      skills
+        .filter((s) =>
+          skillMatchesQuery(s, query, [
+            localizeSkillName(locale, s),
+            localizeSkillDescription(locale, s),
+          ]),
+        )
+        .sort((a, b) => compareSkillsForUse(a, b, query, locale))
+        .slice(0, 24),
+    [skills, query, locale],
   );
   return (
     <>
@@ -4091,23 +4111,43 @@ function designToolboxDefaultResources(
     add(resources.find((resource) => resource.kind === kind && resource.id === id));
   }
 
-  addByKindId('skill', 'creative-director');
+  for (const resource of resources
+    .filter((resource) => resource.kind === 'skill')
+    .sort((a, b) => compareDesignToolboxResources(a, b))) {
+    if (skillUsePriority(resource.skill) >= 1000) break;
+    add(resource);
+    if (out.length >= DESIGN_TOOLBOX_DEFAULT_RESOURCE_LIMIT) return out;
+  }
   for (const action of actions) {
     const skill = resources.find((resource) =>
       resource.kind === 'skill'
       && action.preferredSkillIds.some((id) => resource.skill.id === id || resource.skill.name === id),
     );
     add(skill);
+    if (out.length >= DESIGN_TOOLBOX_DEFAULT_RESOURCE_LIMIT) return out;
   }
   for (const term of ['design', 'image', 'video', 'motion', 'figma']) {
     for (const resource of resources) {
-      if (out.length >= 8) return out;
+      if (out.length >= DESIGN_TOOLBOX_DEFAULT_RESOURCE_LIMIT) return out;
       if (resource.kind !== 'skill' && designToolboxResourceMatchesQuery(resource, term)) {
         add(resource);
       }
     }
   }
   return out;
+}
+
+function compareDesignToolboxResources(
+  a: DesignToolboxResource,
+  b: DesignToolboxResource,
+): number {
+  return designToolboxResourcePriority(a) - designToolboxResourcePriority(b)
+    || a.title.localeCompare(b.title);
+}
+
+function designToolboxResourcePriority(resource: DesignToolboxResource): number {
+  if (resource.kind !== 'skill') return 1000;
+  return skillUsePriority(resource.skill);
 }
 
 function designToolboxResourceKindLabel(
@@ -4462,13 +4502,26 @@ function designToolboxCompactLine(
   });
 }
 
-function skillMentionRank(skill: SkillSummary, query: string): number {
+function compareSkillsForUse(
+  a: SkillSummary,
+  b: SkillSummary,
+  query: string,
+  locale: Locale,
+): number {
+  return skillMentionRank(a, query, locale) - skillMentionRank(b, query, locale)
+    || skillUsePriority(a) - skillUsePriority(b)
+    || localizeSkillName(locale, a).localeCompare(localizeSkillName(locale, b));
+}
+
+function skillMentionRank(skill: SkillSummary, query: string, locale: Locale): number {
   const q = query.trim().toLowerCase();
-  if (!q) return 1;
+  if (!q) return 0;
+  const title = localizeSkillName(locale, skill).toLowerCase();
   const id = skill.id.toLowerCase();
   const name = skill.name.toLowerCase();
-  if (id.startsWith(q) || name.startsWith(q)) return 0;
-  return 1;
+  if (id.startsWith(q) || name.startsWith(q) || title.startsWith(q)) return 0;
+  if ((skill.triggers ?? []).some((trigger) => String(trigger).toLowerCase().startsWith(q))) return 1;
+  return 2;
 }
 
 function mcpServerMatchesQuery(server: McpServerConfig, query: string): boolean {

@@ -35,6 +35,69 @@ const GSAP_SKILL = {
   upstream: 'https://github.com/greensock/gsap-skills',
 };
 
+const SEARCH_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: 'search',
+  name: 'Search',
+  description: 'Free-first web search.',
+  triggers: ['search', 'web search', '搜索'],
+  category: 'research',
+};
+
+const DEEP_RESEARCH_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: 'deep-research',
+  name: 'Deep Research',
+  description: 'Multi-pass research.',
+  triggers: ['deep research', '深度研究'],
+  category: 'research',
+};
+
+const LAST30DAYS_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: 'last30days',
+  name: 'Last 30 Days',
+  description: 'Recent-signal research.',
+  triggers: ['last 30 days', '最近30天'],
+  category: 'research',
+};
+
+const FRONTEND_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: 'frontend-skill',
+  name: 'Frontend Skill',
+  description: 'Frontend UI playbook.',
+  triggers: ['frontend', 'ui'],
+  category: 'design-systems',
+};
+
+const BRAINSTORMING_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: 'brainstorming',
+  name: 'Brainstorming',
+  description: 'Structured ideation.',
+  triggers: ['brainstorm', 'ideation'],
+  category: 'creative-direction',
+};
+
+const MOTION_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: 'emilkowalski-motion',
+  name: 'Motion',
+  description: 'Motion polish.',
+  triggers: ['motion', 'animation', '动效'],
+  category: 'animation-motion',
+};
+
+const VIDEO_TEMPLATE_SKILL = {
+  ...DESIGN_TASTE_SKILL,
+  id: '8-bit-orbit-video-template',
+  name: '8-bit Orbit',
+  description: 'Video template.',
+  triggers: ['video'],
+  category: 'video-generation',
+};
+
 const CREATIVE_DIRECTOR_SKILL = {
   ...DESIGN_TASTE_SKILL,
   id: 'creative-director',
@@ -220,6 +283,46 @@ afterEach(() => {
 });
 
 describe('ChatComposer design toolbox', () => {
+  it('front-loads research, frontend, brainstorm, and motion skills in default resources', async () => {
+    const { ref } = renderComposer({
+      skills: [
+        VIDEO_TEMPLATE_SKILL,
+        MOTION_SKILL,
+        BRAINSTORMING_SKILL,
+        FRONTEND_SKILL,
+        LAST30DAYS_SKILL,
+        DEEP_RESEARCH_SKILL,
+        SEARCH_SKILL,
+      ],
+    });
+    await flushMounts();
+
+    openToolbox(ref);
+
+    await waitFor(() => expect(screen.getByText('Search')).toBeTruthy());
+    const rowNames = Array.from(
+      document.body.querySelectorAll('.plus-menu__list .plus-menu__item span'),
+      (node) => node.textContent,
+    );
+    const ordered = [
+      'Search',
+      'Deep Research',
+      'Last 30 Days',
+      'Frontend Skill',
+      'Brainstorming',
+      'Motion',
+    ];
+
+    for (const name of ordered) {
+      expect(rowNames).toContain(name);
+    }
+    for (let index = 0; index < ordered.length - 1; index += 1) {
+      const current = ordered[index]!;
+      const next = ordered[index + 1]!;
+      expect(rowNames.indexOf(current)).toBeLessThan(rowNames.indexOf(next));
+    }
+  });
+
   it('stages a one-turn follow-up skill without patching the project skill', async () => {
     const onSend = vi.fn();
     const { ref } = renderComposer({ onSend });
