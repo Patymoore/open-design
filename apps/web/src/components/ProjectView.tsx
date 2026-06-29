@@ -64,6 +64,7 @@ import {
 import {
   anonymizeArtifactId,
   artifactKindToTracking,
+  projectKindFromMetadataToTracking,
   projectKindToTracking,
 } from '@open-design/contracts/analytics';
 import type {
@@ -77,6 +78,7 @@ import {
   trackArtifactHeaderClick,
   trackComposerBarClick,
   trackDesignSystemApplyResult,
+  trackDesignSystemEnrichClick,
   trackPageView,
   trackRunCreated,
   trackRunFinished,
@@ -132,6 +134,7 @@ import {
 import {
   createConversation,
   deleteConversation as deleteConversationApi,
+  duplicatePluginAsProject,
   fetchAppliedPluginSnapshot,
   getTemplate,
   installGeneratedPluginFolder,
@@ -186,6 +189,7 @@ import { AvatarMenu } from './AvatarMenu';
 import { EntrySettingsMenu } from './EntrySettingsMenu';
 import { HandoffButton } from './HandoffButton';
 import { Icon } from './Icon';
+import { localizePluginTitle } from './plugins-home/localization';
 import { DesignSystemPicker } from './DesignSystemPicker';
 import { PluginDetailsModal } from './PluginDetailsModal';
 import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
@@ -243,6 +247,10 @@ type ProjectChatSendMeta = ChatSendMeta & {
    *  this send (e.g. 'resume_continue' from the resumable-failure Continue
    *  action). Behavior never depends on it; it only shapes PostHog props. */
   entryFrom?: ChatAnalyticsEntryFrom;
+  /** Marks this send as the AI-optimize (deep enrichment) run so the daemon
+   *  can emit design_system_enrich_result + flag the DS as ai_refined on
+   *  success (tracking spec C14/C15). Daemon mode only. */
+  dsEnrichment?: boolean;
 };
 
 export function mergeSavedPreviewComment(current: PreviewComment[], saved: PreviewComment): PreviewComment[] {
@@ -4358,6 +4366,7 @@ export function ProjectView({
           ...(sessionTurn
             ? { turnIndex: sessionTurn.turnIndex, isFirstRun: sessionTurn.isFirstRun }
             : {}),
+          ...(meta?.dsEnrichment ? { dsEnrichment: true } : {}),
           hasExistingArtifact,
           // This branch only runs in daemon (local-execution) mode, so the
           // runtime is the bundled AMR cloud agent or a local coding CLI —
@@ -5680,6 +5689,13 @@ export function ProjectView({
       // surfaces. `target_project_kind` derives from
       // `project.metadata.kind`.
       const target =
+        // NOTE: `target_project_kind` uses the narrower
+        // `TrackingDesignSystemApplyTargetKind` enum, which intentionally does
+        // NOT carry the prototype subtypes (wireframe/mobile) or `document`.
+        // Derive the coarse kind here (subtypes collapse back to `prototype`)
+        // so a Home-created Wireframe/Mobile/Document project never emits a
+        // value outside this field's schema. The fine-grained split only
+        // belongs on `project_kind` (create/run events).
         (projectKindToTracking(project.metadata?.kind ?? null, project.metadata?.videoModel) ?? 'unknown') as TrackingDesignSystemApplyTargetKind;
       const picked = nextId
         ? designSystems.find((d) => d.id === nextId)
@@ -6072,7 +6088,9 @@ export function ProjectView({
     autoSendAttachmentsRef.current = isAutoSend ? readAutoSendAttachments(project.id) : [];
   }
   const brandEnrichmentEligibleForProject =
-    projectIsProgrammaticBrandExtraction && !autoSendFirstMessageRef.current;
+    config.mode === 'daemon' &&
+    projectIsProgrammaticBrandExtraction &&
+    !autoSendFirstMessageRef.current;
   const [initialDraft, setInitialDraft] = useState<
     { projectId: string; value: string } | undefined
   >(
@@ -6121,9 +6139,16 @@ export function ProjectView({
   // skill bundle, refining the SAME registered design system in place. Shared by
   // the chat "Continue" affordance and the ready-toast "AI Optimize" nudge.
   const handleBrandEnrichment = useCallback(() => {
-    if (brandEnrichmentStarting) return;
+    if (brandEnrichmentStarting || config.mode !== 'daemon') return;
     const system = designSystemProject ?? activeDesignSystemSummary;
     const skillIds = installedBrandEnrichmentSkillIds(skills);
+    trackDesignSystemEnrichClick(analytics.track, {
+      page_name: 'design_system_project',
+      area: 'design_system_enrich',
+      element: 'ai_optimize',
+      design_system_id: projectDesignSystemId ?? undefined,
+      project_kind: 'design_system',
+    });
     setBrandEnrichmentStarting(true);
     void handleSend(
       buildBrandEnrichmentPrompt(brandEnrichmentPromptSeed || brandEnrichmentPromptSeedCache, {
@@ -6134,16 +6159,19 @@ export function ProjectView({
       }),
       [],
       [],
-      skillIds.length > 0 ? { skillIds } : undefined,
+      { ...(skillIds.length > 0 ? { skillIds } : {}), dsEnrichment: true },
     ).finally(() => setBrandEnrichmentStarting(false));
   }, [
     activeDesignSystemSummary,
+    analytics,
     brandEnrichmentPromptSeed,
     brandEnrichmentPromptSeedCache,
     brandEnrichmentStarting,
+    config.mode,
     designSystemProject,
     handleSend,
     currentProject.metadata,
+    projectDesignSystemId,
     projectFiles,
     skills,
   ]);
@@ -6272,6 +6300,30 @@ export function ProjectView({
     const record = plugins.find((plugin) => plugin.id === normalizedId);
     if (record) setContextPluginDetails(record);
   }, []);
+  const handleDuplicateContextPlugin = useCallback(async (record: InstalledPluginRecord) => {
+    try {
+      const result = await duplicatePluginAsProject(record.id, {
+        name: localizePluginTitle(locale, record),
+      });
+      setContextPluginDetails(null);
+      navigate({
+        kind: 'project',
+        projectId: result.projectId,
+        conversationId: result.conversationId,
+        fileName: result.relPath,
+      });
+    } catch {
+      setProjectActionsToast({
+        message: t('pluginCard.duplicateFailed'),
+        details: null,
+        tone: 'error',
+        ttlMs: 3000,
+      });
+    }
+  }, [locale, t]);
+  const handleOpenContextDesignSystemDetails = useCallback((system: DesignSystemSummary) => {
+    setContextDesignSystemDetails(system);
+  }, []);
   const chatDesignSystemSummary = useMemo(() => {
     if (activeDesignSystemSummary) return activeDesignSystemSummary;
     const designSystemName = activePluginSnapshot?.inputs?.designSystem;
@@ -6395,54 +6447,56 @@ export function ProjectView({
   // CLI / agent selector lives below the chat conversation (composer footer),
   // not in the top-right header.
   const executionControls = (
-    <AvatarMenu
-      config={config}
-      agents={agents}
-      daemonLive={daemonLive}
-      onModeChange={onModeChange}
-      onOpen={() => {
-        trackComposerBarClick(analytics.track, {
-          page_name: 'chat_panel',
-          area: 'chat_composer',
-          element: 'agent_selector_open',
-          ...(project?.id ? { project_id: project.id } : {}),
-        });
-      }}
-      onAgentChange={(id) => {
-        trackComposerBarClick(analytics.track, {
-          page_name: 'chat_panel',
-          area: 'chat_composer',
-          element: 'agent_select',
-          agent_id: id,
-          ...(project?.id ? { project_id: project.id } : {}),
-        });
-        onAgentChange(id);
-      }}
-      onAgentModelChange={(agentId, choice) => {
-        trackComposerBarClick(analytics.track, {
-          page_name: 'chat_panel',
-          area: 'chat_composer',
-          element: 'agent_model_select',
-          agent_id: agentId,
-          ...(choice?.model ? { model_id: choice.model } : {}),
-          ...(project?.id ? { project_id: project.id } : {}),
-        });
-        onAgentModelChange(agentId, choice);
-      }}
-      onApiModelChange={(model) => {
-        trackComposerBarClick(analytics.track, {
-          page_name: 'chat_panel',
-          area: 'chat_composer',
-          element: 'agent_model_select',
-          model_id: model,
-          ...(project?.id ? { project_id: project.id } : {}),
-        });
-        onApiModelChange?.(model);
-      }}
-      onOpenSettings={onOpenSettings}
-      onRefreshAgents={onRefreshAgents}
-      placement="up"
-    />
+    <>
+      <AvatarMenu
+        config={config}
+        agents={agents}
+        daemonLive={daemonLive}
+        onModeChange={onModeChange}
+        onOpen={() => {
+          trackComposerBarClick(analytics.track, {
+            page_name: 'chat_panel',
+            area: 'chat_composer',
+            element: 'agent_selector_open',
+            ...(project?.id ? { project_id: project.id } : {}),
+          });
+        }}
+        onAgentChange={(id) => {
+          trackComposerBarClick(analytics.track, {
+            page_name: 'chat_panel',
+            area: 'chat_composer',
+            element: 'agent_select',
+            agent_id: id,
+            ...(project?.id ? { project_id: project.id } : {}),
+          });
+          onAgentChange(id);
+        }}
+        onAgentModelChange={(agentId, choice) => {
+          trackComposerBarClick(analytics.track, {
+            page_name: 'chat_panel',
+            area: 'chat_composer',
+            element: 'agent_model_select',
+            agent_id: agentId,
+            ...(choice?.model ? { model_id: choice.model } : {}),
+            ...(project?.id ? { project_id: project.id } : {}),
+          });
+          onAgentModelChange(agentId, choice);
+        }}
+        onApiModelChange={(model) => {
+          trackComposerBarClick(analytics.track, {
+            page_name: 'chat_panel',
+            area: 'chat_composer',
+            element: 'agent_model_select',
+            model_id: model,
+            ...(project?.id ? { project_id: project.id } : {}),
+          });
+          onApiModelChange?.(model);
+        }}
+        onOpenSettings={onOpenSettings}
+        onRefreshAgents={onRefreshAgents}
+        placement="up"
+      />
+    </>
   );
 
   return (
@@ -6485,7 +6539,7 @@ export function ProjectView({
               projectId={project.id}
               sessionMode={activeSessionMode}
               onSessionModeChange={handleActiveConversationSessionModeChange}
-              projectKindForTracking={projectKindToTracking(currentProject.metadata?.kind, currentProject.metadata?.videoModel)}
+              projectKindForTracking={projectKindFromMetadataToTracking(currentProject.metadata)}
               projectFiles={projectFiles}
               activeProjectFileName={activeProjectFileName}
               hasActiveDesignSystem={!!projectDesignSystemId}
@@ -6508,7 +6562,7 @@ export function ProjectView({
               onSendQueuedNow={sendQueuedChatSendNow}
               onRequestOpenFile={requestOpenFile}
               onRequestPluginDetails={handleOpenContextPluginDetails}
-              onRequestDesignSystemDetails={setContextDesignSystemDetails}
+              onRequestDesignSystemDetails={handleOpenContextDesignSystemDetails}
               onRequestPluginFolderAgentAction={handlePluginFolderAgentAction}
               activePluginActionPaths={activePluginActionPaths}
               hiddenPluginActionPaths={hiddenAssistantPluginActionPaths}
@@ -6657,7 +6711,7 @@ export function ProjectView({
         ) : null}
         <FileWorkspace
           projectId={project.id}
-          projectKind={projectKindToTracking(currentProject.metadata?.kind, currentProject.metadata?.videoModel) ?? 'prototype'}
+          projectKind={projectKindFromMetadataToTracking(currentProject.metadata) ?? 'prototype'}
           rootDirName={(() => {
             const baseDir = currentProject.metadata?.baseDir;
             return typeof baseDir === 'string'
@@ -6782,6 +6836,7 @@ export function ProjectView({
           record={contextPluginDetails}
           onClose={() => setContextPluginDetails(null)}
           onUse={() => setContextPluginDetails(null)}
+          onDuplicate={(record) => void handleDuplicateContextPlugin(record)}
           isApplying={false}
           hideUseAction
         />
@@ -6789,6 +6844,7 @@ export function ProjectView({
       {contextDesignSystemDetails ? (
         <DesignSystemPreviewModal
           system={contextDesignSystemDetails}
+          initialViewId="kit"
           onClose={() => setContextDesignSystemDetails(null)}
         />
       ) : null}
