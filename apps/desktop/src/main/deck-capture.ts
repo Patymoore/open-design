@@ -195,7 +195,11 @@ export async function renderDeckSlides(
     // fail fast with a clear error instead of silently downgrading to a single
     // full-page capture (which would be the wrong export for PPTX/deck).
     if (input.deck === true && !hasSlides) {
-      return finish({ ok: false, error: "no slide surfaces found in this deck" });
+      return finish({
+        ok: false,
+        error: "no slide surfaces found in this deck",
+        errorCode: "NO_SLIDES",
+      });
     }
     const wantsDeck = shouldCaptureAsDeck(hasSlides, input.deck);
     if (!wantsDeck) {
@@ -271,6 +275,7 @@ export async function renderDeckSlides(
         return finish({
           ok: false,
           error: `slide index ${input.index} is out of range (deck has ${count} slide(s))`,
+          errorCode: "SLIDE_INDEX_OUT_OF_RANGE",
         });
       }
       const indices = input.index != null ? [input.index] : range(count);
@@ -295,7 +300,11 @@ export async function renderDeckSlides(
       }
     }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      errorCode: "RENDER_FAILED",
+    };
   } finally {
     if (!window.isDestroyed()) window.destroy();
   }
@@ -396,7 +405,11 @@ async function renderEditablePptx(
     true,
   )) as { b64?: string; error?: string };
   if (!out || out.error || !out.b64) {
-    return { ok: false, error: out?.error || "editable PPTX export produced no output" };
+    return {
+      ok: false,
+      error: out?.error || "editable PPTX export produced no output",
+      errorCode: "RENDER_FAILED",
+    };
   }
   const buffer = Buffer.from(out.b64, "base64");
   if (outputDir) {
@@ -588,6 +601,7 @@ async function capturePage(
         return {
           ok: false,
           error: `page is too tall to export as one image (~${docH}px) — export as PDF instead`,
+          errorCode: "PAGE_TOO_TALL",
         };
       }
       return await scrollSegmentStitch(window, docH, jpeg, outputDir, pageSize);
@@ -618,6 +632,7 @@ async function capturePage(
     return {
       ok: false,
       error: `page is too tall to export as one image (~${totalLogical}px) — export as PDF instead`,
+      errorCode: "PAGE_TOO_TALL",
     };
   }
   return await scrollSegmentStitch(window, totalLogical, jpeg, outputDir, pageSize);

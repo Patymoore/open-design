@@ -235,6 +235,7 @@ describe('screenshot export desktop renderer file handoff', () => {
     const noSlideRenderer = async (): Promise<DesktopRenderSlidesResult> => ({
       ok: false,
       error: 'no slide surfaces found in this deck',
+      errorCode: 'NO_SLIDES',
     });
     const srv = (await startServer({
       port: 0,
@@ -251,6 +252,32 @@ describe('screenshot export desktop renderer file handoff', () => {
       const body = (await res.json()) as { error?: { code?: string; message?: string } };
       expect(body.error?.code).toBe('BAD_REQUEST');
       expect(body.error?.message).toContain('not a slide deck');
+    } finally {
+      await new Promise<void>((resolve) => srv.server.close(() => resolve()));
+    }
+  });
+
+  it('returns 422 for semantic renderer request errors', async () => {
+    const indexErrorRenderer = async (): Promise<DesktopRenderSlidesResult> => ({
+      ok: false,
+      error: 'slide index 4 is out of range (deck has 2 slide(s))',
+      errorCode: 'SLIDE_INDEX_OUT_OF_RANGE',
+    });
+    const srv = (await startServer({
+      port: 0,
+      returnServer: true,
+      desktopSlideRenderer: indexErrorRenderer,
+    })) as { url: string; server: http.Server };
+    try {
+      const res = await fetch(`${srv.url}/api/projects/${projectId}/export/image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileName: 'index.html', index: 4 }),
+      });
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as { error?: { code?: string; message?: string } };
+      expect(body.error?.code).toBe('BAD_REQUEST');
+      expect(body.error?.message).toContain('out of range');
     } finally {
       await new Promise<void>((resolve) => srv.server.close(() => resolve()));
     }

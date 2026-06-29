@@ -298,8 +298,15 @@ export type DesktopRenderSlidesInput = {
 // When the request set `outputDir`, the images are returned as absolute file
 // paths in `slideFiles` (binary on disk, no base64); otherwise as base64 data
 // URLs in `slides`.
+export type DesktopRenderSlidesErrorCode =
+  | "NO_SLIDES"
+  | "PAGE_TOO_TALL"
+  | "RENDER_FAILED"
+  | "SLIDE_INDEX_OUT_OF_RANGE";
+
 export type DesktopRenderSlidesResult = {
   error?: string;
+  errorCode?: DesktopRenderSlidesErrorCode;
   height?: number;
   mode?: "deck" | "page";
   ok: boolean;
