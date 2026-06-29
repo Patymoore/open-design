@@ -887,10 +887,15 @@ export interface Dict {
   'entry.discordAriaWithOnline': string;
   'entry.discordOnlineLabel': string;
   'entry.followXLabel': string;
+  'entry.followThreadsLabel': string;
+  'entry.youtubeLabel': string;
   'entry.resizeAria': string;
   'entry.loadingWorkspace': string;
   'entry.useEverywhereTitle': string;
   'entry.useEverywhereAria': string;
+  'entry.workspaceTeamsLabel': string;
+  'entry.workspaceTeamsTitle': string;
+  'entry.workspaceTeamsAria': string;
   // Left nav rail (icon-only) — surface labels also serve as tooltips
   'entry.navExpand': string;
   'entry.navCollapse': string;
@@ -1214,12 +1219,19 @@ export interface Dict {
   'pluginCard.use': string;
   'pluginCard.useWithQuery': string;
   'pluginCard.applying': string;
+  'pluginCard.duplicate': string;
+  'pluginCard.duplicating': string;
+  'pluginCard.duplicateFailed': string;
+  'pluginCard.saved': string;
   'pluginCard.publish': string;
   'pluginCard.contribute': string;
   'pluginCard.starting': string;
   'pluginCard.detailsAria': string;
   'pluginCard.chooseUseAria': string;
   'pluginCard.useOptionsAria': string;
+  'pluginCard.duplicateAria': string;
+  'pluginCard.saveAria': string;
+  'pluginCard.savedAria': string;
   'pluginCard.shareAria': string;
   'pluginCard.publishAria': string;
   'pluginCard.publishTitle': string;
@@ -2657,6 +2669,8 @@ export interface Dict {
   'preview.usePluginOnlyDesc': string;
   'preview.replicateContent': string;
   'preview.replicateContentDesc': string;
+  'preview.duplicateTemplate': string;
+  'preview.duplicateTemplateDesc': string;
   'preview.shareMenu': string;
   'preview.exportMenu': string;
   'preview.shareTemplateBadge': string;

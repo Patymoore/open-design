@@ -6,7 +6,7 @@ import {
   gotoVisualHome,
   gotoVisualWorkspace,
   mockSignedInVelaAccount,
-  openSettingsDetailsFromHeader,
+  prepareVisualSettingsDialog,
   VISUAL_AMR_AGENT,
   VISUAL_CLI_AGENTS,
   waitForVisualFonts,
@@ -17,9 +17,8 @@ test('[P2] captures the settings execution surface', async ({ page }) => {
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   await expect(dialog.getByRole('tab', { name: /Local CLI/i })).toBeVisible();
-  await expect(dialog.getByRole('tablist', { name: 'Execution mode' })).toBeVisible();
   await waitForVisualFonts(page);
 
   await captureVisual(page, 'visual-settings-execution');
@@ -40,7 +39,7 @@ test('[P1] captures the settings Open Design account balance surface', async ({ 
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   const amrCard = dialog.getByTestId('settings-agent-card-amr');
   await expect(amrCard).toContainText('Open Design');
   await expect(amrCard).toContainText('plus');
@@ -62,7 +61,7 @@ test('[P2] captures the settings local CLI surface', async ({ page }) => {
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   await dialog.getByRole('tab', { name: /Local CLI/i }).click();
   await expect(dialog.getByTestId('settings-agent-select-codex')).toBeVisible();
   await waitForVisualFonts(page);
@@ -81,7 +80,7 @@ test('[P2] captures the settings local CLI model dropdown surface', async ({ pag
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   await dialog.getByRole('tab', { name: /Local CLI/i }).click();
   await dialog.getByTestId('settings-agent-select-codex').click();
   const modelSelect = dialog.locator('.agent-card.active [role="combobox"]').first();
@@ -101,7 +100,7 @@ test('[P2] captures the settings BYOK surface', async ({ page }) => {
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   await dialog.getByRole('tab', { name: 'BYOK' }).click();
   await expect(dialog.getByRole('tablist', { name: 'API protocol' })).toBeVisible();
   await expect(dialog.getByRole('heading', { name: 'Anthropic API' })).toBeVisible();
@@ -124,7 +123,7 @@ test('[P2] captures the settings BYOK OpenAI surface', async ({ page }) => {
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   await dialog.getByRole('tab', { name: 'BYOK' }).click();
   await dialog.getByRole('tab', { name: 'OpenAI', exact: true }).click();
   await expect(dialog.getByRole('heading', { name: 'OpenAI API' })).toBeVisible();
@@ -147,7 +146,7 @@ test('[P2] captures the settings BYOK model dropdown surface', async ({ page }) 
   await gotoVisualHome(page);
   await gotoVisualWorkspace(page);
 
-  const dialog = await openSettingsDetailsFromHeader(page);
+  const dialog = await prepareVisualSettingsDialog(page);
   await dialog.getByRole('tab', { name: 'BYOK' }).click();
   await dialog.getByRole('tab', { name: 'OpenAI', exact: true }).click();
   const modelSelect = dialog.getByRole('combobox', { name: 'Model', exact: true });
