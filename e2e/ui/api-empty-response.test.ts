@@ -50,14 +50,25 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('[P0] @critical API empty stream shows No output instead of Done', async ({ page }) => {
-  await page.route('**/api/proxy/openai/stream', async (route) => {
+  await page.route('**/api/runs', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ runId: 'api-empty-response-run' }),
+    });
+  });
+  await page.route('**/api/runs/api-empty-response-run/events', async (route) => {
     await route.fulfill({
       status: 200,
       headers: {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
       },
-      body: ['event: end', 'data: {}', '', ''].join('\n'),
+      body: ['event: end', 'data: {"code":0,"status":"succeeded"}', '', ''].join('\n'),
     });
   });
 
@@ -115,7 +126,7 @@ async function sendPrompt(page: Page, prompt: string) {
     page.waitForResponse(
       (response) => {
         const url = new URL(response.url());
-        return url.pathname === '/api/proxy/openai/stream' && response.request().method() === 'POST';
+        return url.pathname === '/api/runs' && response.request().method() === 'POST';
       },
       { timeout: 10_000 },
     ),
