@@ -1474,25 +1474,20 @@ describe('ProjectView conversation run isolation', () => {
     }));
   });
 
-  it('notifies when an API-mode chat completes without a daemon run status transition', async () => {
+  it('notifies when a BYOK OpenCode chat completes without a daemon run status transition', async () => {
     listMessages.mockResolvedValue([]);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
-    streamMessage.mockImplementation(
-      async (
-        _config: unknown,
-        _systemPrompt: unknown,
-        _history: unknown,
-        _signal: unknown,
-        handlers: { onDelta: (delta: string) => void; onDone: () => void },
-      ) => {
-        handlers.onDelta('api response');
-        handlers.onDone();
-      },
-    );
+    streamViaDaemon.mockImplementation(async (options: {
+      handlers: { onDelta: (delta: string) => void; onDone: () => void };
+    }) => {
+      options.handlers.onDelta('api response');
+      options.handlers.onDone();
+    });
 
     renderProjectView({
       ...config,
       mode: 'api',
+      apiProtocol: 'openai',
       apiKey: 'test-key',
       model: 'api-model',
     });
@@ -1502,7 +1497,12 @@ describe('ProjectView conversation run isolation', () => {
 
     fireEvent.click(screen.getByTestId('send-message'));
 
-    await waitFor(() => expect(streamMessage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(1));
+    expect(streamViaDaemon).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'byok-opencode',
+      byokProvider: expect.objectContaining({ protocol: 'openai', apiKey: 'test-key' }),
+      model: 'api-model',
+    }));
     await waitFor(() => expect(playSound).toHaveBeenCalledWith('success-sound'));
   });
 

@@ -25,7 +25,7 @@ describe('assistantRoleLabel', () => {
       agentId: 'openai-api',
     };
 
-    expect(assistantRoleLabel(message, t)).toBe('OpenAI API');
+    expect(assistantRoleLabel(message, t)).toBe('OpenAI API via OpenCode');
   });
 
   it('normalizes saved API protocol ids used as display names', () => {
@@ -36,7 +36,7 @@ describe('assistantRoleLabel', () => {
       agentName: 'openai-api',
     };
 
-    expect(assistantRoleLabel(message, t)).toBe('OpenAI API');
+    expect(assistantRoleLabel(message, t)).toBe('OpenAI API via OpenCode');
   });
 
   it('preserves an explicit local agent model in the display name', () => {
