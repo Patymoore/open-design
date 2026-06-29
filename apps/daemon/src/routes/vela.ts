@@ -20,7 +20,6 @@ import {
   parseAmrOnboardingProfileAnalyticsPayload,
   applyVelaLiveAccount,
   clearAllVelaLiveAccounts,
-  clearVelaLiveAccountRefreshThrottle,
   parseVelaLoginAttribution,
   peekVelaLiveAccount,
   readVelaCredentialRevision,
@@ -209,9 +208,9 @@ export function registerVelaRoutes(app: Express, deps: RegisterVelaRoutesDeps): 
       return account;
     })()
       .catch((err) => {
-        // Clear the throttle so the next poll retries; caller falls back to
-        // config-only (no account field).
-        clearVelaLiveAccountRefreshThrottle(accountCacheKey);
+        // Keep the refresh throttle as a short negative cache/backoff. /status
+        // is read by focus/menu/login surfaces, so a persistent optional
+        // billing failure must not make every poll await the same slow probe.
         console.warn('[amr] live account fetch failed', err);
         return null;
       })
@@ -256,11 +255,15 @@ export function registerVelaRoutes(app: Express, deps: RegisterVelaRoutesDeps): 
           // consumers (settings card, inline switcher, avatar) read /status once
           // and do not re-poll, so returning config-only here would hide the
           // fields until the user refocuses. On failure the helper resolves null
-          // and we fall back to config-only (no account field).
-          applyVelaLiveAccount(
-            status,
-            await fetchVelaLiveAccountSingleFlight(accountCacheKey),
-          );
+          // and the refresh throttle becomes a short negative cache/backoff, so
+          // repeated menu/focus polls degrade to config-only instead of each
+          // awaiting the same optional billing probe.
+          const liveAccount =
+            inFlightVelaAccountFetches.has(accountCacheKey) ||
+            shouldRefreshVelaLiveAccount(accountCacheKey)
+              ? await fetchVelaLiveAccountSingleFlight(accountCacheKey)
+              : null;
+          applyVelaLiveAccount(status, liveAccount);
         } else {
           // Warm cache: serve it immediately; refresh in the background for the
           // next poll once the TTL has lapsed.

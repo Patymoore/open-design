@@ -439,6 +439,9 @@ if (argv[2] === 'models') {
 // With neither set, behave as if billing is unavailable (exit 1) so the
 // route's cold-cache fallback keeps returning config-only as before.
 if (argv[2] === 'billing' && argv[3] === 'summary') {
+  if (env.FAKE_VELA_BILLING_LOG) {
+    appendFileSync(env.FAKE_VELA_BILLING_LOG, `${Date.now()}\n`);
+  }
   const tier = env.FAKE_VELA_BILLING_TIER;
   const balance = env.FAKE_VELA_BILLING_BALANCE_USD;
   if (!tier && !balance) {

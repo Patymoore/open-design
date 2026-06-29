@@ -179,13 +179,19 @@ export function AvatarMenu({
   // can show the real plan/balance even when another agent is currently active.
   const [amrAccount, setAmrAccount] = useState<VelaLoginStatus | null>(null);
   useEffect(() => {
-    if (!open || !amrAvailable) return;
+    if (!open || !amrAvailable) {
+      setAmrAccount(null);
+      return;
+    }
     let cancelled = false;
+    setAmrAccount(null);
     void fetchVelaLoginStatus()
       .then((status) => {
         if (!cancelled) setAmrAccount(status);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setAmrAccount(null);
+      });
     return () => {
       cancelled = true;
     };

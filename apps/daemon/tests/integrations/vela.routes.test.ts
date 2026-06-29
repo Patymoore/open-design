@@ -206,6 +206,7 @@ afterEach(() => {
   delete process.env.FAKE_VELA_LOGIN_USER_PLAN;
   delete process.env.FAKE_VELA_BILLING_TIER;
   delete process.env.FAKE_VELA_BILLING_BALANCE_USD;
+  delete process.env.FAKE_VELA_BILLING_LOG;
   delete process.env.FAKE_VELA_ENV_DUMP_PATH;
   delete process.env.OD_PUBLIC_BASE_URL;
   delete process.env.VELA_RUNTIME_KEY;
@@ -605,6 +606,37 @@ describe('GET /api/integrations/vela/status', () => {
     expect(body.loggedIn).toBe(true);
     expect(body.account?.plan).toBe('free');
     expect(body.account?.balanceUsd).toBe('0.00');
+  });
+
+  it('keeps failed live billing reads throttled for repeated status polls', async () => {
+    clearAllVelaLiveAccounts();
+    const billingLog = path.join(tmpHome, 'billing-summary.log');
+    process.env.FAKE_VELA_BILLING_LOG = billingLog;
+    // Leave FAKE_VELA_BILLING_* unset so fake-vela exits non-zero for the
+    // optional live billing read.
+    seedLogin('local', {
+      user: { id: 'backoff-1', email: 'backoff@example.com', plan: undefined },
+    });
+
+    const first = await getJson<{
+      loggedIn: boolean;
+      account?: { plan?: string; balanceUsd?: string | null };
+    }>(`${baseUrl}/api/integrations/vela/status`);
+    const second = await getJson<{
+      loggedIn: boolean;
+      account?: { plan?: string; balanceUsd?: string | null };
+    }>(`${baseUrl}/api/integrations/vela/status`);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.body.loggedIn).toBe(true);
+    expect(second.body.loggedIn).toBe(true);
+    expect(first.body.account).toBeUndefined();
+    expect(second.body.account).toBeUndefined();
+    const attempts = existsSync(billingLog)
+      ? readFileSync(billingLog, 'utf8').trim().split('\n').filter(Boolean)
+      : [];
+    expect(attempts).toHaveLength(1);
   });
 
   it('does not leak cached billing when the Settings-backed env credential switches accounts', async () => {

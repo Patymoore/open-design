@@ -265,4 +265,60 @@ describe('AvatarMenu', () => {
     expect(url.searchParams.get('source')).toBe('open_design');
     expect(url.searchParams.get('od_device_id')).toBe('od-install-abc');
   });
+
+  it('clears stale AMR account data before refreshing on reopen', async () => {
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/integrations/vela/status') {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return new Response(
+            JSON.stringify({
+              loggedIn: true,
+              loginInFlight: false,
+              profile: 'test',
+              user: { id: 'u1', email: 'old@example.com' },
+              account: { plan: 'plus', balanceUsd: '247.51' },
+              configPath: '/Users/test/.amr/config.json',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        throw new Error('status unavailable');
+      }
+      return new Response('{}', { status: 202 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderMenu({
+      config: {
+        ...baseConfig,
+        agentId: 'amr',
+        agentCliEnv: { amr: { OPEN_DESIGN_AMR_PROFILE: 'test' } },
+      },
+      agents: [
+        {
+          id: 'amr',
+          name: 'Open Design AMR',
+          bin: 'vela',
+          available: true,
+          models: [{ id: 'default', label: 'Default (CLI config)' }],
+        },
+      ],
+    });
+
+    const trigger = screen.getByRole('button', { name: 'avatar.title' });
+    fireEvent.click(trigger);
+    expect(await screen.findByText('Plus')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'avatar.title' }).textContent).toContain('$247.51');
+
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const dialog = screen.getByRole('dialog', { name: 'avatar.title' });
+    expect(within(dialog).queryByText('Plus')).toBeNull();
+    expect(dialog.textContent).not.toContain('$247.51');
+  });
 });
