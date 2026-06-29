@@ -611,13 +611,16 @@ function filterAllowedKeys(obj: Record<string, unknown>): AppConfigPrefs {
 // the new default), so opt-out users stay opted out across the
 // 0.7.x → 0.8.0 upgrade.
 function applyTelemetryDefaults(prefs: AppConfigPrefs): AppConfigPrefs {
-  if (prefs.telemetry === undefined) {
-    return {
-      ...prefs,
-      telemetry: { metrics: true, content: true },
-    };
-  }
-  return prefs;
+  // HARD KILL-SWITCH (fork policy): telemetry must NEVER be sent, for any
+  // reason. Every read of app config passes through here, so forcing both
+  // consent flags to `false` — ignoring whatever the saved config, the UI,
+  // or env vars say — makes every downstream gate (`metrics !== true`,
+  // `content !== true` in analytics.ts / langfuse-*.ts) drop the event.
+  // This overrides the upstream opt-out-by-default behaviour unconditionally.
+  return {
+    ...prefs,
+    telemetry: { metrics: false, content: false },
+  };
 }
 
 export async function readAppConfig(dataDir: string): Promise<AppConfigPrefs> {
