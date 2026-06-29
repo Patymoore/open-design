@@ -66,7 +66,7 @@ import type {
   TrackingCliProviderId,
 } from '@open-design/contracts/analytics';
 import { agentIdToTracking } from '@open-design/contracts/analytics';
-import { useT } from '../i18n';
+import { useT, useI18n } from '../i18n';
 import { navigate, useRoute } from '../router';
 import { setPendingDesignSystemCreateEntry } from '../analytics/ds-create-entry';
 import type {
@@ -112,6 +112,7 @@ import { AgentIcon } from './AgentIcon';
 import { LanguageMenu } from './LanguageMenu';
 import { IntegrationsView, type IntegrationTab } from './IntegrationsView';
 import { InlineModelSwitcher } from './InlineModelSwitcher';
+import { enterpriseUrl } from './enterpriseUrl';
 import {
   EntrySettingsMenu,
   type EntrySettingsSection,
@@ -363,7 +364,7 @@ interface Props {
   ) => Promise<ImportClaudeDesignOutcome | void> | ImportClaudeDesignOutcome | void;
   onImportFolder?: (baseDir: string) => Promise<void> | void;
   onImportFolderResponse?: (response: OpenDesignHostProjectImportSuccess) => Promise<void> | void;
-  onOpenProject: (id: string) => Promise<boolean> | boolean | void;
+  onOpenProject: (id: string, fileName?: string) => Promise<boolean> | boolean | void;
   onOpenLiveArtifact: (projectId: string, artifactId: string) => void;
   onDeleteProject: (id: string) => Promise<boolean | void> | boolean | void;
   onRenameProject: (id: string, name: string) => void;
@@ -481,6 +482,7 @@ export function EntryShell({
   onCompleteOnboarding,
 }: Props) {
   const t = useT();
+  const { locale: uiLocale } = useI18n();
   const discordPresence = useDiscordPresence();
   // Each entry sub-view (home / projects / design-systems) is its own
   // URL now, so the browser back/forward buttons work and a deep link
@@ -777,6 +779,32 @@ export function EntryShell({
             </button>
             <div className="entry-main__topbar-chips entry-main__topbar-chips--icon-only">
               <GithubStarBadge />
+              <a
+                className="entry-workspace-chip od-tooltip"
+                href={enterpriseUrl(uiLocale)}
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={() => {
+                  trackHomeToolbarClick(analytics.track, {
+                    page_name: 'home',
+                    area: 'toolbar',
+                    element: 'workspace_teams',
+                  });
+                }}
+                data-tooltip={t('entry.workspaceTeamsTitle')}
+                data-tooltip-placement="bottom"
+                aria-label={t('entry.workspaceTeamsAria')}
+                data-testid="entry-workspace-teams"
+              >
+                <Icon
+                  name="sparkles"
+                  size={14}
+                  className="entry-workspace-chip__icon"
+                />
+                <span className="entry-workspace-chip__label">
+                  {t('entry.workspaceTeamsLabel')}
+                </span>
+              </a>
               <a
                 className="entry-discord-badge od-tooltip"
                 href={DISCORD_URL}

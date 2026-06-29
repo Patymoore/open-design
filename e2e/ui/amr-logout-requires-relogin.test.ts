@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,10 +44,8 @@ async function stubCatalogsEmpty(page: import('@playwright/test').Page) {
 test('[P0] after local Sign out, AMR runs require re-login and Settings keeps AMR selected', async ({ page }) => {
   await stubCatalogsEmpty(page);
   const root = join(tmpdir(), `open-design-amr-logout-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  const authFailFlagPath = join(root, 'auth-expired.flag');
-  const successVelaBin = await writeFakeVelaBin(join(root, 'bin-success'), {
-    assistantText: 'Hello from the e2e fake vela.',
-    authFailFlagPath,
+  const reloginVelaBin = await writeFakeVelaBin(join(root, 'bin-relogin'), {
+    failAuthAtPrompt: true,
     requireLoginConfig: false,
   });
   await mkdir(root, { recursive: true });
@@ -73,7 +71,6 @@ test('[P0] after local Sign out, AMR runs require re-login and Settings keeps AM
 
   await page.route('**/api/integrations/vela/logout', async (route) => {
     loggedIn = false;
-    await writeFile(authFailFlagPath, '1', 'utf8');
     await route.fulfill({ json: { ok: true } });
   });
 
@@ -92,7 +89,7 @@ test('[P0] after local Sign out, AMR runs require re-login and Settings keeps AM
       amr: { model: 'default', reasoning: 'default' },
     },
     agentCliEnv: {
-      amr: { VELA_BIN: successVelaBin },
+      amr: { VELA_BIN: reloginVelaBin },
     },
   };
 

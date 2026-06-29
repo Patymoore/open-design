@@ -69,6 +69,7 @@ import {
   localizeSkillName,
 } from '../i18n/content';
 import { PreviewSurface } from './plugins-home/cards/PreviewSurface';
+import { canDuplicatePluginPreview } from './plugins-home/duplicate';
 import { readHomeGuideStage, writeHomeGuideStage } from './home-hero/firstRunGuide';
 import { curatedPluginPriorityForChip } from './plugins-home/curatedPriority';
 import { sortByVisualAppeal } from './plugins-home/visualScore';
@@ -202,6 +203,8 @@ interface Props {
   submitting?: boolean;
   onPickPlugin: (record: InstalledPluginRecord, nextPrompt: string | null) => void;
   onPickExamplePlugin?: (record: InstalledPluginRecord, chipId: string, promptText: string) => void;
+  onDuplicateExamplePlugin?: (record: InstalledPluginRecord) => void;
+  pendingDuplicatePluginId?: string | null;
   onPickSkill?: (skill: SkillSummary, nextPrompt: string | null) => void;
   onPickMcp?: (server: McpServerConfig, nextPrompt: string) => void;
   onPickConnector?: (connector: ConnectorDetail, nextPrompt: string) => void;
@@ -316,6 +319,8 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
     submitting = false,
     onPickPlugin,
     onPickExamplePlugin = () => undefined,
+    onDuplicateExamplePlugin = () => undefined,
+    pendingDuplicatePluginId = null,
     onPickSkill = () => undefined,
     onPickMcp = () => undefined,
     onPickConnector = () => undefined,
@@ -1838,8 +1843,10 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
           plugins={filteredExamplePlugins}
           activePluginId={activePluginRecord?.id ?? null}
           pendingPluginId={pendingPluginId}
+          pendingDuplicatePluginId={pendingDuplicatePluginId}
           locale={locale}
           onPick={pickExamplePluginPreset}
+          onDuplicate={onDuplicateExamplePlugin}
           pulseFirstPreset={guidePulseFirstPreset}
         />
       ) : activeLocalTemplatePresets.length > 0 ? (
@@ -1982,6 +1989,8 @@ function PluginPromptPresets({
   chipId,
   locale,
   onPick,
+  onDuplicate,
+  pendingDuplicatePluginId,
   pendingPluginId,
   plugins,
   pulseFirstPreset = false,
@@ -1990,6 +1999,8 @@ function PluginPromptPresets({
   chipId: string;
   locale: Locale;
   onPick: (record: InstalledPluginRecord, chipId: string, promptText: string) => void;
+  onDuplicate: (record: InstalledPluginRecord) => void;
+  pendingDuplicatePluginId: string | null;
   pendingPluginId: string | null;
   plugins: InstalledPluginRecord[];
   // First-run guide: the first card carries the attention sheen.
@@ -2022,8 +2033,11 @@ function PluginPromptPresets({
               active={activePluginId === record.id}
               pending={pendingPluginId === record.id}
               disabled={pendingPluginId !== null}
+              duplicatePending={pendingDuplicatePluginId === record.id}
+              duplicateDisabled={pendingDuplicatePluginId !== null || pendingPluginId !== null}
               pulse={pulseFirstPreset && index === 0}
               onPick={onPick}
+              onDuplicate={onDuplicate}
             />
           ))}
         </div>
@@ -2037,7 +2051,10 @@ function PluginPromptPresetCard({
   active,
   chipId,
   disabled,
+  duplicateDisabled,
+  duplicatePending,
   locale,
+  onDuplicate,
   onPick,
   pending,
   pulse = false,
@@ -2046,12 +2063,16 @@ function PluginPromptPresetCard({
   active: boolean;
   chipId: string;
   disabled: boolean;
+  duplicateDisabled: boolean;
+  duplicatePending: boolean;
   locale: Locale;
+  onDuplicate: (record: InstalledPluginRecord) => void;
   onPick: (record: InstalledPluginRecord, chipId: string, promptText: string) => void;
   pending: boolean;
   pulse?: boolean;
   record: InstalledPluginRecord;
 }) {
+  const { t } = useI18n();
   // Example-prompt preset tiles are thumbnails too — prefer the cheap baked
   // hover-pan clip when one exists (same as the gallery cards).
   const preview = useMemo(() => inferPluginPreview(record, { preferBaked: true }), [record]);
@@ -2064,6 +2085,8 @@ function PluginPromptPresetCard({
   // frame the iframe fills natively, instead of letterboxing the stage with a
   // dark band above it (matches the Community gallery deck treatment).
   const odMode = (record.manifest?.od as { mode?: unknown } | undefined)?.mode;
+  const title = localizePluginTitle(locale, record);
+  const canDuplicate = canDuplicatePluginPreview(record);
   return (
     <span className="home-hero__plugin-preset-cell" role="listitem">
       <button
@@ -2078,7 +2101,7 @@ function PluginPromptPresetCard({
         <span className="home-hero__plugin-preset-preview" aria-hidden>
           <PreviewSurface
             pluginId={record.id}
-            pluginTitle={localizePluginTitle(locale, record)}
+            pluginTitle={title}
             preview={preview}
           />
           {active ? (
@@ -2088,9 +2111,35 @@ function PluginPromptPresetCard({
           ) : null}
         </span>
         <span className="home-hero__plugin-preset-title">
-          {localizePluginTitle(locale, record)}
+          {title}
         </span>
       </button>
+      <span className="home-hero__plugin-preset-actions">
+        <button
+          type="button"
+          className="home-hero__plugin-preset-action home-hero__plugin-preset-action--primary"
+          onClick={() => onPick(record, chipId, seedPrompt)}
+          disabled={disabled}
+          aria-busy={pending ? 'true' : undefined}
+          data-testid={`home-hero-plugin-preset-use-${record.id}`}
+        >
+          <Icon name={pending ? 'spinner' : 'play'} size={12} />
+          <span>{pending ? t('pluginCard.applying') : t('pluginCard.use')}</span>
+        </button>
+        {canDuplicate ? (
+          <button
+            type="button"
+            className="home-hero__plugin-preset-action"
+            onClick={() => onDuplicate(record)}
+            disabled={duplicateDisabled}
+            aria-busy={duplicatePending ? 'true' : undefined}
+            data-testid={`home-hero-plugin-preset-duplicate-${record.id}`}
+          >
+            <Icon name={duplicatePending ? 'spinner' : 'copy'} size={12} />
+            <span>{duplicatePending ? t('pluginCard.duplicating') : t('pluginCard.duplicate')}</span>
+          </button>
+        ) : null}
+      </span>
     </span>
   );
 }
